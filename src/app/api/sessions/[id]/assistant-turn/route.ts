@@ -165,6 +165,7 @@ export async function POST(_: Request, { params }: RouteContext) {
       hintServed: turn.hintServed ?? false,
       hintLevel: turn.hintLevel ?? null,
       escalationReason: turn.escalationReason ?? null,
+      providerFailure: turn.providerFailure ?? null,
     },
   });
 }

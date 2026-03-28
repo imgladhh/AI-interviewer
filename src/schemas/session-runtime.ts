@@ -1,4 +1,4 @@
-import { z } from "zod";
+﻿import { z } from "zod";
 
 export const createSessionEventSchema = z.object({
   eventType: z.string().trim().min(1).max(80),
@@ -12,7 +12,7 @@ export const createTranscriptSegmentSchema = z.object({
   endedAtMs: z.number().int().nonnegative().optional(),
   isFinal: z.boolean().default(true),
   audioUrl: z.string().trim().url().optional(),
-  transcriptSource: z.enum(["manual", "browser", "openai-stt", "assistant"]).optional(),
+  transcriptSource: z.enum(["manual", "browser", "openai-stt", "assemblyai-stt", "assistant"]).optional(),
   transcriptProvider: z.string().trim().min(1).max(64).optional(),
   sourceText: z.string().trim().min(1).optional(),
 });
@@ -23,3 +23,4 @@ export const createExecutionRunSchema = z.object({
   stdin: z.string().optional(),
   source: z.string().trim().min(1).max(32).default("RUN"),
 });
+

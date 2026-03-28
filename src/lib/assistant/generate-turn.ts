@@ -61,6 +61,10 @@ type GenerateAssistantTurnResult = {
     outputTokens: number;
     estimatedCostUsd: number | null;
   };
+  providerFailure?: {
+    provider: "gemini" | "openai";
+    message: string;
+  };
 };
 
 export type StreamingAssistantTurnChunk = {
@@ -72,6 +76,7 @@ export async function generateAssistantTurn(
   input: GenerateAssistantTurnInput,
 ): Promise<GenerateAssistantTurnResult> {
   const provider = resolveProvider();
+  let providerFailure: GenerateAssistantTurnResult["providerFailure"];
 
   if (provider === "gemini" && process.env.GEMINI_API_KEY) {
     try {
@@ -79,7 +84,14 @@ export async function generateAssistantTurn(
       if (reply) {
         return reply;
       }
-    } catch {
+      providerFailure = { provider: "gemini", message: "Gemini returned no reply." };
+      logProviderFallback("gemini", providerFailure.message);
+    } catch (error) {
+      providerFailure = {
+        provider: "gemini",
+        message: error instanceof Error ? error.message : "Gemini request failed.",
+      };
+      logProviderFallback("gemini", providerFailure.message);
       // Fall back to lower-priority providers or local heuristics.
     }
   }
@@ -90,12 +102,20 @@ export async function generateAssistantTurn(
       if (reply) {
         return reply;
       }
-    } catch {
+      providerFailure = { provider: "openai", message: "OpenAI returned no reply." };
+      logProviderFallback("openai", providerFailure.message);
+    } catch (error) {
+      providerFailure = {
+        provider: "openai",
+        message: error instanceof Error ? error.message : "OpenAI request failed.",
+      };
+      logProviderFallback("openai", providerFailure.message);
       // Fall back to local heuristics to keep the room usable even if the model call fails.
     }
   }
 
-  return generateFallbackTurn(input);
+  logProviderFallback("fallback", "Using local interviewer heuristics.");
+  return generateFallbackTurn(input, providerFailure);
 }
 
 export async function* streamAssistantTurn(
@@ -103,22 +123,36 @@ export async function* streamAssistantTurn(
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const provider = resolveProvider();
+  let providerFailure: GenerateAssistantTurnResult["providerFailure"];
 
   if (provider === "gemini" && process.env.GEMINI_API_KEY) {
-    const geminiHandled = yield* yieldProviderStream(streamWithGemini(input, options), input, "gemini");
+    const geminiResult = yield* yieldProviderStream(streamWithGemini(input, options), input, "gemini");
+    const geminiHandled = geminiResult.handled;
     if (geminiHandled) {
       return;
     }
+    providerFailure = geminiResult.providerFailure ?? {
+      provider: "gemini",
+      message: "Gemini did not produce a reply for this turn.",
+    };
+    logProviderFallback("gemini", providerFailure.message);
   }
 
   if ((provider === "openai" || process.env.OPENAI_API_KEY) && process.env.OPENAI_API_KEY) {
-    const openAiHandled = yield* yieldProviderStream(streamWithOpenAI(input, options), input, "openai");
+    const openAiResult = yield* yieldProviderStream(streamWithOpenAI(input, options), input, "openai");
+    const openAiHandled = openAiResult.handled;
     if (openAiHandled) {
       return;
     }
+    providerFailure = openAiResult.providerFailure ?? {
+      provider: "openai",
+      message: "OpenAI did not produce a reply for this turn.",
+    };
+    logProviderFallback("openai", providerFailure.message);
   }
 
-  const fallback = generateFallbackTurn(input);
+  logProviderFallback("fallback", "Using local interviewer heuristics.");
+  const fallback = generateFallbackTurn(input, providerFailure);
   for (const chunk of chunkText(fallback.reply)) {
     if (options?.signal?.aborted) {
       return;
@@ -132,7 +166,10 @@ async function* yieldProviderStream(
   stream: AsyncGenerator<StreamingAssistantTurnChunk>,
   input: GenerateAssistantTurnInput,
   source: "openai" | "gemini",
-): AsyncGenerator<StreamingAssistantTurnChunk, boolean> {
+): AsyncGenerator<
+  StreamingAssistantTurnChunk,
+  { handled: boolean; providerFailure?: GenerateAssistantTurnResult["providerFailure"] }
+> {
   let accumulated = "";
   let yieldedAny = false;
   let yieldedFinal = false;
@@ -151,12 +188,18 @@ async function* yieldProviderStream(
 
       yield chunk;
     }
-  } catch {
-    return false;
+  } catch (error) {
+    return {
+      handled: false,
+      providerFailure: {
+        provider: source,
+        message: error instanceof Error ? error.message : `${source} streaming failed.`,
+      },
+    };
   }
 
   if (!yieldedAny) {
-    return false;
+    return { handled: false };
   }
 
   if (!yieldedFinal && accumulated.trim()) {
@@ -170,7 +213,7 @@ async function* yieldProviderStream(
     };
   }
 
-  return true;
+  return { handled: true };
 }
 
 function resolveProvider() {
@@ -220,7 +263,7 @@ async function generateWithOpenAI(
   });
 
   if (!response.ok) {
-    return null;
+    throw await buildProviderError("openai", response);
   }
 
   const payload = (await response.json()) as {
@@ -277,6 +320,9 @@ async function* streamWithOpenAI(
   }).catch(() => null);
 
   if (!response?.ok || !response.body) {
+    if (response && !response.ok) {
+      throw await buildProviderError("openai", response);
+    }
     return;
   }
 
@@ -336,6 +382,8 @@ async function generateWithGemini(
   input: GenerateAssistantTurnInput,
 ): Promise<GenerateAssistantTurnResult | null> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const prompt = buildInterviewerPrompt(input);
+  const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
@@ -351,7 +399,7 @@ async function generateWithGemini(
         contents: [
           {
             role: "user",
-            parts: [{ text: buildInterviewerPrompt(input) }],
+            parts: [{ text: prompt }],
           },
         ],
         generationConfig: {
@@ -363,7 +411,7 @@ async function generateWithGemini(
   );
 
   if (!response.ok) {
-    return null;
+    throw await buildProviderError("gemini", response);
   }
 
   const payload = (await response.json()) as {
@@ -386,6 +434,11 @@ async function generateWithGemini(
     suggestedStage: inferStage(reply, input),
     source: "gemini",
     model,
+    usage: {
+      inputTokens,
+      outputTokens: estimateTokens(reply),
+      estimatedCostUsd: null,
+    },
   };
 }
 
@@ -394,6 +447,8 @@ async function* streamWithGemini(
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const prompt = buildInterviewerPrompt(input);
+  const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
     {
@@ -409,7 +464,7 @@ async function* streamWithGemini(
         contents: [
           {
             role: "user",
-            parts: [{ text: buildInterviewerPrompt(input) }],
+            parts: [{ text: prompt }],
           },
         ],
         generationConfig: {
@@ -422,6 +477,9 @@ async function* streamWithGemini(
   ).catch(() => null);
 
   if (!response?.ok || !response.body) {
+    if (response && !response.ok) {
+      throw await buildProviderError("gemini", response);
+    }
     return;
   }
 
@@ -471,6 +529,11 @@ async function* streamWithGemini(
       suggestedStage: inferStage(final, input),
       source: "gemini",
       model,
+      usage: {
+        inputTokens,
+        outputTokens: estimateTokens(final),
+        estimatedCostUsd: null,
+      },
     },
   };
 }
@@ -527,7 +590,10 @@ function buildInterviewerPrompt(input: GenerateAssistantTurnInput) {
   ].join("\n\n");
 }
 
-function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssistantTurnResult {
+function generateFallbackTurn(
+  input: GenerateAssistantTurnInput,
+  providerFailure?: GenerateAssistantTurnResult["providerFailure"],
+): GenerateAssistantTurnResult {
   const latestUserTurn = [...input.recentTranscripts].reverse().find((item) => item.speaker === "USER");
   const latestAiTurn = [...input.recentTranscripts].reverse().find((item) => item.speaker === "AI");
   const latestRun = input.latestExecutionRun;
@@ -546,6 +612,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       reply: `Let's get started with ${input.questionTitle}. Before you code, could you restate the problem in your own words and walk me through your initial approach?`,
       suggestedStage: "PROBLEM_UNDERSTANDING",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -561,6 +628,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: policy.nextStage ?? currentStage,
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -576,6 +644,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: currentStage,
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -588,6 +657,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       reply: hintedReply,
       suggestedStage: policy.nextStage ?? currentStage,
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       hintServed: true,
@@ -606,6 +676,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "DEBUGGING",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -621,6 +692,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "COMPLEXITY_DISCUSSION",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -636,6 +708,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "TESTING_AND_COMPLEXITY",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -655,6 +728,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
         ),
         suggestedStage: "APPROACH_DISCUSSION",
         source: "fallback",
+        providerFailure,
         policyAction: policy.recommendedAction,
         policyReason: policy.reason,
       };
@@ -668,6 +742,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "PROBLEM_UNDERSTANDING",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -683,6 +758,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "HINTING",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -698,6 +774,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "APPROACH_DISCUSSION",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -722,6 +799,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: currentStage === "IMPLEMENTATION" ? "IMPLEMENTATION" : "APPROACH_DISCUSSION",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -737,6 +815,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "CORRECTNESS_DISCUSSION",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       escalationReason: policy.escalationReason,
@@ -752,6 +831,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "IMPLEMENTATION",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
     };
@@ -766,6 +846,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "TESTING_AND_COMPLEXITY",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
     };
@@ -780,6 +861,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "CORRECTNESS_DISCUSSION",
       source: "fallback",
+      providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
     };
@@ -797,6 +879,7 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
     ),
     suggestedStage: currentStage === "WRAP_UP" ? "WRAP_UP" : "APPROACH_DISCUSSION",
     source: "fallback",
+    providerFailure,
     policyAction: policy.recommendedAction,
     policyReason: policy.reason,
     escalationReason: policy.escalationReason,
@@ -977,4 +1060,50 @@ function extractGeminiText(payload: Record<string, unknown>) {
   }
 
   return parts.map((part) => part.text ?? "").join("");
+}
+
+function logProviderFallback(provider: "gemini" | "openai" | "fallback", message: string) {
+  if (process.env.NODE_ENV !== "development") {
+    return;
+  }
+
+  console.warn(`[assistant-turn] ${provider}: ${message}`);
+}
+
+async function buildProviderError(provider: "gemini" | "openai", response: Response) {
+  const text = await response.text().catch(() => "");
+
+  if (!text.trim()) {
+    return new Error(`${provider} request failed with status ${response.status}.`);
+  }
+
+  try {
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    const message =
+      readProviderErrorMessage(payload) ??
+      `${provider} request failed with status ${response.status}.`;
+    return new Error(message);
+  } catch {
+    return new Error(`${provider} request failed with status ${response.status}: ${truncate(text, 220)}`);
+  }
+}
+
+function readProviderErrorMessage(payload: Record<string, unknown>) {
+  const error = payload.error;
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+  }
+
+  if (typeof payload.message === "string") {
+    return payload.message;
+  }
+
+  return null;
 }

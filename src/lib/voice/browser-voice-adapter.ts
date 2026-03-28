@@ -151,7 +151,7 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.onend = () => {
           if (!this.isDisposed && generation === this.speechGeneration) {
-            this.setState("idle");
+            this.restorePostSpeechState();
           }
           resolve();
         };
@@ -176,7 +176,7 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
-    this.setState("idle");
+    this.restorePostSpeechState();
   }
 
   async consumeCapturedAudio() {
@@ -227,6 +227,20 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
   private setState(state: BrowserVoiceState) {
     this.state = state;
     emitState(this.handlers, state);
+  }
+
+  private restorePostSpeechState() {
+    if (this.isDisposed) {
+      return;
+    }
+
+    const micActive = Boolean(this.activeInputStream?.active);
+    if (this.shouldResumeListening && micActive) {
+      this.setState("listening");
+      return;
+    }
+
+    this.setState("idle");
   }
 
   private createRecognition(): BrowserSpeechRecognitionInstance | null {
@@ -325,7 +339,7 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
 
     this.activeInputStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.ensureMediaRecorder(this.activeInputStream);
-    this.ensureAnalyser(this.activeInputStream);
+    await this.ensureAnalyser(this.activeInputStream);
   }
 
   private releaseInputStream() {
@@ -370,7 +384,7 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
     this.mediaRecorder = recorder;
   }
 
-  private ensureAnalyser(stream: MediaStream) {
+  private async ensureAnalyser(stream: MediaStream) {
     if (typeof window === "undefined") {
       return;
     }
@@ -385,6 +399,13 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
     }
 
     this.analyserContext = new AudioContextCtor();
+    if (this.analyserContext.state === "suspended") {
+      try {
+        await this.analyserContext.resume();
+      } catch {
+        // If resume fails, keep going; the analyser loop below will simply remain quiet.
+      }
+    }
     this.analyserSource = this.analyserContext.createMediaStreamSource(stream);
     this.analyserNode = this.analyserContext.createAnalyser();
     this.analyserNode.fftSize = 2048;
@@ -405,7 +426,9 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
         sumSquares += sample * sample;
       }
       const rms = Math.sqrt(sumSquares / samples.length);
-      const threshold = 0.018;
+      const normalizedLevel = Math.max(0, Math.min(1, rms / 0.08));
+      this.handlers.onAudioLevelChange?.(normalizedLevel);
+      const threshold = 0.01;
 
       if (rms >= threshold) {
         activeFrames += 1;
@@ -415,13 +438,13 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
         activeFrames = 0;
       }
 
-      if (!this.speechActive && activeFrames >= 2) {
+      if (!this.speechActive && activeFrames >= 1) {
         this.speechActive = true;
         this.handlers.onSpeechStart?.();
         this.handlers.onVoiceActivityChange?.(true);
       }
 
-      if (this.speechActive && silentFrames >= 6) {
+      if (this.speechActive && silentFrames >= 8) {
         this.speechActive = false;
         this.handlers.onVoiceActivityChange?.(false);
       }
@@ -440,6 +463,7 @@ export class BrowserVoiceAdapter implements InterviewVoiceAdapter {
 
     this.speechActive = false;
     this.handlers.onVoiceActivityChange?.(false);
+    this.handlers.onAudioLevelChange?.(0);
 
     this.analyserSource?.disconnect();
     this.analyserNode?.disconnect();

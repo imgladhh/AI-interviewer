@@ -15,6 +15,7 @@ export type VoiceAdapterEventHandlers = {
   onError?: (message: string) => void;
   onSpeechStart?: () => void;
   onVoiceActivityChange?: (isSpeaking: boolean) => void;
+  onAudioLevelChange?: (level: number) => void;
 };
 
 export type BrowserVoiceState =

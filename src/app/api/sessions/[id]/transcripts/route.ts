@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+﻿import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { createTranscriptSegmentSchema } from "@/schemas/session-runtime";
@@ -87,7 +87,10 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   if (
     parsed.data.speaker === "USER" &&
-    parsed.data.transcriptSource === "openai-stt" &&
+    parsed.data.transcriptSource !== undefined &&
+    parsed.data.transcriptSource !== "browser" &&
+    parsed.data.transcriptSource !== "manual" &&
+    parsed.data.transcriptSource !== "assistant" &&
     parsed.data.sourceText &&
     parsed.data.sourceText.trim() !== parsed.data.text.trim()
   ) {
@@ -97,7 +100,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         eventType: SESSION_EVENT_TYPES.CANDIDATE_TRANSCRIPT_REFINED,
         payloadJson: {
           transcriptSegmentId: segment.id,
-          transcriptProvider: parsed.data.transcriptProvider ?? "openai-stt",
+          transcriptProvider: parsed.data.transcriptProvider ?? parsed.data.transcriptSource,
           originalText: parsed.data.sourceText,
           refinedText: parsed.data.text,
         },
@@ -107,3 +110,4 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   return ok({ transcript: segment }, { status: 201 });
 }
+

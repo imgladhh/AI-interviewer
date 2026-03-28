@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -157,6 +157,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const [dedicatedSttProvider, setDedicatedSttProvider] = useState<string | null>(null);
   const [isProviderPreviewing, setIsProviderPreviewing] = useState(false);
   const [draftTranscript, setDraftTranscript] = useState("");
+  const [audioLevel, setAudioLevel] = useState(0);
   const [lastVoiceError, setLastVoiceError] = useState<string | null>(null);
   const [voiceDiagnostics, setVoiceDiagnostics] = useState<VoiceDiagnostics>(defaultVoiceDiagnostics);
   const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
@@ -186,6 +187,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const pendingSpeechBufferRef = useRef("");
   const providerPreviewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerSpeechActiveRef = useRef(false);
+  const supportsProviderPreview = dedicatedSttProvider === "openai-stt";
 
   useEffect(() => {
     let cancelled = false;
@@ -351,6 +353,9 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
         setLastVoiceError(message);
         void refreshVoiceDiagnostics();
       },
+      onAudioLevelChange: (level) => {
+        setAudioLevel(level);
+      },
       onVoiceActivityChange: (isSpeaking) => {
         providerSpeechActiveRef.current = isSpeaking;
 
@@ -363,15 +368,22 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
           clearSilenceTimer();
           clearPendingFinalTranscript();
           void interruptAiTurn("candidate_speech");
-          void requestProviderPreviewTranscript(true);
-          scheduleProviderPreviewLoop();
+          if (supportsProviderPreview) {
+            void requestProviderPreviewTranscript(true);
+            scheduleProviderPreviewLoop();
+          }
           return;
         }
 
         clearProviderPreviewTimer();
-        void requestProviderPreviewTranscript(true).finally(() => {
-          scheduleProviderSilenceSubmit();
-        });
+        if (supportsProviderPreview) {
+          void requestProviderPreviewTranscript(true).finally(() => {
+            scheduleProviderSilenceSubmit();
+          });
+          return;
+        }
+
+        scheduleProviderSilenceSubmit();
       },
     });
 
@@ -387,7 +399,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       adapter.dispose();
       voiceAdapterRef.current = null;
     };
-  }, [dedicatedSttConfigured, props.sessionId]);
+  }, [dedicatedSttConfigured, props.sessionId, supportsProviderPreview]);
 
   useEffect(() => {
     void refreshVoiceDiagnostics();
@@ -464,6 +476,18 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       latestExecutionRun: latestRun,
     });
   }, [events, latestRun, props.initialStage, transcripts]);
+
+  const lastAiSource = useMemo(() => {
+    const latestAiEvent = [...events]
+      .reverse()
+      .find((event) => event.eventType === SESSION_EVENT_TYPES.AI_SPOKE);
+
+    const payload =
+      typeof latestAiEvent?.payloadJson === "object" && latestAiEvent.payloadJson !== null
+        ? (latestAiEvent.payloadJson as Record<string, unknown>)
+        : {};
+    return typeof payload.source === "string" ? payload.source : null;
+  }, [events]);
 
   function runAction(action: () => Promise<void>) {
     setActionError(null);
@@ -549,7 +573,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   }
 
   async function requestProviderPreviewTranscript(force = false) {
-    if (!dedicatedSttConfigured || !voiceAdapterRef.current?.peekCapturedAudio) {
+    if (!dedicatedSttConfigured || !supportsProviderPreview || !voiceAdapterRef.current?.peekCapturedAudio) {
       return;
     }
 
@@ -595,7 +619,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
   function scheduleProviderPreviewLoop() {
     clearProviderPreviewTimer();
-    if (!dedicatedSttConfigured || !isContinuousListening) {
+    if (!dedicatedSttConfigured || !supportsProviderPreview || !isContinuousListening) {
       return;
     }
 
@@ -628,7 +652,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
     silenceTimeoutRef.current = setTimeout(() => {
       const previewText = normalizeTranscriptText(pendingSpeechBufferRef.current || draftTranscript);
-      beginAutoSubmitConfirmation(previewText, {
+      beginAutoSubmitConfirmation(previewText || "spoken candidate answer", {
         autoSubmitted: true,
         source: "provider_vad",
       });
@@ -698,7 +722,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     speaker: "USER" | "AI",
     text: string,
     options?: {
-      transcriptSource?: "manual" | "browser" | "openai-stt" | "assistant";
+      transcriptSource?: "manual" | "browser" | "openai-stt" | "assemblyai-stt" | "assistant";
       transcriptProvider?: string;
       sourceText?: string;
     },
@@ -759,11 +783,20 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) {
-        const message =
-          typeof payload?.message === "string"
-            ? payload.message
-            : "Dedicated STT failed, so the room fell back to browser transcription.";
+        const message = describeDedicatedSttError(payload);
+        const failureClass =
+          payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).providerFailureClass === "string"
+            ? String((payload as Record<string, unknown>).providerFailureClass)
+            : null;
+        setLastVoiceError(message);
         setRoomNotice(message);
+        if (failureClass === "quota") {
+          setDedicatedSttConfigured(false);
+          setDedicatedSttProvider(null);
+          setRoomNotice(
+            "Dedicated STT appears to be out of quota for this session, so the room switched back to browser transcription.",
+          );
+        }
         return {
           text: browserText,
           transcriptSource: "browser" as const,
@@ -788,10 +821,11 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
       return {
         text: refinedText,
-        transcriptSource: "openai-stt" as const,
+        transcriptSource: provider as "openai-stt" | "assemblyai-stt",
         transcriptProvider: provider,
       };
     } catch {
+      setLastVoiceError("Dedicated STT was unavailable, so the room used the browser transcript for this turn.");
       setRoomNotice("Dedicated STT was unavailable, so the room used the browser transcript for this turn.");
       return {
         text: browserText,
@@ -867,6 +901,13 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
             const payload = parsed.data as {
               transcript?: TranscriptSegment;
               events?: SessionEvent[];
+              meta?: {
+                source?: string;
+                providerFailure?: {
+                  provider?: string;
+                  message?: string;
+                } | null;
+              };
             };
             setAssistantDraft("");
 
@@ -887,6 +928,16 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                     (left, right) => new Date(right.eventTime).getTime() - new Date(left.eventTime).getTime(),
                   ),
                 ),
+              );
+            }
+
+            if (
+              payload.meta?.source === "fallback" &&
+              payload.meta.providerFailure?.provider &&
+              payload.meta.providerFailure?.message
+            ) {
+              setRoomNotice(
+                `${payload.meta.providerFailure.provider} failed for this turn, so the room fell back to the local interviewer: ${payload.meta.providerFailure.message}`,
               );
             }
 
@@ -936,7 +987,11 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       return;
     }
 
-    if (speechDrivenSource && shouldDelaySpeechDrivenCommit(normalizedText)) {
+    if (
+      speechDrivenSource &&
+      options?.source !== "provider_vad" &&
+      shouldDelaySpeechDrivenCommit(normalizedText)
+    ) {
       pendingSpeechBufferRef.current = mergeTranscriptFragments(pendingSpeechBufferRef.current, normalizedText);
       setDraftTranscript(pendingSpeechBufferRef.current);
       setRoomNotice("That sounded incomplete, so the room is giving you a bit more time before submitting.");
@@ -956,9 +1011,9 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       transcriptSource: transcriptResult.transcriptSource,
       transcriptProvider: transcriptResult.transcriptProvider,
       sourceText:
-        transcriptResult.transcriptSource === "openai-stt" ? browserText : undefined,
+        transcriptResult.transcriptSource !== "browser" ? browserText : undefined,
     });
-    if (transcriptResult.transcriptSource === "openai-stt") {
+    if (transcriptResult.transcriptSource !== "browser") {
       setRoomNotice("Dedicated STT finalized your latest spoken answer and passed that transcript to the interviewer.");
     }
     await requestAssistantTurn();
@@ -1265,7 +1320,10 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               >
                 <strong>Usage so far</strong>
                 <span style={{ color: "var(--muted)", fontSize: 14 }}>
-                  LLM calls: {usageSummary.llmCalls} · STT calls: {usageSummary.sttCalls}
+                  LLM calls: {usageSummary.llmCalls} 路 STT calls: {usageSummary.sttCalls}
+                </span>
+                <span style={{ color: "var(--muted)", fontSize: 14 }}>
+                  Latest AI source: {lastAiSource ?? "none yet"}
                 </span>
                 <span style={{ color: "var(--muted)", fontSize: 14 }}>
                   Estimated cost: ${usageSummary.totalEstimatedCostUsd.toFixed(4)}
@@ -1299,6 +1357,35 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                   {describeVoiceState(voiceState)}
                   {!voiceAvailability.speechRecognition ? " (speech recognition unavailable in this browser)" : ""}
                 </span>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13 }}>
+                    <span style={{ color: "var(--muted)" }}>Mic level</span>
+                    <strong style={{ color: audioLevel > 0.12 ? "var(--success)" : "var(--muted)" }}>
+                      {Math.round(audioLevel * 100)}%
+                    </strong>
+                  </div>
+                  <div
+                    style={{
+                      height: 10,
+                      borderRadius: 999,
+                      background: "rgba(0,0,0,0.08)",
+                      overflow: "hidden",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(audioLevel > 0 ? 4 : 0, Math.round(audioLevel * 100))}%`,
+                        height: "100%",
+                        background:
+                          audioLevel > 0.12
+                            ? "linear-gradient(90deg, var(--success), #39b980)"
+                            : "linear-gradient(90deg, #c8d2e8, #d9e1f2)",
+                        transition: "width 100ms linear",
+                      }}
+                    />
+                  </div>
+                </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button
                     style={actionButtonStyle}
@@ -1439,7 +1526,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                             <strong>{device.label}</strong>
                             <span style={{ color: device.suspectVirtual ? "#8a5a00" : "var(--muted)", fontSize: 13 }}>
                               {device.isDefault ? "default" : "secondary"}
-                              {device.suspectVirtual ? " • possible virtual/bluetooth" : ""}
+                              {device.suspectVirtual ? " 鈥?possible virtual/bluetooth" : ""}
                             </span>
                           </div>
                         </div>
@@ -1754,7 +1841,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                     <div key={run.id} style={timelineItemStyle}>
                       <strong>{run.status}</strong>
                       <span style={{ color: "var(--muted)", fontSize: 14 }}>
-                        {new Date(run.createdAt).toLocaleTimeString()} · {run.runtimeMs ?? 0}ms
+                        {new Date(run.createdAt).toLocaleTimeString()} 路 {run.runtimeMs ?? 0}ms
                       </span>
                     </div>
                   ))
@@ -2000,6 +2087,52 @@ function normalizeCandidateText(text: string) {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function describeDedicatedSttError(payload: unknown) {
+  const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+  const provider = typeof record.provider === "string" ? record.provider : "dedicated STT provider";
+  const providerLabel = provider === "assemblyai-stt" ? "AssemblyAI" : provider === "openai-stt" ? "OpenAI" : provider;
+  const providerStatus = typeof record.providerStatus === "number" ? record.providerStatus : null;
+  const providerFailureClass =
+    typeof record.providerFailureClass === "string" ? record.providerFailureClass : null;
+  const providerErrorType =
+    typeof record.providerErrorType === "string" ? record.providerErrorType : null;
+  const providerErrorCode =
+    typeof record.providerErrorCode === "string" ? record.providerErrorCode : null;
+  const message =
+    typeof record.message === "string"
+      ? record.message
+      : "Dedicated STT failed, so the room fell back to browser transcription.";
+
+  if (
+    providerFailureClass === "quota" ||
+    providerStatus === 429 ||
+    providerStatus === 402 ||
+    providerStatus === 403 ||
+    providerErrorCode === "insufficient_quota" ||
+    message.toLowerCase().includes("quota") ||
+    message.toLowerCase().includes("billing") ||
+    message.toLowerCase().includes("credit") ||
+    message.toLowerCase().includes("payment") ||
+    message.toLowerCase().includes("usage limit")
+  ) {
+    return `Dedicated STT failed because the ${providerLabel} account appears to be out of quota or billing is unavailable: ${message}`;
+  }
+
+  if (providerStatus === 401 || providerErrorType === "invalid_request_error" && message.toLowerCase().includes("api key")) {
+    return `Dedicated STT failed because the ${providerLabel} API key was rejected: ${message}`;
+  }
+
+  if (providerStatus === 404 || message.toLowerCase().includes("model")) {
+    return `Dedicated STT failed because the configured ${providerLabel} transcription model may be unavailable: ${message}`;
+  }
+
+  if (providerErrorType === "network_error") {
+    return `Dedicated STT failed because the server could not reach ${providerLabel}: ${message}`;
+  }
+
+  return `Dedicated STT failed and the room fell back to browser transcription: ${message}`;
+}
+
 function shouldDelaySpeechDrivenCommit(text: string) {
   const normalized = text.trim();
   if (!normalized) {
@@ -2050,3 +2183,6 @@ function voiceTone(state: BrowserVoiceState): "neutral" | "success" | "warning" 
   if (state === "error") return "danger";
   return "neutral";
 }
+
+
+

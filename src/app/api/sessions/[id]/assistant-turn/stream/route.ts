@@ -87,6 +87,10 @@ export async function POST(request: Request, { params }: RouteContext) {
               hintStyle?: string;
               hintLevel?: string;
               escalationReason?: string;
+              providerFailure?: {
+                provider: "gemini" | "openai";
+                message: string;
+              };
               usage?: {
                 inputTokens: number;
                 outputTokens: number;
@@ -147,6 +151,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintServed: finalTurn.hintServed ?? false,
                 hintLevel: finalTurn.hintLevel ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
+                providerFailure: finalTurn.providerFailure ?? null,
               },
             },
         });
@@ -217,6 +222,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintServed: finalTurn.hintServed ?? false,
                 hintLevel: finalTurn.hintLevel ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
+                providerFailure: finalTurn.providerFailure ?? null,
               },
             })}\n\n`,
           ),

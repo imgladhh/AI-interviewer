@@ -1,9 +1,12 @@
-import { ok } from "@/lib/http";
+﻿import { ok } from "@/lib/http";
+import { getDedicatedSttConfig } from "@/lib/voice/stt-provider";
 
 export async function GET() {
+  const config = getDedicatedSttConfig();
+
   return ok({
-    configured: Boolean(process.env.OPENAI_API_KEY),
-    provider: process.env.OPENAI_API_KEY ? "openai-stt" : null,
-    model: process.env.OPENAI_STT_MODEL?.trim() || "gpt-4o-mini-transcribe",
+    configured: config.configured,
+    provider: config.provider,
+    model: config.model,
   });
 }

@@ -1,4 +1,4 @@
-# AI Interviewer
+﻿# AI Interviewer
 
 Voice-first mock interview app for North American SDE interview prep, currently centered on coding interviews, a stage-governed AI interviewer, and an optional public interviewer persona flow.
 
@@ -16,8 +16,8 @@ This repo now has a working MVP-plus skeleton with:
 - Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, and actionable improvements
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
-- Dedicated STT handoff for spoken candidate turns, with browser transcript fallback
-- Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, and low-cost mode controls
+- Dedicated STT handoff for spoken candidate turns, with provider selection and browser transcript fallback
+- Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, low-cost mode controls, and switchable STT providers
 - `Vitest` unit/route tests and `Playwright` end-to-end tests
 
 ## Recent Progress
@@ -35,8 +35,8 @@ This repo now has a working MVP-plus skeleton with:
   - candidate speech interrupts AI playback and generation
   - adaptive silence thresholds for auto-submit
   - short interruption phrases like `wait` and `hold on` are ignored instead of being treated as full candidate turns
-  - spoken candidate turns can be refined through a dedicated OpenAI STT pass before being sent to the interviewer
-  - when OpenAI STT is configured, the room can prefer provider-led speech handling over browser transcript timing
+  - spoken candidate turns can be refined through a dedicated STT provider before being sent to the interviewer
+  - when a dedicated STT provider is configured, the room can prefer provider-led speech handling over browser transcript timing
   - provider preview drafts can appear during speech, with final provider transcription used for the committed candidate turn
 - Added session-level cost controls and observability:
   - `low-cost mode` can be enabled from setup
@@ -53,6 +53,16 @@ This repo now has a working MVP-plus skeleton with:
   - `Gemini`
   - `OpenAI`
   - local `fallback`
+- Improved provider fallback visibility and resilience:
+  - Gemini and OpenAI failures now surface more clearly in development logs
+  - fallback turns can carry provider-failure context back to the room
+  - the interview room now shows the latest AI source (`gemini`, `openai`, or `fallback`)
+  - Gemini turns now record `LLM_USAGE_RECORDED` events too, even when cost is tracked as unknown
+- Improved dedicated STT provider handling:
+  - OpenAI and AssemblyAI now share a common STT provider abstraction
+  - dedicated STT failures are classified into classes like `quota`, `auth`, `model`, `network`, and `timeout`
+  - quota-like failures now auto-disable dedicated STT for the current room and fall back to browser transcription
+  - voice diagnostics now include richer browser preflight and live microphone-level visibility
 - Improved interviewer quality with a shared interviewer-skills layer:
   - warmer but still professional tone
   - clearer pacing
@@ -87,9 +97,10 @@ This repo now has a working MVP-plus skeleton with:
 - `/interview/[id]`
   - Session room renders selected question and interviewer context
   - Browser speech recognition remains available as fallback
-  - When OpenAI STT is configured, spoken candidate turns can be handled in a provider-first voice mode
+  - When a dedicated STT provider is configured, spoken candidate turns can be handled in a provider-first voice mode
   - Provider preview drafts can appear live while speaking
   - Spoken candidate turns can be re-transcribed through a dedicated STT provider before persistence, with browser transcript fallback
+  - When provider-backed LLM turns fail or hit rate limits, the room can explain why the turn fell back to the local interviewer
   - AI assistant turns can be generated from recent transcript, current stage, persona context, latest code run, and policy state
   - AI replies stream into the UI over `SSE`
   - Browser TTS speaks AI replies with a queued utterance model
@@ -223,13 +234,17 @@ GEMINI_MODEL="gemini-2.5-flash"
 OPENAI_API_KEY=""
 OPENAI_MODEL="gpt-4.1-mini"
 OPENAI_STT_MODEL="gpt-4o-mini-transcribe"
+STT_PROVIDER=""
+ASSEMBLYAI_API_KEY=""
+ASSEMBLYAI_STT_MODELS="universal-3-pro,universal-2"
 ```
 
-When `OPENAI_API_KEY` is set:
+When STT credentials are configured:
 
-- interviewer text generation can use OpenAI
-- dedicated STT can be enabled for spoken candidate turns
-- the room can switch into provider-first voice handling
+- `OPENAI_API_KEY` + `STT_PROVIDER=openai` (or no `STT_PROVIDER`) enables OpenAI STT
+- `ASSEMBLYAI_API_KEY` + `STT_PROVIDER=assemblyai` enables AssemblyAI STT
+- if both are present and `STT_PROVIDER` is unset, the app currently prefers AssemblyAI for dedicated STT
+- interviewer text generation can still use Gemini or OpenAI independently of the STT provider choice
 
 ## Test Commands
 
@@ -278,7 +293,8 @@ npm run build
 - Persona ingestion is still simulated; it does not yet fetch and summarize real public web pages
 - Realtime AI conversation is still browser speech recognition plus `SSE` streaming rather than a full duplex low-latency voice stack
 - Browser speech recognition depends on Web Speech API availability and varies by browser
-- Dedicated STT and provider-first voice mode currently depend on `OPENAI_API_KEY` and use OpenAI audio transcription when configured
+- Dedicated STT and provider-first voice mode now support a switchable provider layer, with OpenAI and AssemblyAI options
+- Gemini and OpenAI interviewer turns can still hit provider rate limits; when that happens the system falls back to local interviewer heuristics
 - Live provider drafts are periodic previews rather than true token-level streaming ASR
 - Code execution is local-process based and currently supports Python and JavaScript only
 - Authentication is still stubbed around a demo user
@@ -336,3 +352,6 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
+
