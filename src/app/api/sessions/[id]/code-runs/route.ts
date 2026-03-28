@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { executeCode } from "@/lib/sandbox/execute";
@@ -14,7 +15,18 @@ export async function GET(_: Request, { params }: RouteContext) {
 
   const session = await prisma.interviewSession.findUnique({
     where: { id },
-    select: { id: true },
+    include: {
+      transcripts: {
+        orderBy: { segmentIndex: "asc" },
+      },
+      executionRuns: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+      events: {
+        orderBy: { eventTime: "asc" },
+      },
+    },
   });
 
   if (!session) {
@@ -46,7 +58,18 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   const session = await prisma.interviewSession.findUnique({
     where: { id },
-    select: { id: true },
+    include: {
+      transcripts: {
+        orderBy: { segmentIndex: "asc" },
+      },
+      executionRuns: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+      events: {
+        orderBy: { eventTime: "asc" },
+      },
+    },
   });
 
   if (!session) {
@@ -126,6 +149,39 @@ export async function POST(request: Request, { params }: RouteContext) {
       } satisfies Prisma.InputJsonObject,
     },
   });
+
+  const currentStage = deriveCurrentCodingStage({
+    events: session.events,
+    transcripts: session.transcripts,
+    latestExecutionRun: session.executionRuns[0] ?? null,
+  });
+
+  const nextStage =
+    result.status === "PASSED"
+      ? currentStage === "IMPLEMENTATION" || currentStage === "DEBUGGING"
+        ? "TESTING_AND_COMPLEXITY"
+        : null
+      : result.status === "FAILED" || result.status === "ERROR" || result.status === "TIMEOUT"
+        ? "DEBUGGING"
+        : null;
+
+  if (nextStage && nextStage !== currentStage) {
+    await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.STAGE_ADVANCED,
+        payloadJson: {
+          previousStage: currentStage,
+          stage: nextStage,
+          source: "code-run-policy",
+          reason:
+            result.status === "PASSED"
+              ? "A passing run completed implementation/debugging, so the interview should move into testing and complexity."
+              : "A failing run should move the interview into debugging.",
+        } satisfies Prisma.InputJsonObject,
+      },
+    });
+  }
 
   return ok({ executionRun, snapshot }, { status: 201 });
 }

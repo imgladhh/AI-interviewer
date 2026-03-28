@@ -55,6 +55,19 @@ describe("session code run routes", () => {
 
   it("creates a code snapshot, executes code, and records run events", async () => {
     prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1" });
+    prisma.interviewSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      transcripts: [{ id: "seg-u1", segmentIndex: 0, speaker: "USER", text: "I will start coding now." }],
+      executionRuns: [],
+      events: [
+        {
+          id: "evt-stage-1",
+          eventType: "STAGE_ADVANCED",
+          eventTime: new Date("2026-03-27T21:00:00.000Z"),
+          payloadJson: { stage: "IMPLEMENTATION" },
+        },
+      ],
+    });
     prisma.codeSnapshot.findFirst.mockResolvedValue({ snapshotIndex: 3 });
     prisma.codeSnapshot.create.mockResolvedValue({
       id: "snapshot-4",
@@ -122,6 +135,19 @@ describe("session code run routes", () => {
       code: "print('hello')",
       stdin: undefined,
     });
-    expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(3);
+    expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(4);
+    expect(prisma.sessionEvent.create).toHaveBeenLastCalledWith({
+      data: {
+        sessionId: "session-1",
+        eventType: "STAGE_ADVANCED",
+        payloadJson: {
+          previousStage: "IMPLEMENTATION",
+          stage: "TESTING_AND_COMPLEXITY",
+          source: "code-run-policy",
+          reason:
+            "A passing run completed implementation/debugging, so the interview should move into testing and complexity.",
+        },
+      },
+    });
   });
 });

@@ -3,11 +3,11 @@ import type { BrowserVoiceState } from "@/lib/voice/types";
 export function describeVoiceState(state: BrowserVoiceState) {
   switch (state) {
     case "idle":
-      return "Mic idle";
+      return "Mic off";
     case "starting":
-      return "Starting microphone";
+      return "Mic warming up";
     case "listening":
-      return "Listening";
+      return "Mic ready - listening";
     case "processing":
       return "Processing speech";
     case "speaking":

@@ -22,20 +22,26 @@ export function getAutoSubmitDelayMs(input: TurnTimingInput) {
 
   const wordCount = countWords(normalized);
   const endsSentence = /[.!?]$/.test(normalized);
+  const hasConnectorEnding = /\b(and|so|then|because|but|or|with|for|to)$/.test(normalized);
+  const hasComplexityTalk = /\btime complexity|space complexity|o\(/.test(normalized);
 
-  if (endsSentence && wordCount >= 8) {
-    return 650;
+  if (endsSentence && wordCount >= 14) {
+    return input.interruptedRecently ? 1200 : 950;
   }
 
   if (wordCount <= 3) {
-    return input.interruptedRecently ? 1700 : 1450;
+    return input.interruptedRecently ? 2500 : 2100;
   }
 
   if (wordCount <= 8) {
-    return input.interruptedRecently ? 1500 : 1200;
+    return input.interruptedRecently ? 2100 : 1750;
   }
 
-  return input.interruptedRecently ? 1250 : 950;
+  if (hasConnectorEnding || hasComplexityTalk) {
+    return input.interruptedRecently ? 2000 : 1600;
+  }
+
+  return input.interruptedRecently ? 1750 : 1400;
 }
 
 export function getFinalChunkCommitDelayMs(input: TurnTimingInput) {
@@ -44,16 +50,22 @@ export function getFinalChunkCommitDelayMs(input: TurnTimingInput) {
     return null;
   }
 
+  const wordCount = countWords(normalized);
+  const hasConnectorEnding = /\b(and|so|then|because|but|or|with|for|to)$/.test(normalized);
+
   if (/[.!?]$/.test(normalized)) {
-    return 120;
+    return wordCount >= 10 ? 320 : 520;
   }
 
-  const wordCount = countWords(normalized);
   if (wordCount <= 3) {
+    return input.interruptedRecently ? 1500 : 1200;
+  }
+
+  if (hasConnectorEnding) {
     return input.interruptedRecently ? 1200 : 900;
   }
 
-  return input.interruptedRecently ? 750 : 420;
+  return input.interruptedRecently ? 950 : 720;
 }
 
 export function shouldIgnoreInterruptedUtterance(text: string, interruptedRecently = false) {
