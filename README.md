@@ -1,4 +1,4 @@
-﻿# AI Interviewer
+# AI Interviewer
 
 Voice-first mock interview app for North American SDE interview prep, currently centered on coding interviews, a stage-governed AI interviewer, and an optional public interviewer persona flow.
 
@@ -14,6 +14,7 @@ This repo now has a working MVP-plus skeleton with:
 - Persona queue observability in both setup UI and admin dashboard
 - Interview room with transcript persistence, stage-governed assistant turns, Monaco editor, local code execution, and streaming AI replies
 - Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, and actionable improvements
+- Evidence-based report pipeline with candidate-state snapshots, interviewer decisions, and shared replay evidence across report and admin
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
 - Dedicated STT handoff for spoken candidate turns, with provider selection and browser transcript fallback
@@ -85,6 +86,16 @@ This repo now has a working MVP-plus skeleton with:
   - `/report/[id]` provides a standalone report page
   - the report page includes a lightweight replay of stage transitions, hints, code runs, and key turns
 
+## Latest Interviewer Quality Upgrades
+
+- Added signal_extractor as a perception layer with provider-backed structured observation first and heuristic fallback second.
+- Added decision_engine as a candidate-state-driven interviewer control layer, so turns are chosen from candidate signals plus stage and code-run evidence.
+- Gemini/OpenAI replies are now explicitly steered by the decision engine and post-processed to fall back to the required decision question when a model reply is too generic.
+- Text-provider fallback is now an explicit sequence: preferred provider -> secondary provider -> local fallback.
+- /admin now exposes latest session stage, latest candidate state, latest interviewer decision, and a dedicated session-state timeline.
+- /report/[id] now shares the same evidence backbone as /admin, including signal snapshots, interviewer decisions, hints, stage transitions, and code-run outcomes.
+- Added tests for signal extraction, decision logic, evidence-based reporting, provider compliance handling, and provider fallback ordering.
+
 ## What Works Today
 
 ### Product Flow
@@ -113,12 +124,14 @@ This repo now has a working MVP-plus skeleton with:
 - `/report/[id]`
   - Shows standalone evaluation summary and recommendation
   - Displays dimension scores and actionable improvements
-  - Replays key session moments such as stage transitions, hint delivery, code runs, and final feedback generation
+  - Replays key session moments such as stage transitions, signal snapshots, interviewer decisions, hint delivery, code runs, and final feedback generation
+  - Shares the same candidate-state evidence backbone as `/admin`
 - `/admin`
   - Inspect recent interviewer profiles
   - View raw queue job state
   - View persona pipeline events
   - View unified persona and session operations feed with readable lifecycle descriptions
+  - Inspect the latest session summary, candidate state, interviewer decision, and a session-state timeline
 
 ### Backend Flow
 
@@ -169,10 +182,12 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/health.ts`: DB and Redis health aggregation
 - `src/lib/admin/ops.ts`: admin dashboard data aggregation
 - `src/lib/assistant/stages.ts`: coding interview stage inference and progression helpers
+- `src/lib/assistant/signal_extractor.ts`: structured candidate-state extraction with provider-backed observation and heuristic fallback
+- `src/lib/assistant/decision_engine.ts`: candidate-state-driven interviewer decision selection
 - `src/lib/assistant/policy.ts`: explicit stage policy, exit criteria, hint escalation, and prompt strategy selection
-- `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation and streaming
+- `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation, provider sequencing, and decision-compliance enforcement
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
-- `src/lib/evaluation/report.ts`: report generation and session feedback scoring
+- `src/lib/evaluation/report.ts`: evidence-based report generation and session feedback scoring
 - `src/lib/persona/queue.ts`: BullMQ queue helpers
 - `src/lib/persona/fake-ingestion.ts`: local persona ingestion simulation
 - `src/lib/persona/job-events.ts`: persona event persistence
@@ -276,11 +291,14 @@ npm run build
 - Interviewer profile preview route behavior
 - Sessions route behavior
 - Assistant-turn fallback generation and stage-aware behavior
+- Signal extraction and candidate-state reasoning
+- Decision-engine behavior for stuck/debugging/tradeoff/testing cases
 - Stage inference, policy decisions, and prompt strategy behavior
 - Streaming assistant-turn route behavior
 - Voice turn-taking policy behavior
 - Session code-run route behavior
 - Session report route behavior
+- Evidence-based report generation
 - Admin unified feed aggregation
 
 ### Playwright
@@ -295,6 +313,7 @@ npm run build
 - Browser speech recognition depends on Web Speech API availability and varies by browser
 - Dedicated STT and provider-first voice mode now support a switchable provider layer, with OpenAI and AssemblyAI options
 - Gemini and OpenAI interviewer turns can still hit provider rate limits; when that happens the system falls back to local interviewer heuristics
+- LLM-backed signal extraction uses the same provider availability rules, so observer quality may also degrade to heuristics under provider failure or rate limits
 - Live provider drafts are periodic previews rather than true token-level streaming ASR
 - Code execution is local-process based and currently supports Python and JavaScript only
 - Authentication is still stubbed around a demo user
@@ -307,7 +326,7 @@ npm run build
 ### Product and Backend
 
 - Group report replay by stage and add richer per-stage evidence
-- Push `promptStrategy` more deeply into provider-backed model replies, not just fallback behavior
+- Push LLM-backed signal extraction deeper and persist candidate-state snapshots outside the event stream
 - Replace fake persona ingestion with real public-page fetching, extraction, and summarization
 - Expand code execution from local process execution to a stronger sandbox model
 - Evolve report generation from v0 into a more rubric-driven evaluation pipeline
@@ -339,7 +358,7 @@ npm run build
 ### Milestone 1
 
 - Stage-grouped replay in reports
-- Stronger prompt-strategy enforcement
+- Persist candidate-state snapshots in dedicated tables, not only events
 - More route and worker tests
 
 ### Milestone 2
@@ -352,6 +371,8 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
 
 
 

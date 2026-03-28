@@ -136,12 +136,118 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                       <MetricCard label="Job State" value={detail.job?.state ?? "No active BullMQ job"} />
                     </div>
 
+                    {detail.sessionSummary ? (
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: 16,
+                          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                        }}
+                      >
+                        <MetricCard label="Latest Session Stage" value={detail.sessionSummary.currentStageLabel} />
+                        <MetricCard label="Latest Code Run" value={detail.sessionSummary.latestCodeRunStatus ?? "No runs yet"} />
+                        <MetricCard label="Hints Served" value={String(detail.sessionSummary.hintCount)} />
+                        <MetricCard label="Failed Runs" value={String(detail.sessionSummary.failedRunCount)} />
+                      </div>
+                    ) : null}
+
                     <div style={panelStyle}>
                       <strong>Persona Summary</strong>
                       <p style={{ marginBottom: 0, color: "var(--muted)" }}>
                         {detail.profile.personaSummary ?? "No persona summary prepared yet."}
                       </p>
                     </div>
+
+                    {detail.sessionSummary ? (
+                      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                        <div style={panelStyle}>
+                          <strong>Latest Candidate State</strong>
+                          {detail.sessionSummary.latestSignals ? (
+                            <dl style={definitionListStyle}>
+                              {Object.entries(detail.sessionSummary.latestSignals).map(([key, value]) => (
+                                <div key={key} style={definitionRowStyle}>
+                                  <dt style={definitionTermStyle}>{formatLabel(key)}</dt>
+                                  <dd style={definitionValueStyle}>
+                                    {Array.isArray(value) ? value.join(", ") : String(value)}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          ) : (
+                            <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No signal snapshot recorded yet.</p>
+                          )}
+                        </div>
+
+                        <div style={panelStyle}>
+                          <strong>Latest Interviewer Decision</strong>
+                          {detail.sessionSummary.latestDecision ? (
+                            <dl style={definitionListStyle}>
+                              {Object.entries(detail.sessionSummary.latestDecision).map(([key, value]) => (
+                                <div key={key} style={definitionRowStyle}>
+                                  <dt style={definitionTermStyle}>{formatLabel(key)}</dt>
+                                  <dd style={definitionValueStyle}>
+                                    {Array.isArray(value) ? value.join(", ") : String(value)}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          ) : (
+                            <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No decision snapshot recorded yet.</p>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {detail.sessionSummary ? (
+                      <div style={panelStyle}>
+                        <strong>Stage Journey</strong>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                          {detail.sessionSummary.stageJourney.length > 0 ? (
+                            detail.sessionSummary.stageJourney.map((stage) => (
+                              <Badge key={stage} tone="info">
+                                {stage}
+                              </Badge>
+                            ))
+                          ) : (
+                            <span style={{ color: "var(--muted)" }}>No stage transitions recorded yet.</span>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {detail.sessionSummary ? (
+                      <div style={panelStyle}>
+                        <strong>Session State Timeline</strong>
+                        <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+                          {detail.sessionSummary.timeline.length > 0 ? (
+                            detail.sessionSummary.timeline.map((item) => (
+                              <article key={item.id} style={miniTimelineCardStyle}>
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                    <Badge tone={item.kind === "signal" || item.kind === "decision" ? "info" : "neutral"}>
+                                      {item.kind}
+                                    </Badge>
+                                    <strong>{item.title}</strong>
+                                  </div>
+                                  <span style={{ color: "var(--muted)", fontSize: 13 }}>
+                                    {new Date(item.at).toLocaleString()}
+                                  </span>
+                                </div>
+                                <div style={{ color: "var(--muted)" }}>{item.summary}</div>
+                                <details>
+                                  <summary style={{ cursor: "pointer", color: "var(--accent-strong)", fontWeight: 700 }}>
+                                    View payload
+                                  </summary>
+                                  <pre style={miniPreStyle}>{JSON.stringify(item.payload, null, 2)}</pre>
+                                </details>
+                              </article>
+                            ))
+                          ) : (
+                            <span style={{ color: "var(--muted)" }}>No state timeline items recorded yet.</span>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
 
                     <details style={panelStyle}>
                       <summary style={{ cursor: "pointer", fontWeight: 700 }}>View Raw Job Status JSON</summary>
@@ -289,6 +395,15 @@ const timelineCardStyle = {
   gap: 12,
 } as const;
 
+const miniTimelineCardStyle = {
+  padding: 14,
+  borderRadius: 14,
+  border: "1px solid var(--border)",
+  background: "var(--surface-alt)",
+  display: "grid",
+  gap: 10,
+} as const;
+
 const preStyle = {
   margin: "12px 0 0",
   padding: 16,
@@ -299,12 +414,44 @@ const preStyle = {
   fontSize: 13,
 } as const;
 
+const miniPreStyle = {
+  ...preStyle,
+  fontSize: 12,
+  padding: 12,
+} as const;
+
 const emptyStyle = {
   padding: 18,
   borderRadius: 16,
   border: "1px dashed var(--border)",
   color: "var(--muted)",
   background: "rgba(255,255,255,0.65)",
+} as const;
+
+const definitionListStyle = {
+  display: "grid",
+  gap: 10,
+  marginTop: 12,
+} as const;
+
+const definitionRowStyle = {
+  display: "grid",
+  gap: 4,
+  paddingBottom: 10,
+  borderBottom: "1px solid var(--border)",
+} as const;
+
+const definitionTermStyle = {
+  fontSize: 13,
+  color: "var(--muted)",
+  textTransform: "uppercase" as const,
+  letterSpacing: 0.4,
+} as const;
+
+const definitionValueStyle = {
+  margin: 0,
+  color: "var(--text)",
+  whiteSpace: "pre-wrap" as const,
 } as const;
 
 const topLinkStyle = {
@@ -317,3 +464,7 @@ const topLinkStyle = {
   background: "#fff",
   fontWeight: 700,
 } as const;
+
+function formatLabel(value: string) {
+  return value.replace(/([A-Z])/g, " $1").replaceAll("_", " ").trim();
+}

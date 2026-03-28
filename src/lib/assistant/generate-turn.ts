@@ -1,4 +1,5 @@
 import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/interviewer-skills";
+import { makeCandidateDecision, type CandidateDecision } from "@/lib/assistant/decision_engine";
 import {
   formatCodingInterviewPolicy,
   resolveCodingInterviewPolicy,
@@ -6,6 +7,7 @@ import {
   type CodingInterviewHintLevel,
   type CodingInterviewHintStyle,
 } from "@/lib/assistant/policy";
+import { extractCandidateSignalsSmart, type CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import {
   describeCodingStage,
   inferSuggestedCodingStage,
@@ -61,6 +63,8 @@ type GenerateAssistantTurnResult = {
     outputTokens: number;
     estimatedCostUsd: number | null;
   };
+  signals?: CandidateSignalSnapshot;
+  decision?: CandidateDecision;
   providerFailure?: {
     provider: "gemini" | "openai";
     message: string;
@@ -75,84 +79,98 @@ export type StreamingAssistantTurnChunk = {
 export async function generateAssistantTurn(
   input: GenerateAssistantTurnInput,
 ): Promise<GenerateAssistantTurnResult> {
-  const provider = resolveProvider();
-  let providerFailure: GenerateAssistantTurnResult["providerFailure"];
+  const signals = await extractCandidateSignalsSmart({
+    currentStage: normalizeStage(input.currentStage),
+    recentTranscripts: input.recentTranscripts,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const decision = buildDecision(input, signals);
+  let providerFailure: GenerateAssistantTurnResult["providerFailure"] | undefined;
 
-  if (provider === "gemini" && process.env.GEMINI_API_KEY) {
-    try {
-      const reply = await generateWithGemini(input);
-      if (reply) {
-        return reply;
+  for (const provider of resolveProviderSequence()) {
+    if (provider === "gemini") {
+      try {
+        const reply = await generateWithGemini(input, signals, decision);
+        if (reply) {
+          return reply;
+        }
+        providerFailure = { provider: "gemini", message: "Gemini returned no reply." };
+        logProviderFallback("gemini", providerFailure.message);
+      } catch (error) {
+        providerFailure = {
+          provider: "gemini",
+          message: error instanceof Error ? error.message : "Gemini request failed.",
+        };
+        logProviderFallback("gemini", providerFailure.message);
       }
-      providerFailure = { provider: "gemini", message: "Gemini returned no reply." };
-      logProviderFallback("gemini", providerFailure.message);
-    } catch (error) {
-      providerFailure = {
-        provider: "gemini",
-        message: error instanceof Error ? error.message : "Gemini request failed.",
-      };
-      logProviderFallback("gemini", providerFailure.message);
-      // Fall back to lower-priority providers or local heuristics.
+      continue;
     }
-  }
 
-  if ((provider === "openai" || process.env.OPENAI_API_KEY) && process.env.OPENAI_API_KEY) {
-    try {
-      const reply = await generateWithOpenAI(input);
-      if (reply) {
-        return reply;
+    if (provider === "openai") {
+      try {
+        const reply = await generateWithOpenAI(input, signals, decision);
+        if (reply) {
+          return reply;
+        }
+        providerFailure = { provider: "openai", message: "OpenAI returned no reply." };
+        logProviderFallback("openai", providerFailure.message);
+      } catch (error) {
+        providerFailure = {
+          provider: "openai",
+          message: error instanceof Error ? error.message : "OpenAI request failed.",
+        };
+        logProviderFallback("openai", providerFailure.message);
       }
-      providerFailure = { provider: "openai", message: "OpenAI returned no reply." };
-      logProviderFallback("openai", providerFailure.message);
-    } catch (error) {
-      providerFailure = {
-        provider: "openai",
-        message: error instanceof Error ? error.message : "OpenAI request failed.",
-      };
-      logProviderFallback("openai", providerFailure.message);
-      // Fall back to local heuristics to keep the room usable even if the model call fails.
     }
   }
 
   logProviderFallback("fallback", "Using local interviewer heuristics.");
-  return generateFallbackTurn(input, providerFailure);
+  return generateFallbackTurn(input, signals, decision, providerFailure);
 }
 
 export async function* streamAssistantTurn(
   input: GenerateAssistantTurnInput,
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
-  const provider = resolveProvider();
-  let providerFailure: GenerateAssistantTurnResult["providerFailure"];
+  const signals = await extractCandidateSignalsSmart({
+    currentStage: normalizeStage(input.currentStage),
+    recentTranscripts: input.recentTranscripts,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const decision = buildDecision(input, signals);
+  let providerFailure: GenerateAssistantTurnResult["providerFailure"] | undefined;
 
-  if (provider === "gemini" && process.env.GEMINI_API_KEY) {
-    const geminiResult = yield* yieldProviderStream(streamWithGemini(input, options), input, "gemini");
-    const geminiHandled = geminiResult.handled;
-    if (geminiHandled) {
-      return;
+  for (const provider of resolveProviderSequence()) {
+    if (provider === "gemini") {
+      const geminiResult = yield* yieldProviderStream(streamWithGemini(input, signals, decision, options), input, "gemini");
+      if (geminiResult.handled) {
+        return;
+      }
+      providerFailure = geminiResult.providerFailure ?? {
+        provider: "gemini",
+        message: "Gemini did not produce a reply for this turn.",
+      };
+      logProviderFallback("gemini", providerFailure.message);
+      continue;
     }
-    providerFailure = geminiResult.providerFailure ?? {
-      provider: "gemini",
-      message: "Gemini did not produce a reply for this turn.",
-    };
-    logProviderFallback("gemini", providerFailure.message);
-  }
 
-  if ((provider === "openai" || process.env.OPENAI_API_KEY) && process.env.OPENAI_API_KEY) {
-    const openAiResult = yield* yieldProviderStream(streamWithOpenAI(input, options), input, "openai");
-    const openAiHandled = openAiResult.handled;
-    if (openAiHandled) {
-      return;
+    if (provider === "openai") {
+      const openAiResult = yield* yieldProviderStream(streamWithOpenAI(input, signals, decision, options), input, "openai");
+      if (openAiResult.handled) {
+        return;
+      }
+      providerFailure = openAiResult.providerFailure ?? {
+        provider: "openai",
+        message: "OpenAI did not produce a reply for this turn.",
+      };
+      logProviderFallback("openai", providerFailure.message);
     }
-    providerFailure = openAiResult.providerFailure ?? {
-      provider: "openai",
-      message: "OpenAI did not produce a reply for this turn.",
-    };
-    logProviderFallback("openai", providerFailure.message);
   }
 
   logProviderFallback("fallback", "Using local interviewer heuristics.");
-  const fallback = generateFallbackTurn(input, providerFailure);
+  const fallback = generateFallbackTurn(input, signals, decision, providerFailure);
   for (const chunk of chunkText(fallback.reply)) {
     if (options?.signal?.aborted) {
       return;
@@ -233,11 +251,34 @@ function resolveProvider() {
   return "fallback";
 }
 
+function resolveProviderSequence() {
+  const preferred = resolveProvider();
+  const sequence: Array<"gemini" | "openai"> = [];
+
+  if (preferred === "gemini" && process.env.GEMINI_API_KEY) {
+    sequence.push("gemini");
+  }
+  if (preferred === "openai" && process.env.OPENAI_API_KEY) {
+    sequence.push("openai");
+  }
+
+  if (!sequence.includes("gemini") && process.env.GEMINI_API_KEY) {
+    sequence.push("gemini");
+  }
+  if (!sequence.includes("openai") && process.env.OPENAI_API_KEY) {
+    sequence.push("openai");
+  }
+
+  return sequence;
+}
+
 async function generateWithOpenAI(
   input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
 ): Promise<GenerateAssistantTurnResult | null> {
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
-  const prompt = buildInterviewerPrompt(input);
+  const prompt = buildInterviewerPrompt(input, signals, decision);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -275,25 +316,31 @@ async function generateWithOpenAI(
     return null;
   }
 
+  const enforcedReply = enforceDecisionCompliance(reply, decision, input);
+
   return {
-    reply: finalizeReply(reply),
-    suggestedStage: inferStage(reply, input),
+    reply: finalizeReply(enforcedReply),
+    suggestedStage: inferStage(enforcedReply, input),
     source: "openai",
     model,
+    signals,
+    decision,
     usage: {
       inputTokens,
-      outputTokens: estimateTokens(reply),
-      estimatedCostUsd: estimateOpenAiTextCost(model, inputTokens, estimateTokens(reply)),
+      outputTokens: estimateTokens(enforcedReply),
+      estimatedCostUsd: estimateOpenAiTextCost(model, inputTokens, estimateTokens(enforcedReply)),
     },
   };
 }
 
 async function* streamWithOpenAI(
   input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
-  const prompt = buildInterviewerPrompt(input);
+  const prompt = buildInterviewerPrompt(input, signals, decision);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -362,14 +409,16 @@ async function* streamWithOpenAI(
     return;
   }
 
-  const final = finalizeReply(accumulated);
+  const final = finalizeReply(enforceDecisionCompliance(accumulated, decision, input));
   yield {
     final: {
-      reply: final,
-      suggestedStage: inferStage(final, input),
-      source: "openai",
-      model,
-      usage: {
+        reply: final,
+        suggestedStage: inferStage(final, input),
+        source: "openai",
+        model,
+        signals,
+        decision,
+        usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
         estimatedCostUsd: estimateOpenAiTextCost(model, inputTokens, estimateTokens(final)),
@@ -380,9 +429,11 @@ async function* streamWithOpenAI(
 
 async function generateWithGemini(
   input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
 ): Promise<GenerateAssistantTurnResult | null> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-  const prompt = buildInterviewerPrompt(input);
+  const prompt = buildInterviewerPrompt(input, signals, decision);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -429,14 +480,18 @@ async function generateWithGemini(
     return null;
   }
 
+  const enforcedReply = enforceDecisionCompliance(reply, decision, input);
+
   return {
-    reply: finalizeReply(reply),
-    suggestedStage: inferStage(reply, input),
+    reply: finalizeReply(enforcedReply),
+    suggestedStage: inferStage(enforcedReply, input),
     source: "gemini",
     model,
+    signals,
+    decision,
     usage: {
       inputTokens,
-      outputTokens: estimateTokens(reply),
+      outputTokens: estimateTokens(enforcedReply),
       estimatedCostUsd: null,
     },
   };
@@ -444,10 +499,12 @@ async function generateWithGemini(
 
 async function* streamWithGemini(
   input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-  const prompt = buildInterviewerPrompt(input);
+  const prompt = buildInterviewerPrompt(input, signals, decision);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
@@ -522,13 +579,15 @@ async function* streamWithGemini(
     return;
   }
 
-  const final = finalizeReply(accumulated);
+  const final = finalizeReply(enforceDecisionCompliance(accumulated, decision, input));
   yield {
     final: {
       reply: final,
       suggestedStage: inferStage(final, input),
       source: "gemini",
       model,
+      signals,
+      decision,
       usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
@@ -544,17 +603,25 @@ function buildSystemPrompt() {
     "Keep replies concise, natural, and interview-like.",
     "Sound like a thoughtful human interviewer rather than a chatbot.",
     "Ask one focused follow-up question at a time.",
+    "You must follow the supplied decision engine output for this turn.",
+    "Treat the decision engine question as the required next interviewer move unless it would be unsafe or nonsensical.",
+    "Do not replace a concrete decision-engine question with generic encouragement.",
     "Do not reveal full solutions unless the candidate explicitly asks for a hint.",
     "If the candidate mentions an approach, probe correctness, edge cases, complexity, or tradeoffs.",
     "Use basic interview etiquette: calm tone, clear transitions, and respectful pacing.",
     "Avoid repeating the exact same follow-up wording from your last turn.",
+    "Prefer 1 to 3 sentences total, and keep the final sentence as the primary follow-up question.",
     "Return plain text only.",
     "Interviewer skills:\n" + buildSkillsPrompt(DEFAULT_INTERVIEWER_SKILLS),
   ].join(" ");
 }
 
-function buildInterviewerPrompt(input: GenerateAssistantTurnInput) {
-  const stage = isCodingInterviewStage(input.currentStage) ? input.currentStage : "PROBLEM_UNDERSTANDING";
+function buildInterviewerPrompt(
+  input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
+) {
+  const stage = normalizeStage(input.currentStage);
   const policy = resolveCodingInterviewPolicy({
     currentStage: stage,
     recentTranscripts: input.recentTranscripts,
@@ -575,6 +642,16 @@ function buildInterviewerPrompt(input: GenerateAssistantTurnInput) {
     `Current interview stage: ${describeCodingStage(stage)} (${stage})`,
     `Stage guidance: ${stageGuidance(stage)}`,
     `Interview policy:\n${formatCodingInterviewPolicy(policy)}`,
+    `Candidate state snapshot: ${signals.summary}`,
+    `Candidate state confidence: ${signals.confidence}`,
+    `Candidate evidence:\n- ${signals.evidence.join("\n- ")}`,
+    `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}.`,
+    `Decision reason: ${decision.reason}`,
+    `Preferred next interviewer question: ${decision.question}`,
+    `Required turn contract: the reply must execute decision action "${decision.action}" and target "${decision.target}".`,
+    decision.hintStyle ? `Required hint style: ${decision.hintStyle}` : null,
+    decision.hintLevel ? `Required hint level: ${decision.hintLevel}` : null,
+    decision.suggestedStage ? `Suggested next stage after this turn: ${decision.suggestedStage}` : null,
     `Prompt strategy: ${policy.promptStrategy}. OPEN_ENDED means broader probing; GUIDED means narrower coaching; CONSTRAINED means ask the candidate to focus on one specific next step.`,
     `Persona summary: ${input.personaSummary ?? "generic interviewer"}`,
     `Applied prompt context: ${input.appliedPromptContext ?? "none"}`,
@@ -585,13 +662,20 @@ function buildInterviewerPrompt(input: GenerateAssistantTurnInput) {
     `Latest user turn: ${truncate(findLatestTurn(input.recentTranscripts, "USER") ?? "none", input.lowCostMode ? 140 : 220)}`,
     `Recent conversation:\n${recentTurns || "No turns yet."}`,
     "Write the interviewer's next single reply.",
+    "The reply should explicitly align with the decision engine target and should usually reuse the decision engine question semantically, even if you rephrase it naturally.",
+    "If the decision action is give_hint, provide a hint and not a generic probe.",
+    "If the decision action is ask_for_test_case or ask_for_complexity, ask exactly for those signals rather than a broad open-ended follow-up.",
     "Advance the interview deliberately. Stay in the current stage unless there is a clear reason to move forward.",
     "Do not repeat the previous AI sentence verbatim.",
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function generateFallbackTurn(
   input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
   providerFailure?: GenerateAssistantTurnResult["providerFailure"],
 ): GenerateAssistantTurnResult {
   const latestUserTurn = [...input.recentTranscripts].reverse().find((item) => item.speaker === "USER");
@@ -612,6 +696,8 @@ function generateFallbackTurn(
       reply: `Let's get started with ${input.questionTitle}. Before you code, could you restate the problem in your own words and walk me through your initial approach?`,
       suggestedStage: "PROBLEM_UNDERSTANDING",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -621,13 +707,11 @@ function generateFallbackTurn(
 
   if (policy.promptStrategy === "CONSTRAINED") {
     return {
-      reply: withVariation(
-        "Let's narrow this down to one step. Tell me the exact next line, branch, or test case you would inspect first, and why that is the highest-signal place to look.",
-        latestAiTurn?.text,
-        "Let's make this concrete. Pick one specific thing to inspect next, like a branch, pointer update, or edge case, and explain why you would start there.",
-      ),
+      reply: withVariation(decision.question, latestAiTurn?.text, "Let's make this concrete. Pick one specific thing to inspect next, like a branch, pointer update, or edge case, and explain why you would start there."),
       suggestedStage: policy.nextStage ?? currentStage,
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -637,13 +721,11 @@ function generateFallbackTurn(
 
   if (policy.promptStrategy === "GUIDED" && currentStage === "APPROACH_DISCUSSION") {
     return {
-      reply: withVariation(
-        "Let's make the approach more concrete. What exact information are you storing, how do you update it on each step, and when do you know you have the answer?",
-        latestAiTurn?.text,
-        "Let's tighten the approach. Name the state you keep, how it changes each step, and the condition that tells you you're done.",
-      ),
+      reply: withVariation(decision.question, latestAiTurn?.text, "Let's tighten the approach. Name the state you keep, how it changes each step, and the condition that tells you you're done."),
       suggestedStage: currentStage,
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -657,6 +739,8 @@ function generateFallbackTurn(
       reply: hintedReply,
       suggestedStage: policy.nextStage ?? currentStage,
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -676,6 +760,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "DEBUGGING",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -692,6 +778,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "COMPLEXITY_DISCUSSION",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -728,6 +816,8 @@ function generateFallbackTurn(
         ),
         suggestedStage: "APPROACH_DISCUSSION",
         source: "fallback",
+        signals,
+        decision,
         providerFailure,
         policyAction: policy.recommendedAction,
         policyReason: policy.reason,
@@ -742,6 +832,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "PROBLEM_UNDERSTANDING",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -758,6 +850,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "HINTING",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -774,6 +868,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "APPROACH_DISCUSSION",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -799,6 +895,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: currentStage === "IMPLEMENTATION" ? "IMPLEMENTATION" : "APPROACH_DISCUSSION",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -815,6 +913,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "CORRECTNESS_DISCUSSION",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -831,6 +931,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "IMPLEMENTATION",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -846,6 +948,8 @@ function generateFallbackTurn(
       ),
       suggestedStage: "TESTING_AND_COMPLEXITY",
       source: "fallback",
+      signals,
+      decision,
       providerFailure,
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
@@ -869,9 +973,7 @@ function generateFallbackTurn(
 
   return {
     reply: withVariation(
-      currentStage === "WRAP_UP"
-        ? "Wrap this up for me. What's the final approach, what are the tradeoffs, and what small improvement would you make with more time?"
-        : "Keep going. Explain your approach step by step, and make sure you call out assumptions, edge cases, and the tradeoff behind your design choice.",
+      decision.question,
       latestAiTurn?.text,
       currentStage === "WRAP_UP"
         ? "Give me a concise final summary: core idea, complexity, and one follow-up improvement you would consider."
@@ -879,6 +981,8 @@ function generateFallbackTurn(
     ),
     suggestedStage: currentStage === "WRAP_UP" ? "WRAP_UP" : "APPROACH_DISCUSSION",
     source: "fallback",
+    signals,
+    decision,
     providerFailure,
     policyAction: policy.recommendedAction,
     policyReason: policy.reason,
@@ -1106,4 +1210,70 @@ function readProviderErrorMessage(payload: Record<string, unknown>) {
   }
 
   return null;
+}
+
+function normalizeStage(stage: string | null | undefined): CodingInterviewStage {
+  return isCodingInterviewStage(stage) ? stage : "PROBLEM_UNDERSTANDING";
+}
+
+function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSignalSnapshot) {
+  const currentStage = normalizeStage(input.currentStage);
+  const policy = resolveCodingInterviewPolicy({
+    currentStage,
+    recentTranscripts: input.recentTranscripts,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+
+  return makeCandidateDecision({
+    currentStage,
+    policy,
+    signals,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+}
+
+function enforceDecisionCompliance(
+  reply: string,
+  decision: CandidateDecision,
+  input: GenerateAssistantTurnInput,
+) {
+  const normalized = reply.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return decision.question;
+  }
+
+  const lower = normalized.toLowerCase();
+  const questionLower = decision.question.toLowerCase();
+  const mentionsTarget =
+    lower.includes(decision.target.replaceAll("_", " ")) ||
+    lower.includes(questionLower.slice(0, Math.min(questionLower.length, 24)));
+
+  const soundsGeneric =
+    /\b(keep going|that sounds reasonable|reasonable direction|good start|nice start|continue|walk me through your approach step by step)\b/i.test(
+      normalized,
+    ) && !mentionsTarget;
+
+  const requiresConcreteFollowup = ["ask_for_test_case", "ask_for_complexity", "ask_for_debug_plan", "give_hint"].includes(
+    decision.action,
+  );
+
+  if (requiresConcreteFollowup && !mentionsTarget) {
+    return decision.question;
+  }
+
+  if (soundsGeneric) {
+    if (normalized.endsWith("?")) {
+      return `${normalized} ${decision.question}`;
+    }
+
+    return `${normalized} ${decision.question}`;
+  }
+
+  if (input.lowCostMode && normalized.split(/\s+/).length > 55) {
+    return decision.question;
+  }
+
+  return normalized;
 }

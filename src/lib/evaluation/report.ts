@@ -1,6 +1,7 @@
 ﻿import {
   deriveCurrentCodingStage,
   describeCodingStage,
+  isCodingInterviewStage,
   type CodingInterviewStage,
 } from "@/lib/assistant/stages";
 import type { Recommendation } from "@prisma/client";
@@ -41,6 +42,42 @@ type DimensionScore = {
   score: number;
   maxScore: number;
   evidence: string;
+  impact?: string;
+  improvement?: string[];
+};
+
+type CandidateSignalSummary = {
+  understanding?: string;
+  progress?: string;
+  communication?: string;
+  codeQuality?: string;
+  algorithmChoice?: string;
+  edgeCaseAwareness?: string;
+  behavior?: string;
+  confidence?: number;
+  evidence?: string[];
+  summary?: string;
+};
+
+type CandidateDecisionSummary = {
+  action?: string;
+  target?: string;
+  question?: string;
+  reason?: string;
+  confidence?: number;
+  suggestedStage?: string;
+  hintStyle?: string;
+  hintLevel?: string;
+  policyAction?: string;
+};
+
+type StageReplayGroup = {
+  stage: string;
+  label: string;
+  evidence: string[];
+  signalSnapshots: CandidateSignalSummary[];
+  decisions: CandidateDecisionSummary[];
+  turns: Array<{ speaker: string; text: string }>;
 };
 
 export type GeneratedSessionReport = {
@@ -62,6 +99,9 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     latestExecutionRun: input.executionRuns[0] ?? null,
   });
   const stageJourney = buildStageJourney(input.events, currentStage);
+  const stageReplay = buildStageReplay(input.events, input.transcripts, stageJourney, currentStage);
+  const latestSignal = findLatestSignalSnapshot(input.events);
+  const latestDecision = findLatestDecisionSnapshot(input.events);
   const hintRequestedCount = input.events.filter((event) => event.eventType === "HINT_REQUESTED").length;
   const hintServedCount = input.events.filter((event) => event.eventType === "HINT_SERVED").length;
   const userTurns = input.transcripts.filter((segment) => segment.speaker === "USER");
@@ -72,33 +112,35 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const failedRuns = input.executionRuns.filter((run) => run.status !== "PASSED").length;
 
   const dimensions: DimensionScore[] = [
-    scoreProblemUnderstanding(stageJourney, latestUserText),
-    scoreCommunication(userTurns),
-    scoreImplementation(codeRunCount, passedRuns, failedRuns),
-    scoreDebugging(input.executionRuns),
-    scoreTestingAndComplexity(stageJourney, latestUserText),
+    scoreProblemUnderstanding(stageJourney, latestUserText, latestSignal),
+    scoreCommunication(userTurns, latestSignal),
+    scoreImplementation(codeRunCount, passedRuns, failedRuns, latestSignal),
+    scoreDebugging(input.executionRuns, latestDecision),
+    scoreTestingAndComplexity(stageJourney, latestUserText, latestSignal),
   ];
 
   const scoreSum = dimensions.reduce((total, dimension) => total + dimension.score, 0);
   const maxSum = dimensions.reduce((total, dimension) => total + dimension.maxScore, 0);
   const overallScore = Math.round((scoreSum / maxSum) * 100);
   const recommendation = toRecommendation(overallScore);
-  const strengths = collectStrengths(dimensions, passedRuns, hintRequestedCount);
-  const weaknesses = collectWeaknesses(dimensions, currentStage, hintRequestedCount);
-  const missedSignals = collectMissedSignals(stageJourney, latestUserText, passedRuns);
-  const improvementPlan = collectImprovementPlan(dimensions, hintServedCount);
+  const strengths = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount);
+  const weaknesses = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount);
+  const missedSignals = collectMissedSignals(stageJourney, latestSignal, latestUserText, passedRuns);
+  const improvementPlan = collectImprovementPlan(dimensions, latestSignal, hintServedCount);
+  const overallSummary = buildOverallSummary({
+    recommendation,
+    currentStage,
+    passedRuns,
+    failedRuns,
+    hintRequestedCount,
+    stageJourney,
+    latestSignal,
+  });
 
   return {
     overallScore,
     recommendation,
-    overallSummary: buildOverallSummary({
-      recommendation,
-      currentStage,
-      passedRuns,
-      failedRuns,
-      hintRequestedCount,
-      stageJourney,
-    }),
+    overallSummary,
     strengths,
     weaknesses,
     missedSignals,
@@ -125,6 +167,9 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
         userTurns: userTurns.length,
         aiTurns: aiTurns.length,
       },
+      candidateState: latestSignal,
+      latestDecision,
+      stageReplay,
       dimensions,
       strengths,
       weaknesses,
@@ -132,24 +177,23 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       improvementPlan,
       overallScore,
       recommendation,
-      overallSummary: buildOverallSummary({
-        recommendation,
-        currentStage,
-        passedRuns,
-        failedRuns,
-        hintRequestedCount,
-        stageJourney,
-      }),
+      overallSummary,
     },
   };
 }
 
-function scoreProblemUnderstanding(stageJourney: string[], latestUserText: string): DimensionScore {
+function scoreProblemUnderstanding(
+  stageJourney: string[],
+  latestUserText: string,
+  latestSignal: CandidateSignalSummary | null,
+): DimensionScore {
+  const clear = latestSignal?.understanding === "clear";
+  const partial = latestSignal?.understanding === "partial";
   const score =
-    stageJourney.includes("APPROACH_DISCUSSION") || stageJourney.includes("IMPLEMENTATION")
+    clear || stageJourney.includes("Approach Discussion") || stageJourney.includes("Implementation")
       ? 5
-      : /\b(constraint|input|output|clarify|assume)\b/.test(latestUserText)
-        ? 4
+      : partial || /\b(constraint|input|output|clarify|assume)\b/.test(latestUserText)
+        ? 3
         : 2;
 
   return {
@@ -158,18 +202,35 @@ function scoreProblemUnderstanding(stageJourney: string[], latestUserText: strin
     score,
     maxScore: 5,
     evidence:
+      clear
+        ? "The candidate clarified constraints or grounded the prompt in examples before moving on."
+        : "The session showed only partial evidence that the candidate fully framed the problem before advancing.",
+    impact:
       score >= 4
-        ? "Candidate progressed beyond problem framing and surfaced constraints or assumptions."
-        : "Candidate showed limited evidence of clarifying constraints before moving on.",
+        ? "This gave the rest of the interview a stable foundation."
+        : "Weak initial framing makes downstream algorithm and implementation decisions less reliable.",
+    improvement: [
+      "Restate the problem in your own words before choosing an algorithm.",
+      "Name assumptions about input shape, constraints, and expected output.",
+    ],
   };
 }
 
-function scoreCommunication(userTurns: TranscriptLike[]): DimensionScore {
+function scoreCommunication(userTurns: TranscriptLike[], latestSignal: CandidateSignalSummary | null): DimensionScore {
   const averageLength =
     userTurns.length === 0
       ? 0
       : userTurns.reduce((total, turn) => total + turn.text.split(/\s+/).filter(Boolean).length, 0) / userTurns.length;
-  const score = userTurns.length >= 3 && averageLength >= 8 ? 5 : userTurns.length >= 2 ? 4 : userTurns.length >= 1 ? 3 : 1;
+  const score =
+    latestSignal?.communication === "clear"
+      ? 5
+      : latestSignal?.communication === "mixed"
+        ? 3
+        : userTurns.length >= 2 && averageLength >= 8
+          ? 4
+          : userTurns.length >= 1
+            ? 3
+            : 1;
 
   return {
     key: "communication",
@@ -178,13 +239,35 @@ function scoreCommunication(userTurns: TranscriptLike[]): DimensionScore {
     maxScore: 5,
     evidence:
       score >= 4
-        ? "Candidate maintained multiple substantive turns and explained reasoning in a reasonably complete way."
-        : "Communication was present, but the session did not yet show many fully developed candidate turns.",
+        ? "The candidate produced multiple substantive turns and exposed enough reasoning for the interviewer to inspect."
+        : "Communication was present, but parts of the reasoning still arrived in compressed or incomplete chunks.",
+    impact:
+      score >= 4
+        ? "Strong communication made follow-up questions more targeted and efficient."
+        : "When reasoning stays implicit, the interviewer has to spend turns reconstructing the thought process.",
+    improvement: [
+      "Use explicit sequencing words like first, then, and finally.",
+      "Tie each major step to one concrete example or invariant.",
+    ],
   };
 }
 
-function scoreImplementation(codeRunCount: number, passedRuns: number, failedRuns: number): DimensionScore {
-  const score = passedRuns > 0 ? 5 : codeRunCount > 0 && failedRuns > 0 ? 3 : 1;
+function scoreImplementation(
+  codeRunCount: number,
+  passedRuns: number,
+  failedRuns: number,
+  latestSignal: CandidateSignalSummary | null,
+): DimensionScore {
+  const score =
+    latestSignal?.codeQuality === "correct"
+      ? 5
+      : latestSignal?.codeQuality === "buggy"
+        ? 2
+        : passedRuns > 0
+          ? 5
+          : codeRunCount > 0 && failedRuns > 0
+            ? 3
+            : 1;
 
   return {
     key: "implementation",
@@ -193,17 +276,25 @@ function scoreImplementation(codeRunCount: number, passedRuns: number, failedRun
     maxScore: 5,
     evidence:
       passedRuns > 0
-        ? "Candidate reached at least one passing execution run."
+        ? "At least one passing execution run was recorded, so the implementation reached a working state."
         : codeRunCount > 0
-          ? "Candidate attempted implementation, but the current runs did not pass."
-          : "No implementation evidence was captured through code execution.",
+          ? "The candidate attempted implementation, but the current execution evidence still contains failures."
+          : "There was little implementation evidence captured through code execution.",
+    impact:
+      passedRuns > 0
+        ? "Working code gave the interviewer room to probe validation and tradeoffs instead of raw syntax."
+        : "Without a stable implementation, later signals like complexity and testing remain less trustworthy.",
+    improvement: [
+      "After coding the main loop, run the simplest happy-path case immediately.",
+      "Localize the most failure-prone branch before expanding the full implementation.",
+    ],
   };
 }
 
-function scoreDebugging(executionRuns: ExecutionRunLike[]): DimensionScore {
+function scoreDebugging(executionRuns: ExecutionRunLike[], latestDecision: CandidateDecisionSummary | null): DimensionScore {
   const passedRuns = executionRuns.filter((run) => run.status === "PASSED").length;
   const failingRuns = executionRuns.filter((run) => run.status !== "PASSED").length;
-  const score = failingRuns === 0 ? 3 : passedRuns > 0 ? 5 : 2;
+  const score = failingRuns === 0 ? 3 : passedRuns > 0 ? 5 : latestDecision?.target === "debugging" ? 3 : 2;
 
   return {
     key: "debugging",
@@ -214,15 +305,27 @@ function scoreDebugging(executionRuns: ExecutionRunLike[]): DimensionScore {
       failingRuns === 0
         ? "The session did not surface much explicit debugging evidence."
         : passedRuns > 0
-          ? "Candidate recovered from at least one failing run."
-          : "The session showed failing runs without a subsequent passing recovery.",
+          ? "The candidate recovered from at least one failing run, which is a strong debugging signal."
+          : "The session showed failing runs without later evidence of a successful recovery.",
+    impact:
+      passedRuns > 0
+        ? "Successful debugging is a positive sign for production-style reasoning under pressure."
+        : "Unrecovered execution failures weaken confidence in correctness and momentum.",
+    improvement: [
+      "When a run fails, identify the first incorrect state transition before rewriting larger blocks.",
+      "Use one tiny reproducer input to isolate the failing path.",
+    ],
   };
 }
 
-function scoreTestingAndComplexity(stageJourney: string[], latestUserText: string): DimensionScore {
-  const discussedTesting = /\b(edge case|test|empty|duplicate|null)\b/.test(latestUserText);
+function scoreTestingAndComplexity(
+  stageJourney: string[],
+  latestUserText: string,
+  latestSignal: CandidateSignalSummary | null,
+): DimensionScore {
+  const discussedTesting = latestSignal?.edgeCaseAwareness === "present" || /\b(edge case|test|empty|duplicate|null)\b/.test(latestUserText);
   const discussedComplexity = /\b(time complexity|space complexity|o\(|linear|quadratic)\b/.test(latestUserText);
-  const reachedStage = stageJourney.includes("TESTING_AND_COMPLEXITY") || stageJourney.includes("WRAP_UP");
+  const reachedStage = stageJourney.includes("Testing And Complexity") || stageJourney.includes("Wrap Up");
   const score = reachedStage && discussedTesting && discussedComplexity ? 5 : reachedStage || discussedTesting || discussedComplexity ? 3 : 1;
 
   return {
@@ -232,10 +335,18 @@ function scoreTestingAndComplexity(stageJourney: string[], latestUserText: strin
     maxScore: 5,
     evidence:
       score >= 5
-        ? "Candidate covered both validation signals and complexity discussion."
+        ? "The candidate covered edge cases and final complexity, which completes the technical story well."
         : score >= 3
-          ? "The session touched testing or complexity, but not both in a fully convincing way."
-          : "Testing and complexity discussion was limited in the captured session.",
+          ? "The session touched testing or complexity, but not yet with full coverage."
+          : "Testing and complexity discussion stayed limited in the captured session.",
+    impact:
+      score >= 5
+        ? "This gives stronger evidence that the candidate can close out a coding interview cleanly."
+        : "Without explicit validation and complexity discussion, the final signal remains incomplete.",
+    improvement: [
+      "Always end with edge cases plus final time and space complexity.",
+      "Name one correctness argument and one tradeoff before wrap-up.",
+    ],
   };
 }
 
@@ -249,6 +360,89 @@ function buildStageJourney(events: SessionEventLike[], currentStage: string) {
   return ordered.filter((stage, index) => ordered.indexOf(stage) === index).map((stage) => describeCodingStageSafe(stage));
 }
 
+function buildStageReplay(
+  events: SessionEventLike[],
+  transcripts: TranscriptLike[],
+  stageJourney: string[],
+  currentStage: string,
+): StageReplayGroup[] {
+  const orderedStages = [...stageJourney];
+  const currentLabel = describeCodingStageSafe(currentStage);
+  if (!orderedStages.includes(currentLabel)) {
+    orderedStages.push(currentLabel);
+  }
+
+  const groups = new Map<string, StageReplayGroup>();
+  for (const stage of orderedStages) {
+    groups.set(stage, {
+      stage,
+      label: stage,
+      evidence: [],
+      signalSnapshots: [],
+      decisions: [],
+      turns: [],
+    });
+  }
+
+  let activeStage = orderedStages[0] ?? currentLabel;
+  let turnIndex = 0;
+
+  for (const event of events) {
+    if (event.eventType === "STAGE_ADVANCED") {
+      const nextStage = describeCodingStageSafe(stringValue(asRecord(event.payloadJson).stage) ?? activeStage);
+      if (groups.has(nextStage)) {
+        activeStage = nextStage;
+      }
+      groups.get(activeStage)?.evidence.push(`Stage advanced: ${buildStageAdvanceEvidence(asRecord(event.payloadJson))}`);
+      continue;
+    }
+
+    if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+      const payload = asRecord(event.payloadJson);
+      const stage = describeCodingStageSafe(stringValue(payload.stage) ?? activeStage);
+      const target = groups.get(stage) ?? groups.get(activeStage);
+      const signals = asRecord(payload.signals) as unknown as CandidateSignalSummary;
+      target?.signalSnapshots.push(signals);
+      target?.evidence.push(`Signal snapshot: ${signals.summary ?? "candidate state updated"}.`);
+      continue;
+    }
+
+    if (event.eventType === "DECISION_RECORDED") {
+      const payload = asRecord(event.payloadJson);
+      const stage = describeCodingStageSafe(stringValue(payload.stage) ?? activeStage);
+      const target = groups.get(stage) ?? groups.get(activeStage);
+      const decision = asRecord(payload.decision) as unknown as CandidateDecisionSummary;
+      target?.decisions.push(decision);
+      target?.evidence.push(`Decision: ${decision.action ?? "unknown action"} toward ${decision.target ?? "unknown target"}.`);
+      continue;
+    }
+
+    if (event.eventType === "HINT_SERVED") {
+      groups.get(activeStage)?.evidence.push(`Hint served: ${(stringValue(asRecord(event.payloadJson).hintLevel) ?? "LIGHT").toLowerCase()} ${(stringValue(asRecord(event.payloadJson).hintStyle) ?? "hint").replaceAll("_", " ").toLowerCase()}.`);
+      continue;
+    }
+
+    if (event.eventType === "CODE_RUN_COMPLETED") {
+      const payload = asRecord(event.payloadJson);
+      groups.get(activeStage)?.evidence.push(`Code run result: ${stringValue(payload.status) ?? "unknown"}.`);
+      continue;
+    }
+  }
+
+  for (const segment of transcripts.filter((item) => item.speaker !== "SYSTEM")) {
+    const stage = orderedStages[Math.min(turnIndex, orderedStages.length - 1)] ?? currentLabel;
+    groups.get(stage)?.turns.push({
+      speaker: segment.speaker,
+      text: truncate(segment.text, 160),
+    });
+    if (segment.speaker === "USER") {
+      turnIndex += 1;
+    }
+  }
+
+  return [...groups.values()].filter((group) => group.evidence.length > 0 || group.turns.length > 0);
+}
+
 function buildOverallSummary(input: {
   recommendation: Recommendation;
   currentStage: string;
@@ -256,37 +450,64 @@ function buildOverallSummary(input: {
   failedRuns: number;
   hintRequestedCount: number;
   stageJourney: string[];
+  latestSignal: CandidateSignalSummary | null;
 }) {
   return [
     `Recommendation: ${input.recommendation}.`,
     `The session reached ${describeCodingStageSafe(input.currentStage)} and covered ${input.stageJourney.join(" -> ")}.`,
+    input.latestSignal?.summary ? `Latest candidate state: ${input.latestSignal.summary}.` : null,
     `Code execution produced ${input.passedRuns} passing run(s) and ${input.failedRuns} non-passing run(s).`,
     input.hintRequestedCount > 0
       ? `The candidate requested ${input.hintRequestedCount} hint(s), which suggests some reliance on interviewer guidance.`
       : "The candidate completed the session without asking for explicit hints.",
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
-function collectStrengths(dimensions: DimensionScore[], passedRuns: number, hintRequestedCount: number) {
+function collectStrengths(
+  dimensions: DimensionScore[],
+  latestSignal: CandidateSignalSummary | null,
+  stageReplay: StageReplayGroup[],
+  passedRuns: number,
+  hintRequestedCount: number,
+) {
   const strengths = dimensions
     .filter((dimension) => dimension.score >= 4)
     .map((dimension) => `${dimension.label}: ${dimension.evidence}`);
 
+  if (latestSignal?.behavior === "structured") {
+    strengths.push("Behavior: the candidate explained the solution in a structured sequence rather than a purely reactive way.");
+  }
+
   if (passedRuns > 0) {
     strengths.push("Code execution: at least one passing run was achieved.");
+  }
+
+  if (stageReplay.some((group) => group.decisions.some((decision) => decision.action === "ask_for_complexity"))) {
+    strengths.push("Interview coverage: the session progressed far enough to probe validation and final complexity signals.");
   }
 
   if (hintRequestedCount === 0) {
     strengths.push("Independence: the candidate did not rely on explicit hint requests.");
   }
 
-  return strengths.slice(0, 3);
+  return strengths.slice(0, 4);
 }
 
-function collectWeaknesses(dimensions: DimensionScore[], currentStage: string, hintRequestedCount: number) {
+function collectWeaknesses(
+  dimensions: DimensionScore[],
+  currentStage: string,
+  latestSignal: CandidateSignalSummary | null,
+  hintRequestedCount: number,
+) {
   const weaknesses = dimensions
     .filter((dimension) => dimension.score <= 3)
     .map((dimension) => `${dimension.label}: ${dimension.evidence}`);
+
+  if (latestSignal?.progress === "stuck") {
+    weaknesses.push("Momentum: the latest candidate state still looked stuck, so the interviewer had to constrain the next step heavily.");
+  }
 
   if (hintRequestedCount >= 2) {
     weaknesses.push("The candidate needed repeated hints, which may indicate difficulty sustaining momentum independently.");
@@ -296,13 +517,18 @@ function collectWeaknesses(dimensions: DimensionScore[], currentStage: string, h
     weaknesses.push(`The session ended before fully closing out the interview flow; it currently sits at ${describeCodingStageSafe(currentStage)}.`);
   }
 
-  return weaknesses.slice(0, 3);
+  return weaknesses.slice(0, 4);
 }
 
-function collectMissedSignals(stageJourney: string[], latestUserText: string, passedRuns: number) {
+function collectMissedSignals(
+  stageJourney: string[],
+  latestSignal: CandidateSignalSummary | null,
+  latestUserText: string,
+  passedRuns: number,
+) {
   const missed: string[] = [];
 
-  if (!stageJourney.includes("TESTING_AND_COMPLEXITY") && !stageJourney.includes("Wrap Up")) {
+  if (!stageJourney.includes("Testing And Complexity") && !stageJourney.includes("Wrap Up")) {
     missed.push("The session did not cleanly reach a full testing and complexity discussion.");
   }
 
@@ -310,33 +536,74 @@ function collectMissedSignals(stageJourney: string[], latestUserText: string, pa
     missed.push("The candidate did not clearly articulate final time and space complexity.");
   }
 
+  if (latestSignal?.edgeCaseAwareness === "missing") {
+    missed.push("Edge-case awareness remained weak in the final candidate state snapshot.");
+  }
+
   if (passedRuns === 0) {
     missed.push("The session did not produce a passing execution run.");
   }
 
-  return missed.slice(0, 3);
+  return missed.slice(0, 4);
 }
 
-function collectImprovementPlan(dimensions: DimensionScore[], hintServedCount: number) {
+function collectImprovementPlan(
+  dimensions: DimensionScore[],
+  latestSignal: CandidateSignalSummary | null,
+  hintServedCount: number,
+) {
   const improvements: string[] = [];
 
   if (dimensions.find((dimension) => dimension.key === "problem_understanding")?.score ?? 0 < 5) {
     improvements.push("State assumptions and constraints explicitly before locking into an algorithm.");
   }
 
-  if (dimensions.find((dimension) => dimension.key === "implementation")?.score ?? 0 < 5) {
+  if ((dimensions.find((dimension) => dimension.key === "implementation")?.score ?? 0) < 5) {
     improvements.push("Practice translating the chosen approach into code faster, then validate with an immediate run.");
   }
 
-  if (dimensions.find((dimension) => dimension.key === "testing_and_complexity")?.score ?? 0 < 5) {
+  if ((dimensions.find((dimension) => dimension.key === "testing_and_complexity")?.score ?? 0) < 5) {
     improvements.push("Always finish by naming key edge cases and the final time/space complexity.");
+  }
+
+  if (latestSignal?.behavior === "overthinking") {
+    improvements.push("When you stall, choose one concrete next step instead of exploring many branches at once.");
   }
 
   if (hintServedCount > 0) {
     improvements.push("Try to delay asking for hints until after you have walked through one concrete example yourself.");
   }
 
-  return improvements.slice(0, 3);
+  return improvements.slice(0, 4);
+}
+
+function findLatestSignalSnapshot(events: SessionEventLike[]) {
+  const latestSignalEvent = [...events]
+    .reverse()
+    .find((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED");
+  if (!latestSignalEvent) {
+    return null;
+  }
+
+  return asRecord(asRecord(latestSignalEvent.payloadJson).signals) as unknown as CandidateSignalSummary;
+}
+
+function findLatestDecisionSnapshot(events: SessionEventLike[]) {
+  const latestDecisionEvent = [...events]
+    .reverse()
+    .find((event) => event.eventType === "DECISION_RECORDED");
+  if (!latestDecisionEvent) {
+    return null;
+  }
+
+  return asRecord(asRecord(latestDecisionEvent.payloadJson).decision) as unknown as CandidateDecisionSummary;
+}
+
+function buildStageAdvanceEvidence(payload: Record<string, unknown>) {
+  const previousStage = describeCodingStageSafe(stringValue(payload.previousStage) ?? "unknown");
+  const nextStage = describeCodingStageSafe(stringValue(payload.stage) ?? "unknown");
+  const reason = stringValue(payload.reason);
+  return reason ? `${previousStage} -> ${nextStage}: ${reason}` : `${previousStage} -> ${nextStage}`;
 }
 
 function toRecommendation(score: number): Recommendation {
@@ -348,7 +615,7 @@ function toRecommendation(score: number): Recommendation {
 
 function describeCodingStageSafe(stage: string) {
   try {
-    return describeCodingStage(stage as CodingInterviewStage);
+    return isCodingInterviewStage(stage) ? describeCodingStage(stage) : stage;
   } catch {
     return stage;
   }
@@ -358,4 +625,16 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function stringValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return null;
+}
 
+function truncate(value: string, maxLength: number) {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+}

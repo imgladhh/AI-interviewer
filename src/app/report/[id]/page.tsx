@@ -1,4 +1,4 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 
@@ -12,6 +12,42 @@ type Dimension = {
   score: number;
   maxScore: number;
   evidence: string;
+  impact?: string;
+  improvement?: string[];
+};
+
+type CandidateState = {
+  understanding?: string;
+  progress?: string;
+  communication?: string;
+  codeQuality?: string;
+  algorithmChoice?: string;
+  edgeCaseAwareness?: string;
+  behavior?: string;
+  confidence?: number;
+  evidence?: string[];
+  summary?: string;
+};
+
+type LatestDecision = {
+  action?: string;
+  target?: string;
+  question?: string;
+  reason?: string;
+  confidence?: number;
+  suggestedStage?: string;
+  hintStyle?: string;
+  hintLevel?: string;
+  policyAction?: string;
+};
+
+type StageReplayGroup = {
+  stage: string;
+  label: string;
+  evidence?: string[];
+  signalSnapshots?: CandidateState[];
+  decisions?: LatestDecision[];
+  turns?: Array<{ speaker: string; text: string }>;
 };
 
 type ReportJson = {
@@ -42,6 +78,9 @@ type ReportJson = {
   overallScore?: number;
   recommendation?: string;
   overallSummary?: string;
+  candidateState?: CandidateState | null;
+  latestDecision?: LatestDecision | null;
+  stageReplay?: StageReplayGroup[];
 };
 
 type ReplayItem = {
@@ -51,6 +90,16 @@ type ReplayItem = {
   title: string;
   description: string;
   tone: "neutral" | "success" | "warning" | "info";
+};
+
+type CandidateStateTimelineItem = {
+  id: string;
+  kind: "stage" | "signal" | "decision" | "hint" | "code_run";
+  time: string;
+  sortTime: number;
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
 };
 
 export default async function SessionReportPage({ params }: ReportPageProps) {
@@ -111,6 +160,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     executionRuns: session.executionRuns,
     reportJson,
   });
+  const candidateStateTimeline = buildCandidateStateTimeline(session.events);
 
   return (
     <main style={pageStyle}>
@@ -169,6 +219,72 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
           </article>
         </section>
 
+        <section style={gridStyle}>
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Latest Candidate State</h2>
+            {reportJson.candidateState ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <MetricRow label="Understanding" value={reportJson.candidateState.understanding ?? "unknown"} />
+                <MetricRow label="Progress" value={reportJson.candidateState.progress ?? "unknown"} />
+                <MetricRow label="Communication" value={reportJson.candidateState.communication ?? "unknown"} />
+                <MetricRow label="Code Quality" value={reportJson.candidateState.codeQuality ?? "unknown"} />
+                <MetricRow label="Algorithm Choice" value={reportJson.candidateState.algorithmChoice ?? "unknown"} />
+                <MetricRow label="Edge Cases" value={reportJson.candidateState.edgeCaseAwareness ?? "unknown"} />
+                <MetricRow label="Behavior" value={reportJson.candidateState.behavior ?? "unknown"} />
+                <MetricRow
+                  label="Confidence"
+                  value={
+                    typeof reportJson.candidateState.confidence === "number"
+                      ? `${Math.round(reportJson.candidateState.confidence * 100)}%`
+                      : "unknown"
+                  }
+                />
+                {Array.isArray(reportJson.candidateState.evidence) && reportJson.candidateState.evidence.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Evidence</strong>
+                    {reportJson.candidateState.evidence.map((item) => (
+                      <div key={`candidate-evidence-${item}`} style={listItemStyle}>
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p style={mutedParagraphStyle}>No candidate-state snapshot was captured for this session.</p>
+            )}
+          </article>
+
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Latest Interviewer Decision</h2>
+            {reportJson.latestDecision ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <MetricRow label="Action" value={reportJson.latestDecision.action ?? "unknown"} />
+                <MetricRow label="Target" value={reportJson.latestDecision.target ?? "unknown"} />
+                <MetricRow label="Policy Action" value={reportJson.latestDecision.policyAction ?? "unknown"} />
+                <MetricRow
+                  label="Confidence"
+                  value={
+                    typeof reportJson.latestDecision.confidence === "number"
+                      ? `${Math.round(reportJson.latestDecision.confidence * 100)}%`
+                      : "unknown"
+                  }
+                />
+                <div style={listItemStyle}>
+                  <strong>Question</strong>
+                  <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.question ?? "No question captured."}</p>
+                </div>
+                <div style={listItemStyle}>
+                  <strong>Reason</strong>
+                  <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.reason ?? "No decision reason captured."}</p>
+                </div>
+              </div>
+            ) : (
+              <p style={mutedParagraphStyle}>No interviewer decision snapshot was captured for this session.</p>
+            )}
+          </article>
+        </section>
+
         <section style={panelStyle}>
           <h2 style={sectionTitleStyle}>Dimension Scores</h2>
           <div style={{ display: "grid", gap: 12 }}>
@@ -180,14 +296,113 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     {dimension.score}/{dimension.maxScore}
                   </span>
                 </div>
-                <p style={mutedParagraphStyle}>{dimension.evidence}</p>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div>
+                    <strong>Evidence</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{dimension.evidence}</p>
+                  </div>
+                  {dimension.impact ? (
+                    <div>
+                      <strong>Impact</strong>
+                      <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{dimension.impact}</p>
+                    </div>
+                  ) : null}
+                  {dimension.improvement && dimension.improvement.length > 0 ? (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <strong>How to improve</strong>
+                      {dimension.improvement.map((item) => (
+                        <div key={`${dimension.key}-${item}`} style={listItemStyle}>
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
         </section>
 
         <section style={panelStyle}>
-          <h2 style={sectionTitleStyle}>Session Replay</h2>
+          <h2 style={sectionTitleStyle}>Stage Replay</h2>
+          <div style={{ display: "grid", gap: 16 }}>
+            {(reportJson.stageReplay ?? []).length === 0 ? (
+              <p style={mutedParagraphStyle}>No stage-grouped replay markers were captured for this session.</p>
+            ) : (
+              (reportJson.stageReplay ?? []).map((group) => (
+                <div key={group.stage} style={replayCardStyle("info")}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                    <strong>{group.label}</strong>
+                    <span style={{ color: "var(--muted)", fontSize: 13 }}>{group.stage}</span>
+                  </div>
+                  {Array.isArray(group.evidence) && group.evidence.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <strong>Evidence trail</strong>
+                      {group.evidence.map((item, index) => (
+                        <div key={`${group.stage}-evidence-${index}`} style={listItemStyle}>
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {Array.isArray(group.decisions) && group.decisions.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <strong>Interviewer decisions</strong>
+                      {group.decisions.map((decision, index) => (
+                        <div key={`${group.stage}-decision-${index}`} style={listItemStyle}>
+                          <strong>{decision.action ?? "decision"}</strong>
+                          <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{decision.question ?? decision.reason ?? "No detail captured."}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {Array.isArray(group.turns) && group.turns.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <strong>Representative turns</strong>
+                      {group.turns.map((turn, index) => (
+                        <div key={`${group.stage}-turn-${index}`} style={listItemStyle}>
+                          <strong>{turn.speaker}</strong>
+                          <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{turn.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>Candidate-State Timeline</h2>
+          <div style={{ display: "grid", gap: 12 }}>
+            {candidateStateTimeline.length === 0 ? (
+              <p style={mutedParagraphStyle}>No candidate-state timeline markers were captured for this session.</p>
+            ) : (
+              candidateStateTimeline.map((item) => (
+                <div key={item.id} style={replayCardStyle(item.kind === "signal" || item.kind === "decision" ? "info" : item.kind === "code_run" ? "warning" : "neutral")}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={stagePillStyle}>{item.kind}</span>
+                      <strong>{item.title}</strong>
+                    </div>
+                    <span style={{ color: "var(--muted)", fontSize: 13 }}>{item.time}</span>
+                  </div>
+                  <p style={mutedParagraphStyle}>{item.summary}</p>
+                  <details>
+                    <summary style={{ cursor: "pointer", color: "var(--accent-strong)", fontWeight: 700 }}>
+                      View payload
+                    </summary>
+                    <pre style={miniPreStyle}>{JSON.stringify(item.payload, null, 2)}</pre>
+                  </details>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>Session Replay Timeline</h2>
           <div style={{ display: "grid", gap: 12 }}>
             {replayItems.length === 0 ? (
               <p style={mutedParagraphStyle}>No replay markers were captured for this session.</p>
@@ -278,7 +493,7 @@ function normalizeDimensions(
     maxScore: number;
     evidence: string | null;
   }>,
-) {
+): Dimension[] {
   if (Array.isArray(reportDimensions) && reportDimensions.length > 0) {
     return reportDimensions;
   }
@@ -310,6 +525,30 @@ function buildReplayItems(input: {
         sortTime: event.eventTime.getTime(),
         title: "Stage Transition",
         description: `${stringValue(payload.previousStage) ?? "Earlier stage"} -> ${stringValue(payload.stage) ?? "Unknown stage"}${stringValue(payload.reason) ? `: ${stringValue(payload.reason)}` : ""}`,
+        tone: "info",
+      });
+    }
+
+    if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+      const signals = asRecord(payload.signals);
+      items.push({
+        id: event.id,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Candidate State Updated",
+        description: stringValue(signals.summary) ?? "Candidate state snapshot recorded.",
+        tone: "neutral",
+      });
+    }
+
+    if (event.eventType === "DECISION_RECORDED") {
+      const decision = asRecord(payload.decision);
+      items.push({
+        id: event.id,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Interviewer Decision",
+        description: `${stringValue(decision.action) ?? "decision"} -> ${stringValue(decision.target) ?? "unknown target"}${stringValue(decision.reason) ? `: ${stringValue(decision.reason)}` : ""}`,
         tone: "info",
       });
     }
@@ -365,6 +604,87 @@ function buildReplayItems(input: {
   }
 
   return items.sort((left, right) => right.sortTime - left.sortTime);
+}
+
+function buildCandidateStateTimeline(
+  events: Array<{ id: string; eventType: string; eventTime: Date; payloadJson: unknown }>,
+): CandidateStateTimelineItem[] {
+  return events
+    .filter((event) =>
+      [
+        "STAGE_ADVANCED",
+        "SIGNAL_SNAPSHOT_RECORDED",
+        "DECISION_RECORDED",
+        "HINT_SERVED",
+        "CODE_RUN_COMPLETED",
+      ].includes(event.eventType),
+    )
+    .map((event) => {
+      const payload = asRecord(event.payloadJson);
+
+      if (event.eventType === "STAGE_ADVANCED") {
+        return {
+          id: event.id,
+          kind: "stage" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Stage advanced",
+          summary: `${stringValue(payload.previousStage) ?? "Earlier stage"} -> ${stringValue(payload.stage) ?? "Unknown stage"}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+        const signals = asRecord(payload.signals);
+        return {
+          id: event.id,
+          kind: "signal" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Candidate state snapshot",
+          summary:
+            stringValue(signals.summary) ??
+            `understanding=${stringValue(signals.understanding) ?? "unknown"}, progress=${stringValue(signals.progress) ?? "unknown"}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "DECISION_RECORDED") {
+        const decision = asRecord(payload.decision);
+        return {
+          id: event.id,
+          kind: "decision" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Interviewer decision",
+          summary: `${stringValue(decision.action) ?? "decision"} -> ${stringValue(decision.target) ?? "unknown target"}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "HINT_SERVED") {
+        return {
+          id: event.id,
+          kind: "hint" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Hint served",
+          summary: `${stringValue(payload.hintLevel) ?? "LIGHT"} ${stringValue(payload.hintStyle) ?? "hint"}`,
+          payload,
+        };
+      }
+
+      return {
+        id: event.id,
+        kind: "code_run" as const,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Code run completed",
+        summary: stringValue(payload.status) ?? "unknown",
+        payload,
+      };
+    })
+    .sort((left, right) => right.sortTime - left.sortTime);
 }
 
 function prettifyKey(value: string) {
@@ -529,4 +849,14 @@ const stagePillStyle = {
   padding: "8px 12px",
   background: "var(--surface-alt)",
   fontWeight: 700,
+} as const;
+
+const miniPreStyle = {
+  margin: "12px 0 0",
+  padding: 12,
+  borderRadius: 12,
+  background: "#1d2230",
+  color: "#ebf0ff",
+  overflowX: "auto" as const,
+  fontSize: 12,
 } as const;

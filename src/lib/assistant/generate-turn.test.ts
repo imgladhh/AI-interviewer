@@ -155,6 +155,65 @@ describe("generateAssistantTurn", () => {
     expect(result.reply).toMatch(/exact information|state|one step|condition/i);
   });
 
+  it("enforces the decision question when a provider returns a generic reply", async () => {
+    process.env.GEMINI_API_KEY = "fake-key";
+    process.env.LLM_PROVIDER = "gemini";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: "Keep going. Explain your approach step by step." }],
+            },
+          },
+        ],
+      }),
+    } as Response) as typeof fetch;
+
+    const result = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Top K Frequent Elements",
+      questionPrompt: "Return the k most frequent elements.",
+      currentStage: "IMPLEMENTATION",
+      recentTranscripts: [{ speaker: "USER", text: "My code passes now but I have not talked about edge cases yet." }],
+      latestExecutionRun: { status: "PASSED" },
+    });
+
+    expect(result.source).toBe("gemini");
+    expect(result.reply).toMatch(/edge cases|boundary conditions|test next/i);
+  });
+
+  it("falls through from gemini to openai before using local fallback", async () => {
+    process.env.GEMINI_API_KEY = "fake-gemini-key";
+    process.env.OPENAI_API_KEY = "fake-openai-key";
+    process.env.LLM_PROVIDER = "gemini";
+
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () => JSON.stringify({ error: { message: "rate limit" } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ output_text: "What edge cases would you test next before you call this solution done?" }),
+      } as Response) as typeof fetch;
+
+    const result = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Top K Frequent Elements",
+      questionPrompt: "Return the k most frequent elements.",
+      currentStage: "IMPLEMENTATION",
+      recentTranscripts: [{ speaker: "USER", text: "The code seems to work now." }],
+      latestExecutionRun: { status: "PASSED" },
+    });
+
+    expect(result.source).toBe("openai");
+    expect(result.reply).toMatch(/edge cases|test next/i);
+  });
+
   it("falls back during streaming when the configured provider yields nothing", async () => {
     process.env.GEMINI_API_KEY = "fake-key";
     process.env.LLM_PROVIDER = "gemini";

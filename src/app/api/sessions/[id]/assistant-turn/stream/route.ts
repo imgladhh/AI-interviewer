@@ -87,6 +87,8 @@ export async function POST(request: Request, { params }: RouteContext) {
               hintStyle?: string;
               hintLevel?: string;
               escalationReason?: string;
+              signals?: unknown;
+              decision?: unknown;
               providerFailure?: {
                 provider: "gemini" | "openai";
                 message: string;
@@ -139,6 +141,36 @@ export async function POST(request: Request, { params }: RouteContext) {
           payloadJson?: unknown;
         }> = [];
 
+        if (finalTurn.signals) {
+          const signalEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.SIGNAL_SNAPSHOT_RECORDED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                signals: finalTurn.signals,
+              },
+            },
+          });
+          events.push(signalEvent);
+        }
+
+        if (finalTurn.decision) {
+          const decisionEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.DECISION_RECORDED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                decision: finalTurn.decision,
+              },
+            },
+          });
+          events.push(decisionEvent);
+        }
+
         const aiSpokeEvent = await prisma.sessionEvent.create({
           data: {
             sessionId: id,
@@ -151,6 +183,8 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintServed: finalTurn.hintServed ?? false,
                 hintLevel: finalTurn.hintLevel ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
+                signals: finalTurn.signals ?? null,
+                decision: finalTurn.decision ?? null,
                 providerFailure: finalTurn.providerFailure ?? null,
               },
             },
@@ -222,6 +256,8 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintServed: finalTurn.hintServed ?? false,
                 hintLevel: finalTurn.hintLevel ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
+                signals: finalTurn.signals ?? null,
+                decision: finalTurn.decision ?? null,
                 providerFailure: finalTurn.providerFailure ?? null,
               },
             })}\n\n`,

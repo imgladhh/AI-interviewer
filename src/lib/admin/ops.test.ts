@@ -41,6 +41,7 @@ describe("buildUnifiedOpsFeed", () => {
         interviewerProfileId: "profile-1",
       },
     ],
+    sessionSummary: null,
   };
 
   it("returns all events sorted by newest first", () => {
@@ -101,6 +102,46 @@ describe("buildUnifiedOpsFeed", () => {
 
     expect(description).toMatch(/dedicated stt/i);
     expect(description).toMatch(/openai-stt/i);
+  });
+
+  it("describes signal snapshots in a readable way", () => {
+    const description = buildSessionEventDescription("SIGNAL_SNAPSHOT_RECORDED", {
+      signals: {
+        understanding: "clear",
+        progress: "stuck",
+        edgeCaseAwareness: "missing",
+      },
+    });
+
+    expect(description).toMatch(/understanding=clear/i);
+    expect(description).toMatch(/progress=stuck/i);
+    expect(description).toMatch(/edge cases=missing/i);
+  });
+
+  it("describes interviewer decisions in a readable way", () => {
+    const description = buildSessionEventDescription("DECISION_RECORDED", {
+      decision: {
+        action: "ask_followup",
+        target: "edge_case",
+      },
+    });
+
+    expect(description).toMatch(/ask_followup/i);
+    expect(description).toMatch(/edge_case/i);
+  });
+
+  it("mentions provider fallback details for AI replies", () => {
+    const description = buildSessionEventDescription("AI_SPOKE", {
+      source: "fallback",
+      providerFailure: {
+        provider: "gemini",
+        message: "rate limit",
+      },
+    });
+
+    expect(description).toMatch(/fallback/i);
+    expect(description).toMatch(/gemini/i);
+    expect(description).toMatch(/rate limit/i);
   });
 
   it("describes generated reports in a readable way", () => {

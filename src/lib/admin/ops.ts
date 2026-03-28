@@ -34,6 +34,29 @@ export type AdminProfileDetail = {
   job: PersonaJobSnapshot | null;
   personaEvents: UnifiedOpsEvent[];
   sessionEvents: UnifiedOpsEvent[];
+  sessionSummary: SessionSummary | null;
+};
+
+export type SessionSummary = {
+  sessionId: string;
+  currentStage: string;
+  currentStageLabel: string;
+  stageJourney: string[];
+  latestSignals: Record<string, unknown> | null;
+  latestDecision: Record<string, unknown> | null;
+  latestCodeRunStatus: string | null;
+  hintCount: number;
+  failedRunCount: number;
+  timeline: SessionTimelineItem[];
+};
+
+export type SessionTimelineItem = {
+  id: string;
+  kind: "stage" | "signal" | "decision" | "hint" | "code_run";
+  at: string;
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
 };
 
 export async function listAdminProfiles(limit = 20): Promise<AdminProfileListItem[]> {
@@ -107,6 +130,7 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
       interviewerProfileId: profile.id,
     })),
   );
+  const latestSession = profile.sessions[0] ?? null;
 
   return {
     profile: {
@@ -124,6 +148,7 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
     job,
     personaEvents,
     sessionEvents,
+    sessionSummary: latestSession ? summarizeSession(latestSession.id, latestSession.events) : null,
   };
 }
 
@@ -179,6 +204,118 @@ function buildPersonaEventDescription(eventType: string, payloadJson: unknown) {
   }
 
   return "Persona pipeline event recorded.";
+}
+
+function summarizeSession(
+  sessionId: string,
+  events: Array<{ eventType: string; eventTime: Date; payloadJson: unknown }>,
+): SessionSummary {
+  const ordered = [...events].sort((left, right) => left.eventTime.getTime() - right.eventTime.getTime());
+  const stageEvents = ordered.filter((event) => event.eventType === "STAGE_ADVANCED");
+  const stageJourneyRaw = stageEvents
+    .map((event) => stringValue(asRecord(event.payloadJson).stage))
+    .filter((value): value is string => Boolean(value));
+  const currentStage = stageJourneyRaw.at(-1) ?? "PROBLEM_UNDERSTANDING";
+  const latestSignalEvent = [...ordered].reverse().find((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED");
+  const latestDecisionEvent = [...ordered].reverse().find((event) => event.eventType === "DECISION_RECORDED");
+  const latestCodeRunEvent = [...ordered].reverse().find((event) => event.eventType === "CODE_RUN_COMPLETED");
+  const hintCount = ordered.filter((event) => event.eventType === "HINT_SERVED").length;
+  const failedRunCount = ordered.filter((event) => {
+    if (event.eventType !== "CODE_RUN_COMPLETED") {
+      return false;
+    }
+
+    const status = stringValue(asRecord(event.payloadJson).status);
+    return status === "FAILED" || status === "ERROR" || status === "TIMEOUT";
+  }).length;
+
+  return {
+    sessionId,
+    currentStage,
+    currentStageLabel: describeStage(currentStage) ?? currentStage,
+    stageJourney: [...new Set(stageJourneyRaw.map((stage) => describeStage(stage) ?? stage))],
+    latestSignals: latestSignalEvent ? asRecord(asRecord(latestSignalEvent.payloadJson).signals) : null,
+    latestDecision: latestDecisionEvent ? asRecord(asRecord(latestDecisionEvent.payloadJson).decision) : null,
+    latestCodeRunStatus: latestCodeRunEvent ? stringValue(asRecord(latestCodeRunEvent.payloadJson).status) : null,
+    hintCount,
+    failedRunCount,
+    timeline: buildSessionTimeline(ordered),
+  };
+}
+
+function buildSessionTimeline(
+  events: Array<{ eventType: string; eventTime: Date; payloadJson: unknown }>,
+): SessionTimelineItem[] {
+  return events
+    .filter((event) =>
+      [
+        "STAGE_ADVANCED",
+        "SIGNAL_SNAPSHOT_RECORDED",
+        "DECISION_RECORDED",
+        "HINT_SERVED",
+        "CODE_RUN_COMPLETED",
+      ].includes(event.eventType),
+    )
+    .map((event) => {
+      const payload = asRecord(event.payloadJson);
+
+      if (event.eventType === "STAGE_ADVANCED") {
+        const previousStage = describeStage(payload.previousStage);
+        const stage = describeStage(payload.stage) ?? "Unknown stage";
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "stage" as const,
+          at: event.eventTime.toISOString(),
+          title: "Stage advanced",
+          summary: previousStage ? `${previousStage} -> ${stage}` : stage,
+          payload,
+        };
+      }
+
+      if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+        const signals = asRecord(payload.signals);
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "signal" as const,
+          at: event.eventTime.toISOString(),
+          title: "Candidate state snapshot",
+          summary: `understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, quality=${stringOrFallback(signals.codeQuality, "unknown")}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "DECISION_RECORDED") {
+        const decision = asRecord(payload.decision);
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "decision" as const,
+          at: event.eventTime.toISOString(),
+          title: "Interviewer decision",
+          summary: `${stringOrFallback(decision.action, "unknown action")} -> ${stringOrFallback(decision.target, "unknown target")}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "HINT_SERVED") {
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "hint" as const,
+          at: event.eventTime.toISOString(),
+          title: "Hint served",
+          summary: `${stringOrFallback(payload.hintLevel, "LIGHT")} ${stringOrFallback(payload.hintStyle, "hint")}`,
+          payload,
+        };
+      }
+
+      return {
+        id: `${event.eventType}-${event.eventTime.toISOString()}`,
+        kind: "code_run" as const,
+        at: event.eventTime.toISOString(),
+        title: "Code run completed",
+        summary: stringOrFallback(payload.status, "unknown"),
+        payload,
+      };
+    });
 }
 
 export function buildSessionEventDescription(eventType: string, payloadJson: unknown) {
@@ -240,6 +377,16 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
     return `Candidate turn auto-submitted after silence (${stringOrFallback(payload.source, "unknown source")}).`;
   }
 
+  if (eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+    const signals = asRecord(payload.signals);
+    return `Candidate state updated: understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, edge cases=${stringOrFallback(signals.edgeCaseAwareness, "unknown")}.`;
+  }
+
+  if (eventType === "DECISION_RECORDED") {
+    const decision = asRecord(payload.decision);
+    return `Interviewer decision: ${stringOrFallback(decision.action, "unknown action")} toward ${stringOrFallback(decision.target, "unknown target")}.`;
+  }
+
   if (eventType === "LLM_USAGE_RECORDED") {
     return `LLM call recorded for ${stringOrFallback(payload.model, "unknown model")} at about $${stringOrFallback(payload.estimatedCostUsd, "0")}.`;
   }
@@ -249,6 +396,11 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
   }
 
   if (eventType === "AI_SPOKE") {
+    const providerFailure = asRecord(payload.providerFailure);
+    if (providerFailure.provider || providerFailure.message) {
+      return `AI interviewer replied using ${stringOrFallback(payload.source, "unknown provider")} after ${stringOrFallback(providerFailure.provider, "a provider")} fallback: ${stringOrFallback(providerFailure.message, "unknown reason")}.`;
+    }
+
     return `AI interviewer delivered a reply using ${stringOrFallback(payload.source, "unknown provider")}.`;
   }
 
@@ -306,6 +458,18 @@ function stringOrFallback(value: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+function stringValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return String(value);
+  }
+
+  return null;
 }
 
 function describeStage(value: unknown) {
