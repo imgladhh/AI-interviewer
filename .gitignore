@@ -8,3 +8,4 @@ coverage
 .postgres-data
 .redis-data
 test-results
+prisma/dev.db
