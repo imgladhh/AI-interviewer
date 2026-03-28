@@ -3,6 +3,7 @@ import { fail } from "@/lib/http";
 import { streamAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
+import { resolveLowCostMode } from "@/lib/usage/cost";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -39,6 +40,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     transcripts: session.transcripts,
     latestExecutionRun: session.executionRuns[0] ?? null,
   });
+  const lowCostMode = resolveLowCostMode(session.events);
 
   const input = {
     mode: session.mode,
@@ -46,12 +48,18 @@ export async function POST(request: Request, { params }: RouteContext) {
     questionPrompt: session.question?.prompt ?? "",
     targetLevel: session.targetLevel,
     selectedLanguage: session.selectedLanguage,
+    lowCostMode,
     personaSummary: session.interviewerProfile?.personaSummary ?? null,
     appliedPromptContext: session.interviewerContext?.appliedPromptContext ?? null,
     currentStage,
     recentTranscripts: session.transcripts.map((segment) => ({
       speaker: segment.speaker,
       text: segment.text,
+    })),
+    recentEvents: session.events.map((event) => ({
+      eventType: event.eventType,
+      eventTime: event.eventTime,
+      payloadJson: event.payloadJson,
     })),
     latestExecutionRun: session.executionRuns[0]
       ? {
@@ -72,6 +80,18 @@ export async function POST(request: Request, { params }: RouteContext) {
               reply: string;
               suggestedStage?: string;
               source: "fallback" | "openai" | "gemini";
+              model?: string;
+              policyAction?: string;
+              policyReason?: string;
+              hintServed?: boolean;
+              hintStyle?: string;
+              hintLevel?: string;
+              escalationReason?: string;
+              usage?: {
+                inputTokens: number;
+                outputTokens: number;
+                estimatedCostUsd: number | null;
+              };
             }
           | undefined;
 
@@ -119,13 +139,36 @@ export async function POST(request: Request, { params }: RouteContext) {
           data: {
             sessionId: id,
             eventType: SESSION_EVENT_TYPES.AI_SPOKE,
-            payloadJson: {
-              transcriptSegmentId: transcript.id,
-              source: finalTurn.source,
+              payloadJson: {
+                transcriptSegmentId: transcript.id,
+                source: finalTurn.source,
+                policyAction: finalTurn.policyAction ?? null,
+                currentStage,
+                hintServed: finalTurn.hintServed ?? false,
+                hintLevel: finalTurn.hintLevel ?? null,
+                escalationReason: finalTurn.escalationReason ?? null,
+              },
             },
-          },
         });
         events.push(aiSpokeEvent);
+
+        if (finalTurn.usage) {
+          const usageEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.LLM_USAGE_RECORDED,
+              payloadJson: {
+                source: finalTurn.source,
+                model: finalTurn.model ?? null,
+                inputTokens: finalTurn.usage.inputTokens,
+                outputTokens: finalTurn.usage.outputTokens,
+                estimatedCostUsd: finalTurn.usage.estimatedCostUsd,
+                lowCostMode,
+              },
+            },
+          });
+          events.push(usageEvent);
+        }
 
         if (finalTurn.suggestedStage && finalTurn.suggestedStage !== currentStage) {
           const stageEvent = await prisma.sessionEvent.create({
@@ -136,10 +179,29 @@ export async function POST(request: Request, { params }: RouteContext) {
                 previousStage: currentStage,
                 stage: finalTurn.suggestedStage,
                 source: finalTurn.source,
+                reason: finalTurn.policyReason ?? null,
               },
             },
           });
           events.push(stageEvent);
+        }
+
+        if (finalTurn.hintServed) {
+          const hintServedEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.HINT_SERVED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                hintStyle: finalTurn.hintStyle ?? null,
+                hintLevel: finalTurn.hintLevel ?? null,
+                escalationReason: finalTurn.escalationReason ?? null,
+                reason: finalTurn.policyReason ?? null,
+              },
+            },
+          });
+          events.push(hintServedEvent);
         }
 
         controller.enqueue(
@@ -151,6 +213,10 @@ export async function POST(request: Request, { params }: RouteContext) {
                 source: finalTurn.source,
                 currentStage,
                 suggestedStage: finalTurn.suggestedStage ?? null,
+                policyAction: finalTurn.policyAction ?? null,
+                hintServed: finalTurn.hintServed ?? false,
+                hintLevel: finalTurn.hintLevel ?? null,
+                escalationReason: finalTurn.escalationReason ?? null,
               },
             })}\n\n`,
           ),

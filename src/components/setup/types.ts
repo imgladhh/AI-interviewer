@@ -60,5 +60,6 @@ export type SetupFormState = {
   companyStyle: "GENERIC" | "AMAZON" | "META" | "GOOGLE" | "STRIPE";
   difficulty: "EASY" | "MEDIUM" | "HARD";
   voiceEnabled: boolean;
+  lowCostMode: boolean;
   interviewerProfileUrl: string;
 };

@@ -1,11 +1,19 @@
 import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/interviewer-skills";
 import {
+  formatCodingInterviewPolicy,
+  resolveCodingInterviewPolicy,
+  type CodingInterviewPolicyAction,
+  type CodingInterviewHintLevel,
+  type CodingInterviewHintStyle,
+} from "@/lib/assistant/policy";
+import {
   describeCodingStage,
   inferSuggestedCodingStage,
   isCodingInterviewStage,
   stageGuidance,
   type CodingInterviewStage,
 } from "@/lib/assistant/stages";
+import { estimateOpenAiTextCost, estimateTokens } from "@/lib/usage/cost";
 
 type TranscriptLike = {
   speaker: "USER" | "AI" | "SYSTEM";
@@ -24,10 +32,16 @@ type GenerateAssistantTurnInput = {
   questionPrompt: string;
   targetLevel?: string | null;
   selectedLanguage?: string | null;
+  lowCostMode?: boolean;
   personaSummary?: string | null;
   appliedPromptContext?: string | null;
   currentStage?: string | null;
   recentTranscripts: TranscriptLike[];
+  recentEvents?: Array<{
+    eventType: string;
+    eventTime?: Date | string;
+    payloadJson?: unknown;
+  }>;
   latestExecutionRun?: ExecutionRunLike | null;
 };
 
@@ -35,6 +49,18 @@ type GenerateAssistantTurnResult = {
   reply: string;
   suggestedStage?: string;
   source: "fallback" | "openai" | "gemini";
+  model?: string;
+  policyAction?: CodingInterviewPolicyAction;
+  policyReason?: string;
+  hintServed?: boolean;
+  hintStyle?: CodingInterviewHintStyle;
+  hintLevel?: CodingInterviewHintLevel;
+  escalationReason?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCostUsd: number | null;
+  };
 };
 
 export type StreamingAssistantTurnChunk = {
@@ -79,17 +105,15 @@ export async function* streamAssistantTurn(
   const provider = resolveProvider();
 
   if (provider === "gemini" && process.env.GEMINI_API_KEY) {
-    const stream = streamWithGemini(input, options);
-    if (stream) {
-      yield* stream;
+    const geminiHandled = yield* yieldProviderStream(streamWithGemini(input, options), input, "gemini");
+    if (geminiHandled) {
       return;
     }
   }
 
   if ((provider === "openai" || process.env.OPENAI_API_KEY) && process.env.OPENAI_API_KEY) {
-    const stream = streamWithOpenAI(input, options);
-    if (stream) {
-      yield* stream;
+    const openAiHandled = yield* yieldProviderStream(streamWithOpenAI(input, options), input, "openai");
+    if (openAiHandled) {
       return;
     }
   }
@@ -102,6 +126,51 @@ export async function* streamAssistantTurn(
     yield { textDelta: chunk };
   }
   yield { final: fallback };
+}
+
+async function* yieldProviderStream(
+  stream: AsyncGenerator<StreamingAssistantTurnChunk>,
+  input: GenerateAssistantTurnInput,
+  source: "openai" | "gemini",
+): AsyncGenerator<StreamingAssistantTurnChunk, boolean> {
+  let accumulated = "";
+  let yieldedAny = false;
+  let yieldedFinal = false;
+
+  try {
+    for await (const chunk of stream) {
+      yieldedAny = true;
+
+      if (chunk.textDelta) {
+        accumulated += chunk.textDelta;
+      }
+
+      if (chunk.final) {
+        yieldedFinal = true;
+      }
+
+      yield chunk;
+    }
+  } catch {
+    return false;
+  }
+
+  if (!yieldedAny) {
+    return false;
+  }
+
+  if (!yieldedFinal && accumulated.trim()) {
+    const final = finalizeReply(accumulated);
+    yield {
+      final: {
+        reply: final,
+        suggestedStage: inferStage(final, input),
+        source,
+      },
+    };
+  }
+
+  return true;
 }
 
 function resolveProvider() {
@@ -126,6 +195,7 @@ async function generateWithOpenAI(
 ): Promise<GenerateAssistantTurnResult | null> {
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
   const prompt = buildInterviewerPrompt(input);
+  const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -135,6 +205,7 @@ async function generateWithOpenAI(
     },
     body: JSON.stringify({
       model,
+      max_output_tokens: input.lowCostMode ? 180 : 320,
       input: [
         {
           role: "system",
@@ -165,6 +236,12 @@ async function generateWithOpenAI(
     reply: finalizeReply(reply),
     suggestedStage: inferStage(reply, input),
     source: "openai",
+    model,
+    usage: {
+      inputTokens,
+      outputTokens: estimateTokens(reply),
+      estimatedCostUsd: estimateOpenAiTextCost(model, inputTokens, estimateTokens(reply)),
+    },
   };
 }
 
@@ -174,6 +251,7 @@ async function* streamWithOpenAI(
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
   const prompt = buildInterviewerPrompt(input);
+  const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -183,6 +261,7 @@ async function* streamWithOpenAI(
     body: JSON.stringify({
       model,
       stream: true,
+      max_output_tokens: input.lowCostMode ? 180 : 320,
       input: [
         {
           role: "system",
@@ -243,6 +322,12 @@ async function* streamWithOpenAI(
       reply: final,
       suggestedStage: inferStage(final, input),
       source: "openai",
+      model,
+      usage: {
+        inputTokens,
+        outputTokens: estimateTokens(final),
+        estimatedCostUsd: estimateOpenAiTextCost(model, inputTokens, estimateTokens(final)),
+      },
     },
   };
 }
@@ -271,7 +356,7 @@ async function generateWithGemini(
         ],
         generationConfig: {
           temperature: 0.5,
-          maxOutputTokens: 320,
+          maxOutputTokens: input.lowCostMode ? 180 : 320,
         },
       }),
     },
@@ -300,6 +385,7 @@ async function generateWithGemini(
     reply: finalizeReply(reply),
     suggestedStage: inferStage(reply, input),
     source: "gemini",
+    model,
   };
 }
 
@@ -328,7 +414,7 @@ async function* streamWithGemini(
         ],
         generationConfig: {
           temperature: 0.5,
-          maxOutputTokens: 320,
+          maxOutputTokens: input.lowCostMode ? 180 : 320,
         },
       }),
       signal: options?.signal,
@@ -384,6 +470,7 @@ async function* streamWithGemini(
       reply: final,
       suggestedStage: inferStage(final, input),
       source: "gemini",
+      model,
     },
   };
 }
@@ -405,9 +492,15 @@ function buildSystemPrompt() {
 
 function buildInterviewerPrompt(input: GenerateAssistantTurnInput) {
   const stage = isCodingInterviewStage(input.currentStage) ? input.currentStage : "PROBLEM_UNDERSTANDING";
+  const policy = resolveCodingInterviewPolicy({
+    currentStage: stage,
+    recentTranscripts: input.recentTranscripts,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
   const recentTurns = input.recentTranscripts
-    .slice(-6)
-    .map((item) => `${item.speaker}: ${item.text}`)
+    .slice(input.lowCostMode ? -2 : -4)
+    .map((item) => `${item.speaker}: ${truncate(item.text, input.lowCostMode ? 140 : 220)}`)
     .join("\n");
 
   return [
@@ -418,13 +511,15 @@ function buildInterviewerPrompt(input: GenerateAssistantTurnInput) {
     `Language: ${input.selectedLanguage ?? "unspecified"}`,
     `Current interview stage: ${describeCodingStage(stage)} (${stage})`,
     `Stage guidance: ${stageGuidance(stage)}`,
+    `Interview policy:\n${formatCodingInterviewPolicy(policy)}`,
+    `Prompt strategy: ${policy.promptStrategy}. OPEN_ENDED means broader probing; GUIDED means narrower coaching; CONSTRAINED means ask the candidate to focus on one specific next step.`,
     `Persona summary: ${input.personaSummary ?? "generic interviewer"}`,
     `Applied prompt context: ${input.appliedPromptContext ?? "none"}`,
     input.latestExecutionRun
       ? `Latest code run: ${input.latestExecutionRun.status}. stdout=${truncate(input.latestExecutionRun.stdout ?? "", 180)} stderr=${truncate(input.latestExecutionRun.stderr ?? "", 180)}`
       : "Latest code run: none",
-    `Latest AI turn: ${findLatestTurn(input.recentTranscripts, "AI") ?? "none"}`,
-    `Latest user turn: ${findLatestTurn(input.recentTranscripts, "USER") ?? "none"}`,
+    `Latest AI turn: ${truncate(findLatestTurn(input.recentTranscripts, "AI") ?? "none", input.lowCostMode ? 140 : 220)}`,
+    `Latest user turn: ${truncate(findLatestTurn(input.recentTranscripts, "USER") ?? "none", input.lowCostMode ? 140 : 220)}`,
     `Recent conversation:\n${recentTurns || "No turns yet."}`,
     "Write the interviewer's next single reply.",
     "Advance the interview deliberately. Stay in the current stage unless there is a clear reason to move forward.",
@@ -439,12 +534,66 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
   const currentStage: CodingInterviewStage = isCodingInterviewStage(input.currentStage)
     ? input.currentStage
     : "PROBLEM_UNDERSTANDING";
+  const policy = resolveCodingInterviewPolicy({
+    currentStage,
+    recentTranscripts: input.recentTranscripts,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: latestRun,
+  });
 
   if (!latestUserTurn && !latestAiTurn) {
     return {
       reply: `Let's get started with ${input.questionTitle}. Before you code, could you restate the problem in your own words and walk me through your initial approach?`,
       suggestedStage: "PROBLEM_UNDERSTANDING",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
+    };
+  }
+
+  if (policy.promptStrategy === "CONSTRAINED") {
+    return {
+      reply: withVariation(
+        "Let's narrow this down to one step. Tell me the exact next line, branch, or test case you would inspect first, and why that is the highest-signal place to look.",
+        latestAiTurn?.text,
+        "Let's make this concrete. Pick one specific thing to inspect next, like a branch, pointer update, or edge case, and explain why you would start there.",
+      ),
+      suggestedStage: policy.nextStage ?? currentStage,
+      source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
+    };
+  }
+
+  if (policy.promptStrategy === "GUIDED" && currentStage === "APPROACH_DISCUSSION") {
+    return {
+      reply: withVariation(
+        "Let's make the approach more concrete. What exact information are you storing, how do you update it on each step, and when do you know you have the answer?",
+        latestAiTurn?.text,
+        "Let's tighten the approach. Name the state you keep, how it changes each step, and the condition that tells you you're done.",
+      ),
+      suggestedStage: currentStage,
+      source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
+    };
+  }
+
+  if (policy.shouldServeHint) {
+    const hintedReply = buildFallbackHintReply(policy.hintStyle, policy.hintLevel, latestRun, latestAiTurn?.text);
+    return {
+      reply: hintedReply,
+      suggestedStage: policy.nextStage ?? currentStage,
+      source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      hintServed: true,
+      hintStyle: policy.hintStyle,
+      hintLevel: policy.hintLevel,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -457,6 +606,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "DEBUGGING",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -469,6 +621,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "COMPLEXITY_DISCUSSION",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -481,6 +636,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "TESTING_AND_COMPLEXITY",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -497,6 +655,8 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
         ),
         suggestedStage: "APPROACH_DISCUSSION",
         source: "fallback",
+        policyAction: policy.recommendedAction,
+        policyReason: policy.reason,
       };
     }
 
@@ -508,6 +668,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "PROBLEM_UNDERSTANDING",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -520,6 +683,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "HINTING",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -532,6 +698,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "APPROACH_DISCUSSION",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -553,6 +722,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: currentStage === "IMPLEMENTATION" ? "IMPLEMENTATION" : "APPROACH_DISCUSSION",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -565,6 +737,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "CORRECTNESS_DISCUSSION",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
+      escalationReason: policy.escalationReason,
     };
   }
 
@@ -577,6 +752,8 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "IMPLEMENTATION",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
     };
   }
 
@@ -589,6 +766,8 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "TESTING_AND_COMPLEXITY",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
     };
   }
 
@@ -601,6 +780,8 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
       ),
       suggestedStage: "CORRECTNESS_DISCUSSION",
       source: "fallback",
+      policyAction: policy.recommendedAction,
+      policyReason: policy.reason,
     };
   }
 
@@ -616,6 +797,9 @@ function generateFallbackTurn(input: GenerateAssistantTurnInput): GenerateAssist
     ),
     suggestedStage: currentStage === "WRAP_UP" ? "WRAP_UP" : "APPROACH_DISCUSSION",
     source: "fallback",
+    policyAction: policy.recommendedAction,
+    policyReason: policy.reason,
+    escalationReason: policy.escalationReason,
   };
 }
 
@@ -634,6 +818,57 @@ function truncate(value: string, maxLength: number) {
   }
 
   return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function buildFallbackHintReply(
+  hintStyle: CodingInterviewHintStyle | undefined,
+  hintLevel: CodingInterviewHintLevel | undefined,
+  latestRun: ExecutionRunLike | null | undefined,
+  previousAiTurn?: string,
+) {
+  const intensityPrefix =
+    hintLevel === "STRONG"
+      ? "Stronger hint: "
+      : hintLevel === "MEDIUM"
+        ? "More direct hint: "
+        : "Small hint: ";
+
+  switch (hintStyle) {
+    case "CLARIFYING_NUDGE":
+      return withVariation(
+        `${intensityPrefix}before choosing an algorithm, pin down the constraints and one representative example. That usually makes the right data structure much clearer.`,
+        previousAiTurn,
+        `${intensityPrefix}clarify the input constraints and walk one example first. That should make the solution space much narrower.`,
+      );
+    case "APPROACH_NUDGE":
+      return withVariation(
+        `${intensityPrefix}think about what information you want to retrieve quickly as you scan the input. Which data structure would make that lookup cheap?`,
+        previousAiTurn,
+        `${intensityPrefix}ask yourself what state you need to remember across the scan. A structure with fast lookup may simplify the approach.`,
+      );
+    case "IMPLEMENTATION_NUDGE":
+      return withVariation(
+        `${intensityPrefix}keep the core loop simple and name the state you need to preserve on each iteration. Focus on the one branch most likely to go wrong.`,
+        previousAiTurn,
+        `${intensityPrefix}identify the invariant for your main loop and code around that, rather than handling every case separately.`,
+      );
+    case "DEBUGGING_NUDGE":
+      return withVariation(
+        latestRun?.stderr
+          ? `${intensityPrefix}start from the latest failure signal, especially this stderr clue: ${truncate(latestRun.stderr ?? "", 120)}. Which variable or branch does that point to first?`
+          : `${intensityPrefix}compare the failing path against a tiny hand-worked example and check the first place where state diverges from your expectation.`,
+        previousAiTurn,
+        `${intensityPrefix}localize the failure before rewriting anything. Which exact line or state transition becomes wrong first?`,
+      );
+    case "TESTING_NUDGE":
+      return withVariation(
+        `${intensityPrefix}cover one happy path, one boundary case, and one case that stresses your main assumption. Then state the final time and space complexity explicitly.`,
+        previousAiTurn,
+        `${intensityPrefix}choose the edge case most likely to break your assumptions, then summarize the final complexity.`,
+      );
+    default:
+      return `${intensityPrefix}narrow the problem to one concrete example and identify the single most useful piece of state to track.`;
+  }
 }
 
 function finalizeReply(reply: string) {

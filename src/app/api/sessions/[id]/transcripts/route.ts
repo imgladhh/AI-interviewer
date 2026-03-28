@@ -79,9 +79,31 @@ export async function POST(request: Request, { params }: RouteContext) {
         speaker: parsed.data.speaker,
         transcriptSegmentId: segment.id,
         isFinal: parsed.data.isFinal,
+        transcriptSource: parsed.data.transcriptSource ?? null,
+        transcriptProvider: parsed.data.transcriptProvider ?? null,
       },
     },
   });
+
+  if (
+    parsed.data.speaker === "USER" &&
+    parsed.data.transcriptSource === "openai-stt" &&
+    parsed.data.sourceText &&
+    parsed.data.sourceText.trim() !== parsed.data.text.trim()
+  ) {
+    await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.CANDIDATE_TRANSCRIPT_REFINED,
+        payloadJson: {
+          transcriptSegmentId: segment.id,
+          transcriptProvider: parsed.data.transcriptProvider ?? "openai-stt",
+          originalText: parsed.data.sourceText,
+          refinedText: parsed.data.text,
+        },
+      },
+    });
+  }
 
   return ok({ transcript: segment }, { status: 201 });
 }

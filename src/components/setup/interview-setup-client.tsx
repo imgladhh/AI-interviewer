@@ -119,6 +119,7 @@ const initialForm: SetupFormState = {
   companyStyle: "GENERIC",
   difficulty: "MEDIUM",
   voiceEnabled: true,
+  lowCostMode: true,
   interviewerProfileUrl: "",
 };
 
@@ -303,6 +304,7 @@ export function InterviewSetupClient() {
         companyStyle: form.companyStyle,
         difficulty: form.difficulty,
         voiceEnabled: form.voiceEnabled,
+        lowCostMode: form.lowCostMode,
         personaEnabled: personaMode === "tailored",
         interviewerProfileId,
       }),
@@ -428,6 +430,25 @@ export function InterviewSetupClient() {
                   onChange={(event) => updateField("voiceEnabled", event.target.checked)}
                 />
                 <span>{form.voiceEnabled ? "Voice enabled" : "Voice disabled"}</span>
+              </label>
+            </Field>
+
+            <Field label="Cost Mode">
+              <label
+                style={{
+                  ...panelStyle,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={form.lowCostMode}
+                  onChange={(event) => updateField("lowCostMode", event.target.checked)}
+                />
+                <span>{form.lowCostMode ? "Low-cost mode on" : "Standard mode"}</span>
               </label>
             </Field>
           </div>

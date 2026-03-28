@@ -3,6 +3,7 @@ import { fail, ok } from "@/lib/http";
 import { generateAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
+import { resolveLowCostMode } from "@/lib/usage/cost";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -39,6 +40,7 @@ export async function POST(_: Request, { params }: RouteContext) {
     transcripts: session.transcripts,
     latestExecutionRun: session.executionRuns[0] ?? null,
   });
+  const lowCostMode = resolveLowCostMode(session.events);
 
   const turn = await generateAssistantTurn({
     mode: session.mode,
@@ -46,12 +48,18 @@ export async function POST(_: Request, { params }: RouteContext) {
     questionPrompt: session.question?.prompt ?? "",
     targetLevel: session.targetLevel,
     selectedLanguage: session.selectedLanguage,
+    lowCostMode,
     personaSummary: session.interviewerProfile?.personaSummary ?? null,
     appliedPromptContext: session.interviewerContext?.appliedPromptContext ?? null,
     currentStage,
     recentTranscripts: session.transcripts.map((segment) => ({
       speaker: segment.speaker,
       text: segment.text,
+    })),
+    recentEvents: session.events.map((event) => ({
+      eventType: event.eventType,
+      eventTime: event.eventTime,
+      payloadJson: event.payloadJson,
     })),
     latestExecutionRun: session.executionRuns[0]
       ? {
@@ -81,13 +89,36 @@ export async function POST(_: Request, { params }: RouteContext) {
     data: {
       sessionId: id,
       eventType: SESSION_EVENT_TYPES.AI_SPOKE,
-      payloadJson: {
-        transcriptSegmentId: transcript.id,
-        source: turn.source,
+        payloadJson: {
+          transcriptSegmentId: transcript.id,
+          source: turn.source,
+          policyAction: turn.policyAction ?? null,
+          currentStage,
+          hintServed: turn.hintServed ?? false,
+          hintLevel: turn.hintLevel ?? null,
+          escalationReason: turn.escalationReason ?? null,
+        },
       },
-    },
   });
   events.push(aiSpokeEvent);
+
+  if (turn.usage) {
+    const usageEvent = await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.LLM_USAGE_RECORDED,
+        payloadJson: {
+          source: turn.source,
+          model: turn.model ?? null,
+          inputTokens: turn.usage.inputTokens,
+          outputTokens: turn.usage.outputTokens,
+          estimatedCostUsd: turn.usage.estimatedCostUsd,
+          lowCostMode,
+        },
+      },
+    });
+    events.push(usageEvent);
+  }
 
   if (turn.suggestedStage && turn.suggestedStage !== currentStage) {
     const stageEvent = await prisma.sessionEvent.create({
@@ -98,10 +129,29 @@ export async function POST(_: Request, { params }: RouteContext) {
           previousStage: currentStage,
           stage: turn.suggestedStage,
           source: turn.source,
+          reason: turn.policyReason ?? null,
         },
       },
     });
     events.push(stageEvent);
+  }
+
+  if (turn.hintServed) {
+    const hintServedEvent = await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.HINT_SERVED,
+        payloadJson: {
+          stage: currentStage,
+          source: turn.source,
+          hintStyle: turn.hintStyle ?? null,
+          hintLevel: turn.hintLevel ?? null,
+          escalationReason: turn.escalationReason ?? null,
+          reason: turn.policyReason ?? null,
+        },
+      },
+    });
+    events.push(hintServedEvent);
   }
 
   return ok({
@@ -111,6 +161,10 @@ export async function POST(_: Request, { params }: RouteContext) {
       source: turn.source,
       currentStage,
       suggestedStage: turn.suggestedStage ?? null,
+      policyAction: turn.policyAction ?? null,
+      hintServed: turn.hintServed ?? false,
+      hintLevel: turn.hintLevel ?? null,
+      escalationReason: turn.escalationReason ?? null,
     },
   });
 }

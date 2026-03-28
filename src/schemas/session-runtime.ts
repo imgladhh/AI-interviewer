@@ -12,6 +12,9 @@ export const createTranscriptSegmentSchema = z.object({
   endedAtMs: z.number().int().nonnegative().optional(),
   isFinal: z.boolean().default(true),
   audioUrl: z.string().trim().url().optional(),
+  transcriptSource: z.enum(["manual", "browser", "openai-stt", "assistant"]).optional(),
+  transcriptProvider: z.string().trim().min(1).max(64).optional(),
+  sourceText: z.string().trim().min(1).optional(),
 });
 
 export const createExecutionRunSchema = z.object({

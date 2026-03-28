@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
@@ -10,7 +11,15 @@ import {
 } from "@/lib/assistant/stages";
 import { getStarterCode, isRunnableLanguage, normalizeLanguage, toMonacoLanguage } from "@/lib/interview/editor";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
+import { summarizeUsageFromSessionEvents } from "@/lib/usage/cost";
 import { BrowserVoiceAdapter } from "@/lib/voice/browser-voice-adapter";
+import {
+  getVoiceDiagnostics,
+  getVoiceDiagnosticsHints,
+  runMicrophonePreflight,
+  type VoiceDiagnostics,
+} from "@/lib/voice/diagnostics";
+import { mergeTranscriptFragments, normalizeTranscriptText } from "@/lib/voice/transcript-normalization";
 import {
   getAutoSubmitDelayMs,
   getFinalChunkCommitDelayMs,
@@ -64,6 +73,44 @@ type ExecutionRun = {
   } | null;
 };
 
+type SessionReportSummary = {
+  overallScore: number;
+  overallSummary: string;
+  recommendation: string;
+  strengths: string[];
+  weaknesses: string[];
+  improvementPlan: string[];
+  dimensions: Array<{
+    key: string;
+    label: string;
+    score: number;
+    maxScore: number;
+    evidence: string;
+  }>;
+};
+
+type UsageSummary = {
+  llmCalls: number;
+  sttCalls: number;
+  llmEstimatedCostUsd: number;
+  sttEstimatedCostUsd: number;
+  totalEstimatedCostUsd: number;
+};
+
+const defaultVoiceDiagnostics: VoiceDiagnostics = {
+  isSecureContext: false,
+  speechRecognitionAvailable: false,
+  speechSynthesisAvailable: false,
+  mediaDevicesAvailable: false,
+  microphonePermission: "unknown",
+  audioInputCount: null,
+  hasAudioInput: null,
+  defaultAudioInputLabel: null,
+  audioInputs: [],
+  getUserMediaAudioAccess: "unknown",
+  getUserMediaError: null,
+};
+
 type InterviewRoomClientProps = {
   sessionId: string;
   questionTitle: string;
@@ -74,6 +121,8 @@ type InterviewRoomClientProps = {
   personaEnabled: boolean;
   personaSummary: string | null;
   appliedPromptContext: string | null;
+  lowCostMode: boolean;
+  initialUsageSummary: UsageSummary;
   initialStage: CodingInterviewStage;
   initialTranscripts: TranscriptSegment[];
   initialEvents: SessionEvent[];
@@ -102,9 +151,15 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const [voiceAvailability, setVoiceAvailability] = useState<VoiceAvailability>({
     speechRecognition: false,
     speechSynthesis: false,
+    mediaRecorder: false,
   });
+  const [dedicatedSttConfigured, setDedicatedSttConfigured] = useState(false);
+  const [dedicatedSttProvider, setDedicatedSttProvider] = useState<string | null>(null);
+  const [isProviderPreviewing, setIsProviderPreviewing] = useState(false);
   const [draftTranscript, setDraftTranscript] = useState("");
   const [lastVoiceError, setLastVoiceError] = useState<string | null>(null);
+  const [voiceDiagnostics, setVoiceDiagnostics] = useState<VoiceDiagnostics>(defaultVoiceDiagnostics);
+  const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
   const [editorStatus, setEditorStatus] = useState(
     isRunnableLanguage(props.selectedLanguage)
       ? "Code execution is ready for this language."
@@ -112,17 +167,25 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   );
   const [candidateMessage, setCandidateMessage] = useState("");
   const [isAssistantThinking, setIsAssistantThinking] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState("");
+  const [reportSummary, setReportSummary] = useState<SessionReportSummary | null>(null);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary>(props.initialUsageSummary);
   const [roomNotice, setRoomNotice] = useState("Continuous listening is available when your browser supports speech recognition.");
   const [isContinuousListening, setIsContinuousListening] = useState(false);
   const [lastInterruptionAt, setLastInterruptionAt] = useState<string | null>(null);
+  const [pendingConfirmationText, setPendingConfirmationText] = useState<string | null>(null);
   const voiceAdapterRef = useRef<InterviewVoiceAdapter | null>(null);
   const assistantStreamAbortRef = useRef<AbortController | null>(null);
   const silenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalTranscriptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interruptionCooldownUntilRef = useRef<number>(0);
   const interruptionNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSubmitConfirmationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSubmittedCandidateTextRef = useRef("");
+  const pendingSpeechBufferRef = useRef("");
+  const providerPreviewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const providerSpeechActiveRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,15 +208,41 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       }
 
       if (transcriptPayload.ok) {
-        setTranscripts(transcriptPayload.data.transcripts);
+        setTranscripts((current) =>
+          mergeById(
+            current,
+            transcriptPayload.data.transcripts as TranscriptSegment[],
+            (items) => items.sort((left, right) => left.segmentIndex - right.segmentIndex),
+          ),
+        );
       }
 
       if (eventsPayload.ok) {
-        setEvents(eventsPayload.data.events);
+        setEvents((current) => {
+          const merged = mergeById(
+            current,
+            eventsPayload.data.events as SessionEvent[],
+            (items) =>
+              items.sort(
+                (left, right) => new Date(right.eventTime).getTime() - new Date(left.eventTime).getTime(),
+              ),
+          );
+          setUsageSummary(summarizeUsageFromSessionEvents(merged));
+          return merged;
+        });
       }
 
       if (runsPayload.ok) {
-        setExecutionRuns(runsPayload.data.executionRuns);
+        setExecutionRuns((current) =>
+          mergeById(
+            current,
+            runsPayload.data.executionRuns as ExecutionRun[],
+            (items) =>
+              items.sort(
+                (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+              ),
+          ),
+        );
       }
     }
 
@@ -162,6 +251,51 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     return () => {
       cancelled = true;
       clearInterval(interval);
+    };
+  }, [props.sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadExistingReport() {
+      const response = await fetch(`/api/sessions/${props.sessionId}/report`, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = await response.json();
+      if (!payload.ok || cancelled) {
+        return;
+      }
+
+      const reportJson =
+        payload.data?.reportJson && typeof payload.data.reportJson === "object"
+          ? (payload.data.reportJson as Record<string, unknown>)
+          : null;
+
+      if (!reportJson) {
+        return;
+      }
+
+      setReportSummary({
+        overallScore: Number(reportJson.overallScore ?? 0),
+        overallSummary: String(reportJson.overallSummary ?? ""),
+        recommendation: String(reportJson.recommendation ?? "BORDERLINE"),
+        strengths: asStringArray(reportJson.strengths),
+        weaknesses: asStringArray(reportJson.weaknesses),
+        improvementPlan: asStringArray(reportJson.improvementPlan),
+        dimensions: Array.isArray(reportJson.dimensions)
+          ? (reportJson.dimensions as SessionReportSummary["dimensions"])
+          : [],
+      });
+    }
+
+    void loadExistingReport();
+    return () => {
+      cancelled = true;
     };
   }, [props.sessionId]);
 
@@ -181,26 +315,63 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   useEffect(() => {
     const adapter = new BrowserVoiceAdapter({
       onSpeechStart: () => {
+        cancelPendingAutoSubmitConfirmation();
         void interruptAiTurn("candidate_speech");
       },
       onTranscript: (chunk) => {
-        setDraftTranscript(chunk.isFinal ? "" : chunk.text);
-        setVoiceState(chunk.isFinal ? "processing" : "listening");
+        if (dedicatedSttConfigured) {
+          return;
+        }
+
+        const normalizedChunk = normalizeTranscriptText(chunk.text);
+        const mergedText = mergeTranscriptFragments(pendingSpeechBufferRef.current, normalizedChunk);
+
+        if (chunk.isFinal) {
+          pendingSpeechBufferRef.current = mergedText;
+          setDraftTranscript("");
+          setVoiceState("processing");
+        } else {
+          setDraftTranscript(mergedText);
+          setVoiceState("listening");
+        }
 
         if (chunk.isFinal) {
           clearSilenceTimer();
-          scheduleFinalTranscriptSubmit(chunk.text);
+          scheduleFinalTranscriptSubmit(mergedText);
           return;
         }
 
         clearPendingFinalTranscript();
-        scheduleSilenceSubmit(chunk.text);
+        scheduleSilenceSubmit(mergedText);
       },
       onStateChange: (state) => {
         setVoiceState(state);
       },
       onError: (message) => {
         setLastVoiceError(message);
+        void refreshVoiceDiagnostics();
+      },
+      onVoiceActivityChange: (isSpeaking) => {
+        providerSpeechActiveRef.current = isSpeaking;
+
+        if (!dedicatedSttConfigured) {
+          return;
+        }
+
+        if (isSpeaking) {
+          cancelPendingAutoSubmitConfirmation();
+          clearSilenceTimer();
+          clearPendingFinalTranscript();
+          void interruptAiTurn("candidate_speech");
+          void requestProviderPreviewTranscript(true);
+          scheduleProviderPreviewLoop();
+          return;
+        }
+
+        clearProviderPreviewTimer();
+        void requestProviderPreviewTranscript(true).finally(() => {
+          scheduleProviderSilenceSubmit();
+        });
       },
     });
 
@@ -210,17 +381,76 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     return () => {
       clearSilenceTimer();
       clearPendingFinalTranscript();
+      cancelPendingAutoSubmitConfirmation();
       clearInterruptionNoticeTimer();
+      clearProviderPreviewTimer();
       adapter.dispose();
       voiceAdapterRef.current = null;
     };
-  }, [props.sessionId]);
+  }, [dedicatedSttConfigured, props.sessionId]);
+
+  useEffect(() => {
+    void refreshVoiceDiagnostics();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSttStatus() {
+      const response = await fetch("/api/stt/status", { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) {
+        return;
+      }
+
+      const payload = await response.json().catch(() => null);
+      if (!payload?.ok || cancelled) {
+        return;
+      }
+
+      setDedicatedSttConfigured(Boolean(payload.data?.configured));
+      setDedicatedSttProvider(typeof payload.data?.provider === "string" ? payload.data.provider : null);
+    }
+
+    void loadSttStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (voiceState === "starting") {
+      setRoomNotice("Microphone is warming up. Wait for the room to say it is ready before you begin speaking.");
+      return;
+    }
+
+    if (voiceState === "listening") {
+      setRoomNotice(
+        dedicatedSttConfigured
+          ? isContinuousListening
+            ? "Microphone ready in dedicated STT mode. Start speaking and the room will detect speech activity before finalizing a provider transcript."
+            : "Microphone ready in dedicated STT mode. Hold the button and start speaking now."
+          : isContinuousListening
+            ? "Microphone ready. You can start speaking now, and the room will wait for a short pause before submitting."
+            : "Microphone ready. Hold the button and start speaking now.",
+      );
+      return;
+    }
+
+    if (voiceState === "idle" && !isContinuousListening) {
+      setRoomNotice("Microphone is off. Click Start Mic and wait for the ready state before speaking.");
+    }
+  }, [voiceState, isContinuousListening, dedicatedSttConfigured]);
 
   const timeline = useMemo(() => {
     return [...events].sort((left, right) => {
       return new Date(right.eventTime).getTime() - new Date(left.eventTime).getTime();
     });
   }, [events]);
+
+  const voiceDiagnosticHints = useMemo(
+    () => getVoiceDiagnosticsHints({ diagnostics: voiceDiagnostics, lastVoiceError }),
+    [voiceDiagnostics, lastVoiceError],
+  );
 
   const latestRun = executionRuns[0] ?? null;
   const currentStage = useMemo(() => {
@@ -244,6 +474,31 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     });
   }
 
+  async function refreshVoiceDiagnostics() {
+    setIsRefreshingDiagnostics(true);
+    try {
+      const diagnostics = await getVoiceDiagnostics();
+      setVoiceDiagnostics(diagnostics);
+    } finally {
+      setIsRefreshingDiagnostics(false);
+    }
+  }
+
+  function beginAutoSubmitConfirmation(
+    text: string,
+    options: { autoSubmitted: true; source: string },
+  ) {
+    cancelPendingAutoSubmitConfirmation();
+    setPendingConfirmationText(text);
+    setRoomNotice("Candidate turn captured. Waiting 1 second in case you want to keep talking before sending it to the interviewer.");
+
+    autoSubmitConfirmationTimeoutRef.current = setTimeout(() => {
+      setPendingConfirmationText(null);
+      autoSubmitConfirmationTimeoutRef.current = null;
+      void handleCandidateMessage(text, options);
+    }, 1000);
+  }
+
   function clearSilenceTimer() {
     if (silenceTimeoutRef.current) {
       clearTimeout(silenceTimeoutRef.current);
@@ -265,8 +520,119 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
   }
 
+  function clearProviderPreviewTimer() {
+    if (providerPreviewTimeoutRef.current) {
+      clearTimeout(providerPreviewTimeoutRef.current);
+      providerPreviewTimeoutRef.current = null;
+    }
+  }
+
+  function cancelPendingAutoSubmitConfirmation() {
+    if (autoSubmitConfirmationTimeoutRef.current) {
+      clearTimeout(autoSubmitConfirmationTimeoutRef.current);
+      autoSubmitConfirmationTimeoutRef.current = null;
+    }
+
+    if (pendingConfirmationText) {
+      pendingSpeechBufferRef.current = mergeTranscriptFragments(
+        pendingSpeechBufferRef.current,
+        pendingConfirmationText,
+      );
+      setDraftTranscript(pendingSpeechBufferRef.current);
+      setPendingConfirmationText(null);
+      setRoomNotice("Heard more audio, so the pending auto-submit was cancelled and merged back into your turn.");
+    }
+  }
+
   function interruptedRecently() {
     return Date.now() < interruptionCooldownUntilRef.current;
+  }
+
+  async function requestProviderPreviewTranscript(force = false) {
+    if (!dedicatedSttConfigured || !voiceAdapterRef.current?.peekCapturedAudio) {
+      return;
+    }
+
+    if (isProviderPreviewing && !force) {
+      return;
+    }
+
+    const audioBlob = await voiceAdapterRef.current.peekCapturedAudio();
+    if (!audioBlob || audioBlob.size < (props.lowCostMode ? 18000 : 12000)) {
+      return;
+    }
+
+    setIsProviderPreviewing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "candidate-preview.webm");
+      formData.append("sessionId", props.sessionId);
+      formData.append("preview", "true");
+      formData.append("lowCostMode", String(props.lowCostMode));
+
+      const response = await fetch("/api/stt/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        return;
+      }
+
+      const previewText =
+        typeof payload.data?.text === "string" ? normalizeTranscriptText(payload.data.text) : "";
+      if (!previewText) {
+        return;
+      }
+
+      pendingSpeechBufferRef.current = previewText;
+      setDraftTranscript(previewText);
+    } finally {
+      setIsProviderPreviewing(false);
+    }
+  }
+
+  function scheduleProviderPreviewLoop() {
+    clearProviderPreviewTimer();
+    if (!dedicatedSttConfigured || !isContinuousListening) {
+      return;
+    }
+
+    providerPreviewTimeoutRef.current = setTimeout(() => {
+      if (!providerSpeechActiveRef.current) {
+        return;
+      }
+
+      void requestProviderPreviewTranscript().finally(() => {
+        scheduleProviderPreviewLoop();
+      });
+    }, props.lowCostMode ? 4200 : 3200);
+  }
+
+  function scheduleProviderSilenceSubmit() {
+    clearSilenceTimer();
+    if (!isContinuousListening) {
+      return;
+    }
+
+    const candidateText = normalizeTranscriptText(pendingSpeechBufferRef.current || draftTranscript);
+    const delayMs = getAutoSubmitDelayMs({
+      text: candidateText || "spoken candidate answer",
+      interruptedRecently: interruptedRecently(),
+    });
+
+    if (delayMs === null) {
+      return;
+    }
+
+    silenceTimeoutRef.current = setTimeout(() => {
+      const previewText = normalizeTranscriptText(pendingSpeechBufferRef.current || draftTranscript);
+      beginAutoSubmitConfirmation(previewText, {
+        autoSubmitted: true,
+        source: "provider_vad",
+      });
+    }, delayMs);
   }
 
   function scheduleSilenceSubmit(text: string) {
@@ -285,7 +651,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
 
     silenceTimeoutRef.current = setTimeout(() => {
-      const stableText = text.trim();
+      const stableText = normalizeTranscriptText(text);
       if (!stableText) {
         return;
       }
@@ -295,8 +661,9 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
         return;
       }
 
+      pendingSpeechBufferRef.current = stableText;
       setDraftTranscript("");
-      void handleCandidateMessage(stableText, {
+      beginAutoSubmitConfirmation(stableText, {
         autoSubmitted: true,
         source: "silence_timeout",
       });
@@ -305,9 +672,11 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
   function scheduleFinalTranscriptSubmit(text: string) {
     clearPendingFinalTranscript();
+    const mergedFinalText = mergeTranscriptFragments(pendingSpeechBufferRef.current, normalizeTranscriptText(text));
+    pendingSpeechBufferRef.current = mergedFinalText;
 
     const delayMs = getFinalChunkCommitDelayMs({
-      text,
+      text: mergedFinalText,
       interruptedRecently: interruptedRecently(),
     });
 
@@ -319,20 +688,32 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
     finalTranscriptTimeoutRef.current = setTimeout(() => {
       setDraftTranscript("");
-      void handleCandidateMessage(text, {
+      void handleCandidateMessage(mergedFinalText, {
         source: "speech_final",
       });
     }, delayMs);
   }
 
-  async function postTranscript(speaker: "USER" | "AI", text: string) {
+  async function postTranscript(
+    speaker: "USER" | "AI",
+    text: string,
+    options?: {
+      transcriptSource?: "manual" | "browser" | "openai-stt" | "assistant";
+      transcriptProvider?: string;
+      sourceText?: string;
+    },
+  ) {
+    const normalizedText = normalizeTranscriptText(text);
     const response = await fetch(`/api/sessions/${props.sessionId}/transcripts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         speaker,
-        text,
+        text: normalizedText,
         isFinal: true,
+        transcriptSource: options?.transcriptSource,
+        transcriptProvider: options?.transcriptProvider,
+        sourceText: options?.sourceText,
       }),
     });
 
@@ -342,8 +723,81 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
     const payload = await response.json();
     if (payload.ok) {
-      setTranscripts((current) => [...current, payload.data.transcript]);
+      setTranscripts((current) =>
+        mergeById(current, [payload.data.transcript as TranscriptSegment], (items) =>
+          items.sort((left, right) => left.segmentIndex - right.segmentIndex),
+        ),
+      );
       setDraftTranscript("");
+      if (speaker === "USER") {
+        pendingSpeechBufferRef.current = "";
+      }
+    }
+  }
+
+  async function refineSpeechTranscriptWithProvider(browserText: string) {
+    const audioBlob = await voiceAdapterRef.current?.consumeCapturedAudio?.();
+    if (!audioBlob || audioBlob.size < (props.lowCostMode ? 18000 : 12000)) {
+      return {
+        text: browserText,
+        transcriptSource: "browser" as const,
+        transcriptProvider: "browser-speech-recognition",
+      };
+    }
+
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "candidate-turn.webm");
+    formData.append("sessionId", props.sessionId);
+    formData.append("preview", "false");
+    formData.append("lowCostMode", String(props.lowCostMode));
+
+    try {
+      const response = await fetch("/api/stt/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        const message =
+          typeof payload?.message === "string"
+            ? payload.message
+            : "Dedicated STT failed, so the room fell back to browser transcription.";
+        setRoomNotice(message);
+        return {
+          text: browserText,
+          transcriptSource: "browser" as const,
+          transcriptProvider: "browser-speech-recognition",
+        };
+      }
+
+      const refinedText =
+        typeof payload.data?.text === "string" && payload.data.text.trim()
+          ? payload.data.text.trim()
+          : browserText;
+      const provider =
+        typeof payload.data?.provider === "string" ? payload.data.provider : "openai-stt";
+      const changed =
+        normalizeCandidateText(refinedText) !== normalizeCandidateText(browserText);
+
+      setRoomNotice(
+        changed
+          ? "Dedicated speech transcription refined your latest answer before it was sent to the interviewer."
+          : "Dedicated speech transcription confirmed your latest answer.",
+      );
+
+      return {
+        text: refinedText,
+        transcriptSource: "openai-stt" as const,
+        transcriptProvider: provider,
+      };
+    } catch {
+      setRoomNotice("Dedicated STT was unavailable, so the room used the browser transcript for this turn.");
+      return {
+        text: browserText,
+        transcriptSource: "browser" as const,
+        transcriptProvider: "browser-speech-recognition",
+      };
     }
   }
 
@@ -418,12 +872,22 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
             const finalTranscript = payload.transcript;
             if (finalTranscript) {
-              setTranscripts((current) => [...current, finalTranscript]);
+              setTranscripts((current) =>
+                mergeById(current, [finalTranscript], (items) =>
+                  items.sort((left, right) => left.segmentIndex - right.segmentIndex),
+                ),
+              );
             }
 
             const finalEvents = payload.events;
             if (Array.isArray(finalEvents) && finalEvents.length > 0) {
-              setEvents((current) => [...finalEvents, ...current]);
+              setEvents((current) =>
+                mergeById(current, finalEvents, (items) =>
+                  items.sort(
+                    (left, right) => new Date(right.eventTime).getTime() - new Date(left.eventTime).getTime(),
+                  ),
+                ),
+              );
             }
 
             if (accumulated.length > spokenIndex) {
@@ -442,18 +906,41 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     text: string,
     options?: { autoSubmitted?: boolean; source?: string },
   ) {
-    const normalized = normalizeCandidateText(text);
-    if (!normalized) {
+    const browserText = normalizeTranscriptText(text);
+    if (!browserText && !(dedicatedSttConfigured && options?.source === "provider_vad")) {
       return;
     }
 
     const speechDrivenSource =
       options?.source === "speech_final" ||
       options?.source === "silence_timeout" ||
+      options?.source === "provider_vad" ||
       Boolean(options?.autoSubmitted);
+
+    const transcriptResult = speechDrivenSource
+      ? await refineSpeechTranscriptWithProvider(browserText)
+      : {
+          text: browserText,
+          transcriptSource: "manual" as const,
+          transcriptProvider: "manual-entry",
+        };
+
+    const normalizedText = normalizeTranscriptText(transcriptResult.text);
+    const normalized = normalizeCandidateText(normalizedText);
+    if (!normalized) {
+      return;
+    }
 
     if (speechDrivenSource && shouldIgnoreInterruptedUtterance(normalized, interruptedRecently())) {
       setRoomNotice("Taking a short pause. The room is still listening for the rest of your answer.");
+      return;
+    }
+
+    if (speechDrivenSource && shouldDelaySpeechDrivenCommit(normalizedText)) {
+      pendingSpeechBufferRef.current = mergeTranscriptFragments(pendingSpeechBufferRef.current, normalizedText);
+      setDraftTranscript(pendingSpeechBufferRef.current);
+      setRoomNotice("That sounded incomplete, so the room is giving you a bit more time before submitting.");
+      scheduleSilenceSubmit(pendingSpeechBufferRef.current);
       return;
     }
 
@@ -465,7 +952,15 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
         textPreview: normalized.slice(0, 120),
       });
     }
-    await postTranscript("USER", text);
+    await postTranscript("USER", normalizedText, {
+      transcriptSource: transcriptResult.transcriptSource,
+      transcriptProvider: transcriptResult.transcriptProvider,
+      sourceText:
+        transcriptResult.transcriptSource === "openai-stt" ? browserText : undefined,
+    });
+    if (transcriptResult.transcriptSource === "openai-stt") {
+      setRoomNotice("Dedicated STT finalized your latest spoken answer and passed that transcript to the interviewer.");
+    }
     await requestAssistantTurn();
   }
 
@@ -485,7 +980,11 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
     const payload = await response.json();
     if (payload.ok) {
-      setEvents((current) => [payload.data.event, ...current]);
+      setEvents((current) =>
+        mergeById(current, [payload.data.event as SessionEvent], (items) =>
+          items.sort((left, right) => new Date(right.eventTime).getTime() - new Date(left.eventTime).getTime()),
+        ),
+      );
     }
   }
 
@@ -510,7 +1009,13 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
         throw new Error(payload.message ?? "Unable to execute code.");
       }
 
-      setExecutionRuns((current) => [payload.data.executionRun, ...current].slice(0, 10));
+      setExecutionRuns((current) =>
+        mergeById(current, [payload.data.executionRun as ExecutionRun], (items) =>
+          items
+            .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+            .slice(0, 10),
+        ),
+      );
       setEditorStatus(`Latest run: ${payload.data.executionRun.status}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to execute code.";
@@ -521,6 +1026,38 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
   }
 
+  async function generateReport() {
+    setIsGeneratingReport(true);
+    setActionError(null);
+
+    try {
+      const response = await fetch(`/api/sessions/${props.sessionId}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = await response.json();
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message ?? "Unable to generate feedback report.");
+      }
+
+      setReportSummary(payload.data.evaluation as SessionReportSummary);
+      if (payload.data.event) {
+        setEvents((current) =>
+          mergeById(current, [payload.data.event as SessionEvent], (items) =>
+            items.sort((left, right) => new Date(right.eventTime).getTime() - new Date(left.eventTime).getTime()),
+          ),
+        );
+      }
+      setRoomNotice("Feedback report generated from the current session signals.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to generate feedback report.";
+      setActionError(message);
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  }
+
   async function startListening() {
     if (!voiceAdapterRef.current) {
       setLastVoiceError("Voice adapter is not ready.");
@@ -528,13 +1065,33 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
 
     setLastVoiceError(null);
+    await refreshVoiceDiagnostics();
+    const preflight = await runMicrophonePreflight();
+    if (preflight.status === "failed") {
+      const message = `Microphone preflight failed: ${preflight.error ?? "unknown error"}`;
+      setLastVoiceError(message);
+      setRoomNotice("The browser could not open a live microphone stream, so speech recognition was not started.");
+      await refreshVoiceDiagnostics();
+      return;
+    }
     clearPendingFinalTranscript();
-    setRoomNotice("Continuous listening is on. The room will auto-submit a candidate turn after a short pause.");
+    clearProviderPreviewTimer();
+    pendingSpeechBufferRef.current = "";
+    setDraftTranscript("");
+    setRoomNotice(
+      dedicatedSttConfigured
+        ? "Continuous listening is on in dedicated STT mode. The room will detect speech activity and refine turns with the provider."
+        : "Continuous listening is on. The room will auto-submit a candidate turn after a short pause.",
+    );
     setIsContinuousListening(true);
     await postEvent(SESSION_EVENT_TYPES.LISTENING_STARTED, {
       mode: "continuous",
+      transcriptionMode: dedicatedSttConfigured ? "provider" : "browser",
     });
-    await voiceAdapterRef.current.startListening({ continuousMode: true });
+    await voiceAdapterRef.current.startListening({
+      continuousMode: true,
+      mode: dedicatedSttConfigured ? "provider" : "browser",
+    });
   }
 
   async function startPushToTalk() {
@@ -544,19 +1101,45 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
 
     setLastVoiceError(null);
+    await refreshVoiceDiagnostics();
+    const preflight = await runMicrophonePreflight();
+    if (preflight.status === "failed") {
+      const message = `Microphone preflight failed: ${preflight.error ?? "unknown error"}`;
+      setLastVoiceError(message);
+      setRoomNotice("The browser could not open a live microphone stream, so push-to-talk was not started.");
+      await refreshVoiceDiagnostics();
+      return;
+    }
     clearPendingFinalTranscript();
-    setRoomNotice("Push-to-talk is active while you hold the button.");
-    await voiceAdapterRef.current.startListening({ continuousMode: false });
+    clearProviderPreviewTimer();
+    pendingSpeechBufferRef.current = "";
+    setDraftTranscript("");
+    setRoomNotice(
+      dedicatedSttConfigured
+        ? "Push-to-talk is active in dedicated STT mode."
+        : "Push-to-talk is active while you hold the button.",
+    );
+    await voiceAdapterRef.current.startListening({
+      continuousMode: false,
+      mode: dedicatedSttConfigured ? "provider" : "browser",
+    });
   }
 
   async function stopListening() {
     clearSilenceTimer();
     clearPendingFinalTranscript();
+    clearProviderPreviewTimer();
+    const pendingProviderText = normalizeTranscriptText(pendingSpeechBufferRef.current || draftTranscript);
     if (isContinuousListening) {
       setRoomNotice("Continuous listening stopped.");
       setIsContinuousListening(false);
       await postEvent(SESSION_EVENT_TYPES.LISTENING_STOPPED, {
         mode: "continuous",
+      });
+    } else if (dedicatedSttConfigured && pendingProviderText) {
+      setRoomNotice("Push-to-talk ended. Finalizing your spoken answer with dedicated STT.");
+      await handleCandidateMessage(pendingProviderText, {
+        source: "provider_vad",
       });
     }
     voiceAdapterRef.current?.stopListening();
@@ -588,7 +1171,10 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   }
 
   async function speakAiPrompt(text: string) {
-    await postTranscript("AI", text);
+    await postTranscript("AI", text, {
+      transcriptSource: "assistant",
+      transcriptProvider: "browser-tts",
+    });
     await voiceAdapterRef.current?.speakText(text);
   }
 
@@ -629,6 +1215,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <StatusPill label={describeVoiceState(voiceState)} tone={voiceTone(voiceState)} />
             <StatusPill label={`Stage: ${describeCodingStage(currentStage)}`} tone="neutral" />
+            <StatusPill label={props.lowCostMode ? "Low-cost mode on" : "Standard cost mode"} tone="warning" />
             {isContinuousListening ? <StatusPill label="Continuous Listening On" tone="success" /> : null}
             {isAssistantThinking ? <StatusPill label="AI Generating" tone="info" /> : null}
             {assistantDraft ? <StatusPill label="AI Streaming" tone="info" /> : null}
@@ -665,6 +1252,25 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                   Applied prompt context prepared and stored for orchestrator integration.
                 </p>
               ) : null}
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid var(--border)",
+                  background: "rgba(255,255,255,0.75)",
+                  display: "grid",
+                  gap: 4,
+                }}
+              >
+                <strong>Usage so far</strong>
+                <span style={{ color: "var(--muted)", fontSize: 14 }}>
+                  LLM calls: {usageSummary.llmCalls} · STT calls: {usageSummary.sttCalls}
+                </span>
+                <span style={{ color: "var(--muted)", fontSize: 14 }}>
+                  Estimated cost: ${usageSummary.totalEstimatedCostUsd.toFixed(4)}
+                </span>
+              </div>
             </div>
 
             <div
@@ -723,10 +1329,138 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                 </div>
                 {draftTranscript ? (
                   <div style={{ color: "var(--muted)", fontSize: 14 }}>
-                    Draft transcript: {draftTranscript}
+                    {dedicatedSttConfigured ? "Provider draft transcript" : "Draft transcript"}: {draftTranscript}
+                  </div>
+                ) : null}
+                {isProviderPreviewing ? (
+                  <div style={{ color: "var(--accent-strong)", fontSize: 14 }}>
+                    Dedicated STT is previewing your current speech...
+                  </div>
+                ) : null}
+                {pendingConfirmationText ? (
+                  <div style={{ color: "#8a5a00", fontSize: 14 }}>
+                    Pending confirmation: {pendingConfirmationText}
                   </div>
                 ) : null}
                 {lastVoiceError ? <span style={{ color: "var(--danger)" }}>{lastVoiceError}</span> : null}
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 8,
+                    padding: 12,
+                    borderRadius: 12,
+                    background: "var(--surface-alt)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <strong>Voice Diagnostics</strong>
+                    <button
+                      style={smallButtonStyle}
+                      disabled={isRefreshingDiagnostics}
+                      onClick={() => runAction(refreshVoiceDiagnostics)}
+                    >
+                      {isRefreshingDiagnostics ? "Refreshing..." : "Refresh"}
+                    </button>
+                  </div>
+                  <DiagnosticRow label="Secure context" value={voiceDiagnostics.isSecureContext ? "Yes" : "No"} ok={voiceDiagnostics.isSecureContext} />
+                  <DiagnosticRow
+                    label="Speech recognition API"
+                    value={voiceDiagnostics.speechRecognitionAvailable ? "Available" : "Unavailable"}
+                    ok={voiceDiagnostics.speechRecognitionAvailable}
+                  />
+                  <DiagnosticRow
+                    label="Speech synthesis"
+                    value={voiceDiagnostics.speechSynthesisAvailable ? "Available" : "Unavailable"}
+                    ok={voiceDiagnostics.speechSynthesisAvailable}
+                  />
+                  <DiagnosticRow
+                    label="Media devices API"
+                    value={voiceDiagnostics.mediaDevicesAvailable ? "Available" : "Unavailable"}
+                    ok={voiceDiagnostics.mediaDevicesAvailable}
+                  />
+                  <DiagnosticRow
+                    label="Media recorder"
+                    value={voiceAvailability.mediaRecorder ? "Available" : "Unavailable"}
+                    ok={voiceAvailability.mediaRecorder}
+                  />
+                  <DiagnosticRow
+                    label="Dedicated STT"
+                    value={dedicatedSttConfigured ? `Configured (${dedicatedSttProvider ?? "provider"})` : "Not configured"}
+                    ok={dedicatedSttConfigured}
+                  />
+                  <DiagnosticRow
+                    label="Microphone permission"
+                    value={voiceDiagnostics.microphonePermission}
+                    ok={
+                      voiceDiagnostics.microphonePermission === "granted" ||
+                      voiceDiagnostics.microphonePermission === "prompt"
+                    }
+                  />
+                  <DiagnosticRow
+                    label="Audio input devices"
+                    value={
+                      voiceDiagnostics.audioInputCount === null
+                        ? "Unknown"
+                        : `${voiceDiagnostics.audioInputCount} detected`
+                    }
+                    ok={voiceDiagnostics.hasAudioInput !== false}
+                  />
+                  <DiagnosticRow
+                    label="Browser mic preflight"
+                    value={voiceDiagnostics.getUserMediaAudioAccess}
+                    ok={voiceDiagnostics.getUserMediaAudioAccess === "ok" || voiceDiagnostics.getUserMediaAudioAccess === "unknown"}
+                  />
+                  <DiagnosticRow
+                    label="Default input"
+                    value={voiceDiagnostics.defaultAudioInputLabel ?? "Unknown"}
+                    ok={Boolean(voiceDiagnostics.defaultAudioInputLabel)}
+                  />
+                  {lastVoiceError ? (
+                    <DiagnosticRow label="Last recognition error" value={lastVoiceError} ok={false} />
+                  ) : null}
+                  {voiceDiagnostics.getUserMediaError ? (
+                    <DiagnosticRow label="Preflight error" value={voiceDiagnostics.getUserMediaError} ok={false} />
+                  ) : null}
+                  {voiceDiagnostics.audioInputs.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <strong style={{ fontSize: 14 }}>Detected microphones</strong>
+                      {voiceDiagnostics.audioInputs.map((device) => (
+                        <div key={device.deviceId || device.label} style={diagnosticHintStyle}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                            <strong>{device.label}</strong>
+                            <span style={{ color: device.suspectVirtual ? "#8a5a00" : "var(--muted)", fontSize: 13 }}>
+                              {device.isDefault ? "default" : "secondary"}
+                              {device.suspectVirtual ? " • possible virtual/bluetooth" : ""}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {voiceDiagnosticHints.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <strong style={{ fontSize: 14 }}>Suggested fixes</strong>
+                      {voiceDiagnosticHints.map((hint) => (
+                        <div key={hint} style={diagnosticHintStyle}>
+                          {hint}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ color: "var(--muted)", fontSize: 14 }}>
+                      No obvious browser-side blockers detected.
+                    </span>
+                  )}
+                </div>
               </div>
               <button
                 style={actionButtonStyle}
@@ -763,10 +1497,25 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               <button
                 style={actionButtonStyle}
                 disabled={isPending}
-                onClick={() => runAction(async () => postEvent(SESSION_EVENT_TYPES.HINT_REQUESTED, { source: "room-controls" }))}
+                onClick={() =>
+                  runAction(async () => {
+                    await postEvent(SESSION_EVENT_TYPES.HINT_REQUESTED, { source: "room-controls" });
+                    await requestAssistantTurn();
+                  })
+                }
               >
-                Log Hint Request
+                Request Hint
               </button>
+              <button
+                style={actionButtonStyle}
+                disabled={isGeneratingReport || isPending}
+                onClick={() => runAction(generateReport)}
+              >
+                {isGeneratingReport ? "Generating Report..." : "Generate Report"}
+              </button>
+              <Link href={`/report/${props.sessionId}`} style={linkButtonStyle}>
+                View Full Report
+              </Link>
               <button
                 style={actionButtonStyle}
                 disabled={isPending}
@@ -907,6 +1656,32 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                 </span>
               )}
             </div>
+
+            {reportSummary ? (
+              <div
+                style={{
+                  padding: 16,
+                  borderRadius: 16,
+                  background: "#fff",
+                  border: "1px solid var(--border)",
+                  display: "grid",
+                  gap: 12,
+                }}
+              >
+                <strong>Feedback Report v0</strong>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", color: "var(--muted)", fontSize: 14 }}>
+                  <span>Recommendation: {reportSummary.recommendation}</span>
+                  <span>Score: {reportSummary.overallScore}/100</span>
+                </div>
+                <p style={{ margin: 0, color: "var(--muted)" }}>{reportSummary.overallSummary}</p>
+                <Link href={`/report/${props.sessionId}`} style={{ ...linkButtonStyle, justifySelf: "start" }}>
+                  Open Full Report
+                </Link>
+                <ReportList title="Strengths" items={reportSummary.strengths} />
+                <ReportList title="Areas to Improve" items={reportSummary.weaknesses} />
+                <ReportList title="Next Steps" items={reportSummary.improvementPlan} />
+              </div>
+            ) : null}
           </section>
 
           <aside
@@ -1015,6 +1790,49 @@ function OutputBlock({ title, value }: { title: string; value: string | null }) 
   );
 }
 
+function ReportList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <span style={{ fontWeight: 700 }}>{title}</span>
+      {items.length === 0 ? (
+        <span style={{ color: "var(--muted)", fontSize: 14 }}>No items yet.</span>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {items.map((item) => (
+            <div
+              key={`${title}-${item}`}
+              style={{
+                padding: 10,
+                borderRadius: 12,
+                background: "var(--surface-alt)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              {item}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiagnosticRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 16,
+        flexWrap: "wrap",
+      }}
+    >
+      <span style={{ color: "var(--muted)", fontSize: 14 }}>{label}</span>
+      <strong style={{ color: ok ? "var(--success)" : "var(--danger)", fontSize: 14 }}>{value}</strong>
+    </div>
+  );
+}
+
 const actionButtonStyle = {
   border: "1px solid var(--border)",
   borderRadius: 12,
@@ -1022,6 +1840,36 @@ const actionButtonStyle = {
   background: "#fff",
   cursor: "pointer",
   textAlign: "left" as const,
+} as const;
+
+const linkButtonStyle = {
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  padding: "10px 12px",
+  background: "#fff",
+  textDecoration: "none",
+  color: "var(--text)",
+  display: "inline-flex",
+  alignItems: "center",
+} as const;
+
+const smallButtonStyle = {
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  padding: "6px 10px",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 13,
+} as const;
+
+const diagnosticHintStyle = {
+  padding: 10,
+  borderRadius: 10,
+  border: "1px solid var(--border)",
+  background: "#fff",
+  color: "var(--text)",
+  fontSize: 14,
+  lineHeight: 1.5,
 } as const;
 
 const emptyPanelStyle = {
@@ -1129,8 +1977,52 @@ function extractSpeakableText(text: string, fromIndex: number) {
   };
 }
 
+function mergeById<T extends { id: string }>(
+  current: T[],
+  incoming: T[],
+  finalize?: (items: T[]) => T[],
+) {
+  const byId = new Map<string, T>();
+
+  for (const item of current) {
+    byId.set(item.id, item);
+  }
+
+  for (const item of incoming) {
+    byId.set(item.id, item);
+  }
+
+  const merged = [...byId.values()];
+  return finalize ? finalize(merged) : merged;
+}
+
 function normalizeCandidateText(text: string) {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function shouldDelaySpeechDrivenCommit(text: string) {
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  const looksIncomplete = /\b(and|so|then|because|but|or|with|for|to)$/i.test(normalized);
+  const hasTerminalPunctuation = /[.!?]$/.test(normalized);
+
+  if (wordCount <= 4) {
+    return true;
+  }
+
+  if (looksIncomplete && !hasTerminalPunctuation) {
+    return true;
+  }
+
+  return false;
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function formatStageTransition(payloadJson: unknown) {

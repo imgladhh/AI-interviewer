@@ -228,11 +228,24 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
   }
 
   if (eventType === "CANDIDATE_SPOKE") {
-    return "Candidate turn was recorded.";
+    const source = stringOrFallback(payload.transcriptSource, "unknown source");
+    return `Candidate turn was recorded from ${source}.`;
+  }
+
+  if (eventType === "CANDIDATE_TRANSCRIPT_REFINED") {
+    return `Dedicated STT refined a candidate turn using ${stringOrFallback(payload.transcriptProvider, "unknown provider")}.`;
   }
 
   if (eventType === "CANDIDATE_TURN_AUTOSUBMITTED") {
     return `Candidate turn auto-submitted after silence (${stringOrFallback(payload.source, "unknown source")}).`;
+  }
+
+  if (eventType === "LLM_USAGE_RECORDED") {
+    return `LLM call recorded for ${stringOrFallback(payload.model, "unknown model")} at about $${stringOrFallback(payload.estimatedCostUsd, "0")}.`;
+  }
+
+  if (eventType === "STT_USAGE_RECORDED") {
+    return `STT call recorded for ${stringOrFallback(payload.model, "unknown model")} at about $${stringOrFallback(payload.estimatedCostUsd, "0")}.`;
   }
 
   if (eventType === "AI_SPOKE") {
@@ -245,6 +258,11 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
 
   if (eventType === "HINT_REQUESTED") {
     return `Candidate requested a hint (${stringOrFallback(payload.source, "unknown source")}).`;
+  }
+
+  if (eventType === "HINT_SERVED") {
+    const because = payload.escalationReason ? ` because ${String(payload.escalationReason).replaceAll("_", " ")}` : "";
+    return `AI served a ${stringOrFallback(payload.hintLevel, "light").toLowerCase()} hint during ${describeStage(payload.stage) ?? "the current stage"} (${stringOrFallback(payload.hintStyle, "generic hint")})${because}.`;
   }
 
   if (eventType === "CODE_SNAPSHOT_SAVED") {
@@ -265,6 +283,10 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
 
   if (eventType === "EVALUATION_STARTED") {
     return "Post-interview evaluation started.";
+  }
+
+  if (eventType === "REPORT_GENERATED") {
+    return `Feedback report generated with recommendation ${stringOrFallback(payload.recommendation, "unknown")} and score ${stringOrFallback(payload.overallScore, "unknown")}.`;
   }
 
   return "Session lifecycle event recorded.";

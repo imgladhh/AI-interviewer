@@ -3,6 +3,7 @@ import { InterviewRoomClient } from "@/components/interview/interview-room-clien
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
+import { resolveLowCostMode, summarizeUsageFromSessionEvents } from "@/lib/usage/cost";
 
 type InterviewRoomPageProps = {
   params: Promise<{ id: string }>;
@@ -62,6 +63,8 @@ export default async function InterviewRoomPage({ params }: InterviewRoomPagePro
     transcripts: session.transcripts,
     latestExecutionRun: session.executionRuns[0] ?? null,
   });
+  const lowCostMode = resolveLowCostMode(session.events);
+  const usageSummary = summarizeUsageFromSessionEvents(session.events);
 
   return (
     <InterviewRoomClient
@@ -74,6 +77,8 @@ export default async function InterviewRoomPage({ params }: InterviewRoomPagePro
       personaEnabled={session.personaEnabled}
       personaSummary={session.interviewerProfile?.personaSummary ?? null}
       appliedPromptContext={session.interviewerContext?.appliedPromptContext ?? null}
+      lowCostMode={lowCostMode}
+      initialUsageSummary={usageSummary}
       initialStage={initialStage}
       initialTranscripts={session.transcripts.map((segment) => ({
         id: segment.id,

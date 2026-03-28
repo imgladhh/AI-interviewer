@@ -79,4 +79,38 @@ describe("buildUnifiedOpsFeed", () => {
 
     expect(description).toMatch(/interrupted/i);
   });
+
+  it("describes hints served by the interviewer", () => {
+    const description = buildSessionEventDescription("HINT_SERVED", {
+      stage: "APPROACH_DISCUSSION",
+      hintStyle: "APPROACH_NUDGE",
+      hintLevel: "MEDIUM",
+      escalationReason: "stage_stall_detected",
+    });
+
+    expect(description).toMatch(/hint/i);
+    expect(description).toMatch(/Approach Discussion/i);
+    expect(description).toMatch(/medium/i);
+    expect(description).toMatch(/stage stall detected/i);
+  });
+
+  it("describes dedicated STT transcript refinement", () => {
+    const description = buildSessionEventDescription("CANDIDATE_TRANSCRIPT_REFINED", {
+      transcriptProvider: "openai-stt",
+    });
+
+    expect(description).toMatch(/dedicated stt/i);
+    expect(description).toMatch(/openai-stt/i);
+  });
+
+  it("describes generated reports in a readable way", () => {
+    const description = buildSessionEventDescription("REPORT_GENERATED", {
+      recommendation: "HIRE",
+      overallScore: 78,
+    });
+
+    expect(description).toMatch(/report generated/i);
+    expect(description).toMatch(/hire/i);
+    expect(description).toMatch(/78/);
+  });
 });

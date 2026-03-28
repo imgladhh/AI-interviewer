@@ -12,6 +12,7 @@ export const createSessionSchema = z.object({
   companyStyle: companyStyleSchema.optional(),
   difficulty: difficultySchema.optional(),
   voiceEnabled: z.boolean().default(true),
+  lowCostMode: z.boolean().default(false),
   personaEnabled: z.boolean().default(false),
   interviewerProfileId: z.string().trim().min(1).optional(),
 });

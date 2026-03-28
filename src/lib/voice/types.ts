@@ -1,6 +1,7 @@
 export type VoiceAvailability = {
   speechRecognition: boolean;
   speechSynthesis: boolean;
+  mediaRecorder: boolean;
 };
 
 export type VoiceTranscriptChunk = {
@@ -13,6 +14,7 @@ export type VoiceAdapterEventHandlers = {
   onStateChange?: (state: BrowserVoiceState) => void;
   onError?: (message: string) => void;
   onSpeechStart?: () => void;
+  onVoiceActivityChange?: (isSpeaking: boolean) => void;
 };
 
 export type BrowserVoiceState =
@@ -25,9 +27,11 @@ export type BrowserVoiceState =
 
 export interface InterviewVoiceAdapter {
   getAvailability(): VoiceAvailability;
-  startListening(options?: { continuousMode?: boolean }): Promise<void>;
+  startListening(options?: { continuousMode?: boolean; mode?: "browser" | "provider" }): Promise<void>;
   stopListening(): void;
   speakText(text: string): Promise<void>;
   cancelSpeaking(): void;
+  consumeCapturedAudio?(): Promise<Blob | null>;
+  peekCapturedAudio?(): Promise<Blob | null>;
   dispose(): void;
 }

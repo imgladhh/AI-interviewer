@@ -84,4 +84,47 @@ describe("session transcript routes", () => {
     });
     expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(1);
   });
+
+  it("logs a refinement event when dedicated STT changes the candidate transcript", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1" });
+    prisma.transcriptSegment.findFirst.mockResolvedValue({ segmentIndex: 0 });
+    prisma.transcriptSegment.create.mockResolvedValue({
+      id: "seg-2",
+      sessionId: "session-1",
+      speaker: "USER",
+      segmentIndex: 1,
+      text: "I would use a hash map and a min heap.",
+    });
+    prisma.sessionEvent.create.mockResolvedValue({ id: "evt-1" });
+
+    const { POST } = await import("@/app/api/sessions/[id]/transcripts/route");
+    const response = await POST(
+      new Request("http://localhost", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          speaker: "USER",
+          text: "I would use a hash map and a min heap.",
+          isFinal: true,
+          transcriptSource: "openai-stt",
+          transcriptProvider: "openai-stt",
+          sourceText: "I would use a hash map and a mean heap.",
+        }),
+      }),
+      {
+        params: Promise.resolve({ id: "session-1" }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(2);
+    expect(prisma.sessionEvent.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CANDIDATE_TRANSCRIPT_REFINED",
+        }),
+      }),
+    );
+  });
 });

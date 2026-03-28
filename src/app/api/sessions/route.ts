@@ -89,6 +89,7 @@ export async function POST(request: Request) {
         questionId: question?.id ?? null,
         interviewerProfileId: interviewerProfile?.id ?? null,
         personaApplied: personaReady,
+        lowCostMode: input.lowCostMode,
       },
     },
   });
@@ -113,6 +114,7 @@ export async function POST(request: Request) {
       payloadJson: {
         personaEnabled: Boolean(input.personaEnabled && interviewerProfile),
         voiceEnabled: input.voiceEnabled,
+        lowCostMode: input.lowCostMode,
       },
     },
   });

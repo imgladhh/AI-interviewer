@@ -1,10 +1,10 @@
 # AI Interviewer
 
-Voice-first mock interview app for North American SDE interview prep, starting with coding interviews and an optional public interviewer persona flow.
+Voice-first mock interview app for North American SDE interview prep, currently centered on coding interviews, a stage-governed AI interviewer, and an optional public interviewer persona flow.
 
 ## Current Status
 
-This repo now has a working MVP skeleton with:
+This repo now has a working MVP-plus skeleton with:
 
 - `Next.js + TypeScript` app router frontend and API routes
 - `Postgres + Redis` local infra via Docker Compose
@@ -12,16 +12,22 @@ This repo now has a working MVP skeleton with:
 - Optional interviewer profile setup flow
 - `BullMQ`-backed persona ingestion queue with a worker process
 - Persona queue observability in both setup UI and admin dashboard
-- Interview room with transcript persistence, stage-aware assistant turns, Monaco editor, local code execution, and streaming AI replies
+- Interview room with transcript persistence, stage-governed assistant turns, Monaco editor, local code execution, and streaming AI replies
+- Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, and actionable improvements
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
+- Dedicated STT handoff for spoken candidate turns, with browser transcript fallback
+- Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, and low-cost mode controls
 - `Vitest` unit/route tests and `Playwright` end-to-end tests
 
 ## Recent Progress
 
-- Added stage-aware coding interview orchestration:
+- Added stronger coding interview policy orchestration:
   - current stage is derived from transcripts, session events, and the latest code run
-  - assistant turns receive explicit stage context
+  - assistant turns receive explicit stage context plus policy context
+  - each stage has an explicit exit checklist
+  - hints now escalate by recent hint count, stage stall, and repeated failed runs
+  - prompt strategy can shift from `OPEN_ENDED` to `GUIDED` to `CONSTRAINED`
   - `STAGE_ADVANCED` is only recorded when the stage actually changes
 - Improved the interview room so it feels more like a real conversation:
   - streaming AI replies over `SSE`
@@ -29,6 +35,15 @@ This repo now has a working MVP skeleton with:
   - candidate speech interrupts AI playback and generation
   - adaptive silence thresholds for auto-submit
   - short interruption phrases like `wait` and `hold on` are ignored instead of being treated as full candidate turns
+  - spoken candidate turns can be refined through a dedicated OpenAI STT pass before being sent to the interviewer
+  - when OpenAI STT is configured, the room can prefer provider-led speech handling over browser transcript timing
+  - provider preview drafts can appear during speech, with final provider transcription used for the committed candidate turn
+- Added session-level cost controls and observability:
+  - `low-cost mode` can be enabled from setup
+  - LLM context is trimmed more aggressively in low-cost mode
+  - provider preview and STT calls are throttled more aggressively in low-cost mode
+  - per-session `LLM_USAGE_RECORDED` and `STT_USAGE_RECORDED` events now produce rough cost estimates
+  - interview room surfaces current LLM/STT call counts and estimated total cost
 - Replaced the static code panel with a real Monaco editor
 - Added session code execution flow:
   - `CodeSnapshot` records are created on run
@@ -53,6 +68,12 @@ This repo now has a working MVP skeleton with:
   - streaming routes
   - voice turn-taking policies
   - admin feed event descriptions
+- Added evaluation/report v0:
+  - `POST /api/sessions/:id/report` generates a structured feedback summary
+  - reports persist to `Evaluation`, `EvaluationDimensionScore`, and `FeedbackReport`
+  - report generation now emits explicit lifecycle events
+  - `/report/[id]` provides a standalone report page
+  - the report page includes a lightweight replay of stage transitions, hints, code runs, and key turns
 
 ## What Works Today
 
@@ -60,18 +81,28 @@ This repo now has a working MVP skeleton with:
 
 - `/setup`
   - Choose interview mode, level, language, company style, difficulty, and voice toggle
+  - Choose whether to run in `low-cost mode`
   - Optionally paste a public interviewer profile URL
   - Analyze the profile and watch queue state move through setup UI
 - `/interview/[id]`
   - Session room renders selected question and interviewer context
-  - Browser speech recognition can capture candidate speech into transcript storage
-  - AI assistant turns can be generated from recent transcript, current stage, persona context, and latest code run
+  - Browser speech recognition remains available as fallback
+  - When OpenAI STT is configured, spoken candidate turns can be handled in a provider-first voice mode
+  - Provider preview drafts can appear live while speaking
+  - Spoken candidate turns can be re-transcribed through a dedicated STT provider before persistence, with browser transcript fallback
+  - AI assistant turns can be generated from recent transcript, current stage, persona context, latest code run, and policy state
   - AI replies stream into the UI over `SSE`
   - Browser TTS speaks AI replies with a queued utterance model
   - Candidate speech can interrupt AI playback and generation
   - Continuous listening mode can auto-submit candidate turns after a content-aware silence threshold
+  - Room UI shows approximate LLM/STT usage counts and estimated session cost
   - Monaco editor is wired for coding sessions
   - Local sandbox execution supports Python and JavaScript today
+  - Feedback report v0 can be generated in-room and reloaded from persisted session data
+- `/report/[id]`
+  - Shows standalone evaluation summary and recommendation
+  - Displays dimension scores and actionable improvements
+  - Replays key session moments such as stage transitions, hint delivery, code runs, and final feedback generation
 - `/admin`
   - Inspect recent interviewer profiles
   - View raw queue job state
@@ -95,6 +126,10 @@ This repo now has a working MVP skeleton with:
 - `POST /api/sessions/:id/events`
 - `GET /api/sessions/:id/code-runs`
 - `POST /api/sessions/:id/code-runs`
+- `GET /api/sessions/:id/report`
+- `POST /api/sessions/:id/report`
+- `GET /api/stt/status`
+- `POST /api/stt/transcribe`
 - `GET /api/health`
 - `GET /api/health/db`
 
@@ -113,6 +148,7 @@ This repo now has a working MVP skeleton with:
 
 - `src/app/setup/page.tsx`
 - `src/app/interview/[id]/page.tsx`
+- `src/app/report/[id]/page.tsx`
 - `src/app/admin/page.tsx`
 
 ### Core Libraries
@@ -122,7 +158,10 @@ This repo now has a working MVP skeleton with:
 - `src/lib/health.ts`: DB and Redis health aggregation
 - `src/lib/admin/ops.ts`: admin dashboard data aggregation
 - `src/lib/assistant/stages.ts`: coding interview stage inference and progression helpers
+- `src/lib/assistant/policy.ts`: explicit stage policy, exit criteria, hint escalation, and prompt strategy selection
 - `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation and streaming
+- `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
+- `src/lib/evaluation/report.ts`: report generation and session feedback scoring
 - `src/lib/persona/queue.ts`: BullMQ queue helpers
 - `src/lib/persona/fake-ingestion.ts`: local persona ingestion simulation
 - `src/lib/persona/job-events.ts`: persona event persistence
@@ -183,7 +222,14 @@ GEMINI_API_KEY=""
 GEMINI_MODEL="gemini-2.5-flash"
 OPENAI_API_KEY=""
 OPENAI_MODEL="gpt-4.1-mini"
+OPENAI_STT_MODEL="gpt-4o-mini-transcribe"
 ```
+
+When `OPENAI_API_KEY` is set:
+
+- interviewer text generation can use OpenAI
+- dedicated STT can be enabled for spoken candidate turns
+- the room can switch into provider-first voice handling
 
 ## Test Commands
 
@@ -215,10 +261,11 @@ npm run build
 - Interviewer profile preview route behavior
 - Sessions route behavior
 - Assistant-turn fallback generation and stage-aware behavior
-- Stage inference and progression
+- Stage inference, policy decisions, and prompt strategy behavior
 - Streaming assistant-turn route behavior
 - Voice turn-taking policy behavior
 - Session code-run route behavior
+- Session report route behavior
 - Admin unified feed aggregation
 
 ### Playwright
@@ -231,27 +278,31 @@ npm run build
 - Persona ingestion is still simulated; it does not yet fetch and summarize real public web pages
 - Realtime AI conversation is still browser speech recognition plus `SSE` streaming rather than a full duplex low-latency voice stack
 - Browser speech recognition depends on Web Speech API availability and varies by browser
+- Dedicated STT and provider-first voice mode currently depend on `OPENAI_API_KEY` and use OpenAI audio transcription when configured
+- Live provider drafts are periodic previews rather than true token-level streaming ASR
 - Code execution is local-process based and currently supports Python and JavaScript only
 - Authentication is still stubbed around a demo user
-- Session lifecycle coverage is much better than before, but evaluation and report events are still shallow
+- Evaluation/report is intentionally lightweight v0 and should still become more rubric-driven over time
+- Replay is currently heuristic and event-driven, not yet a full stage-grouped interview playback view
 - Prisma generation on Windows can fail if `dev` or `worker` processes are locking the Prisma engine file
 
 ## Next Recommended Work
 
 ### Product and Backend
 
+- Group report replay by stage and add richer per-stage evidence
+- Push `promptStrategy` more deeply into provider-backed model replies, not just fallback behavior
 - Replace fake persona ingestion with real public-page fetching, extraction, and summarization
-- Add stronger interview policy on top of the new stage system:
-  - explicit exit criteria per stage
-  - hinting rules tied to stage
-  - code-run outcomes feeding stage transitions more directly
 - Expand code execution from local process execution to a stronger sandbox model
-- Add report generation and evaluation pipeline
+- Evolve report generation from v0 into a more rubric-driven evaluation pipeline
+- Push provider-first voice mode from periodic preview to true streaming STT/VAD
+- Add hard session budget controls on top of rough usage logging
 
 ### Queue and Observability
 
 - Add admin filters by status, source type, and time range
 - Add explicit per-session timeline and stage journey view in admin
+- Surface per-session replay markers directly in admin
 - Add queue metrics and failure counts
 - Add retry controls or requeue actions in admin
 
@@ -271,18 +322,17 @@ npm run build
 
 ### Milestone 1
 
-- Real persona ingestion pipeline
-- Better admin filtering
-- More worker and route tests
+- Stage-grouped replay in reports
+- Stronger prompt-strategy enforcement
+- More route and worker tests
 
 ### Milestone 2
 
-- Stronger realtime interview room
-- Better stage orchestration and room controls
-- Richer evaluation and replay signals
+- Real persona ingestion pipeline
+- Stronger execution sandbox
+- Richer evaluation, replay, and session analytics signals
 
 ### Milestone 3
 
-- Evaluation and feedback report generation
 - System design mode
 - Personalized study history and analytics
