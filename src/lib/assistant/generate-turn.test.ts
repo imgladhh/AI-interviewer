@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generateAssistantTurn, streamAssistantTurn } from "@/lib/assistant/generate-turn";
+import {
+  buildSessionMemorySummary,
+  generateAssistantTurn,
+  resetProviderCooldownsForTests,
+  streamAssistantTurn,
+} from "@/lib/assistant/generate-turn";
 
 describe("generateAssistantTurn", () => {
   const originalGeminiKey = process.env.GEMINI_API_KEY;
@@ -18,6 +23,7 @@ describe("generateAssistantTurn", () => {
     process.env.OPENAI_API_KEY = originalOpenAiKey;
     process.env.LLM_PROVIDER = originalProvider;
     global.fetch = originalFetch;
+    resetProviderCooldownsForTests();
     vi.restoreAllMocks();
   });
 
@@ -243,6 +249,50 @@ describe("generateAssistantTurn", () => {
     expect(result.reply).toMatch(/edge cases|test next/i);
   });
 
+  it("temporarily skips a rate-limited primary provider on the next turn", async () => {
+    process.env.GEMINI_API_KEY = "fake-gemini-key";
+    process.env.OPENAI_API_KEY = "fake-openai-key";
+    process.env.LLM_PROVIDER = "gemini";
+
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () => JSON.stringify({ error: { message: "rate limit exceeded" } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ output_text: "What edge cases would you test next before you call this solution done?" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ output_text: "Now tell me the exact expected output for the highest-risk boundary case." }),
+      } as Response) as typeof fetch;
+
+    const first = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Top K Frequent Elements",
+      questionPrompt: "Return the k most frequent elements.",
+      currentStage: "IMPLEMENTATION",
+      recentTranscripts: [{ speaker: "USER", text: "The code seems to work now." }],
+      latestExecutionRun: { status: "PASSED" },
+    });
+
+    const second = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Top K Frequent Elements",
+      questionPrompt: "Return the k most frequent elements.",
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [{ speaker: "USER", text: "I would test empty input first." }],
+      latestExecutionRun: { status: "PASSED" },
+    });
+
+    expect(first.source).toBe("openai");
+    expect(second.source).toBe("openai");
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps a non-question provider reply when the decision is to hold and listen", async () => {
     process.env.GEMINI_API_KEY = "fake-key";
     process.env.LLM_PROVIDER = "gemini";
@@ -313,4 +363,114 @@ describe("generateAssistantTurn", () => {
     expect(finalChunk?.source).toBe("fallback");
     expect(finalChunk?.reply).toMatch(/example|starting point|step by step/i);
   });
+
+  it("includes unresolved issues and missing evidence in session memory summary", () => {
+    const summary = buildSessionMemorySummary(
+      [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              target: "reasoning",
+              specificIssue: "Proof sketch is still missing.",
+            },
+          },
+        },
+      ],
+      createSignalSnapshot({
+        reasoningDepth: "thin",
+        testingDiscipline: "missing",
+        structuredEvidence: [
+          {
+            area: "correctness",
+            issue: "The candidate has intuition, but no proof sketch yet.",
+            behavior: "The candidate described the idea without showing why it must stay correct.",
+            evidence: "No proof sketch or invariant appeared in the latest turn.",
+            impact: "Correctness confidence is still weak.",
+            fix: "Ask for a short proof sketch or invariant.",
+          },
+        ],
+      }),
+      {
+        action: "probe_correctness",
+        target: "correctness",
+        question: "What invariant makes this correct?",
+        reason: "Need correctness evidence.",
+        confidence: 0.9,
+        policyAction: "PROBE_APPROACH",
+      },
+      "APPROACH_DISCUSSION",
+      null,
+    );
+
+    expect(summary).toMatch(/Unresolved issues/i);
+    expect(summary).toMatch(/Missing evidence/i);
+    expect(summary).toMatch(/correctness_proof/i);
+  });
+
+  it("includes answered targets and collected evidence in session memory summary", () => {
+    const summary = buildSessionMemorySummary(
+      [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              target: "testing",
+              action: "ask_for_test_case",
+            },
+          },
+        },
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              target: "tradeoff",
+              action: "probe_tradeoff",
+            },
+          },
+        },
+      ],
+      createSignalSnapshot({
+        testingDiscipline: "strong",
+        edgeCaseAwareness: "present",
+        complexityRigor: "strong",
+      }),
+      {
+        action: "move_stage",
+        target: "summary",
+        question: "Wrap up.",
+        reason: "The key evidence is already collected.",
+        confidence: 0.9,
+        policyAction: "WRAP_UP",
+      },
+      "TESTING_AND_COMPLEXITY",
+      { status: "PASSED" },
+    );
+
+    expect(summary).toMatch(/Targets already answered recently/i);
+    expect(summary).toMatch(/Collected evidence so far/i);
+    expect(summary).toMatch(/complexity|tradeoff|testing/i);
+  });
 });
+
+function createSignalSnapshot(overrides?: Partial<Parameters<typeof buildSessionMemorySummary>[1]>) {
+  return {
+    understanding: "clear" as const,
+    progress: "progressing" as const,
+    communication: "clear" as const,
+    codeQuality: "partial" as const,
+    algorithmChoice: "reasonable" as const,
+    edgeCaseAwareness: "partial" as const,
+    behavior: "structured" as const,
+    readyToCode: false,
+    reasoningDepth: "moderate" as const,
+    testingDiscipline: "partial" as const,
+    complexityRigor: "partial" as const,
+    confidence: 0.78,
+    evidence: ["Candidate explained the approach clearly."],
+    structuredEvidence: [],
+    summary: "Candidate is broadly progressing.",
+    trendSummary: "Candidate state is broadly stable relative to the previous snapshot.",
+    ...overrides,
+  };
+}

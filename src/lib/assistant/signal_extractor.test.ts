@@ -42,7 +42,40 @@ describe("extractCandidateSignals", () => {
     expect(snapshot.algorithmChoice).toBe("strong");
     expect(snapshot.communication).toBe("clear");
     expect(snapshot.behavior).toBe("structured");
+    expect(snapshot.readyToCode).toBe(true);
     expect(snapshot.reasoningDepth).toBe("deep");
+  });
+
+  it("marks readyToCode when the candidate already described the implementation loop and return condition", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "We can use a hash table while iterating the array. For each number x, we check whether target - x already exists, and if so we return both indices; otherwise we store the current index.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.readyToCode).toBe(true);
+    expect(snapshot.evidence.join(" ")).toMatch(/ready to start coding|implementation steps/i);
+  });
+
+  it("marks readyToCode when the candidate explicitly says they are ready to implement", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "The hash map approach is clear and I am ready to implement it now. We can revisit correctness after coding.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.readyToCode).toBe(true);
+    expect(snapshot.evidence.join(" ")).toMatch(/explicitly said they are ready to implement/i);
   });
 
   it("marks edge-case awareness as present when boundary conditions are named", () => {
@@ -244,6 +277,38 @@ describe("extractCandidateSignals", () => {
     });
 
     expect(snapshot.trendSummary).toMatch(/progress moved|testing discipline moved|complexity rigor changed/i);
+  });
+
+  it("lowers confidence when recent signal history strongly disagrees with the current snapshot", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "IMPLEMENTATION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "I think I am stuck again and I am not sure the logic is right.",
+        },
+      ],
+      recentEvents: [
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            signals: {
+              understanding: "clear",
+              progress: "done",
+              reasoningDepth: "deep",
+              testingDiscipline: "strong",
+              complexityRigor: "strong",
+            },
+          },
+        },
+      ],
+      latestExecutionRun: {
+        status: "ERROR",
+        stderr: "TypeError",
+      },
+    });
+
+    expect(snapshot.confidence).toBeLessThan(0.5);
   });
 });
 

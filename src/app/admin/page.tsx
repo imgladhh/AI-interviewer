@@ -168,6 +168,14 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 <MetricCard label="Reasoning Depth" value={String(detail.sessionSummary.latestSignals.reasoningDepth ?? "unknown")} />
                                 <MetricCard label="Testing Discipline" value={String(detail.sessionSummary.latestSignals.testingDiscipline ?? "unknown")} />
                                 <MetricCard label="Complexity Rigor" value={String(detail.sessionSummary.latestSignals.complexityRigor ?? "unknown")} />
+                                <MetricCard
+                                  label="Signal Confidence"
+                                  value={
+                                    typeof detail.sessionSummary.latestSignals.confidence === "number"
+                                      ? `${Math.round(detail.sessionSummary.latestSignals.confidence * 100)}%`
+                                      : "unknown"
+                                  }
+                                />
                               </div>
                               <dl style={definitionListStyle}>
                                 {Object.entries(detail.sessionSummary.latestSignals).map(([key, value]) => (
@@ -210,6 +218,46 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                   ))}
                                 </div>
                               ) : null}
+                              {detail.sessionSummary.unresolvedIssues.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Unresolved Issues</strong>
+                                  {detail.sessionSummary.unresolvedIssues.map((item) => (
+                                    <div key={`admin-unresolved-${item}`} style={panelStyle}>
+                                      {item}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {detail.sessionSummary.answeredTargets.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Answered Targets</strong>
+                                  {detail.sessionSummary.answeredTargets.map((item) => (
+                                    <div key={`admin-answered-target-${item}`} style={panelStyle}>
+                                      {item}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {detail.sessionSummary.collectedEvidence.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Collected Evidence</strong>
+                                  {detail.sessionSummary.collectedEvidence.map((item) => (
+                                    <div key={`admin-collected-evidence-${item}`} style={panelStyle}>
+                                      {item}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {detail.sessionSummary.missingEvidence.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Missing Evidence</strong>
+                                  {detail.sessionSummary.missingEvidence.map((item) => (
+                                    <div key={`admin-missing-evidence-${item}`} style={panelStyle}>
+                                      {item}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No signal snapshot recorded yet.</p>
@@ -219,16 +267,34 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         <div style={panelStyle}>
                           <strong>Latest Interviewer Decision</strong>
                           {detail.sessionSummary.latestDecision ? (
-                            <dl style={definitionListStyle}>
-                              {Object.entries(detail.sessionSummary.latestDecision).map(([key, value]) => (
+                            <>
+                              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", marginTop: 12, marginBottom: 12 }}>
+                                <MetricCard
+                                  label="Decision Confidence"
+                                  value={
+                                    typeof detail.sessionSummary.latestDecision.confidence === "number"
+                                      ? `${Math.round(Number(detail.sessionSummary.latestDecision.confidence) * 100)}%`
+                                      : "unknown"
+                                  }
+                                />
+                              </div>
+                              <dl style={definitionListStyle}>
+                                {Object.entries(detail.sessionSummary.latestDecision).map(([key, value]) => (
                                 <div key={key} style={definitionRowStyle}>
                                   <dt style={definitionTermStyle}>{formatLabel(key)}</dt>
                                   <dd style={definitionValueStyle}>
                                     {Array.isArray(value) ? value.join(", ") : String(value)}
                                   </dd>
                                 </div>
-                              ))}
-                            </dl>
+                                ))}
+                              </dl>
+                              {detail.sessionSummary.evidenceFocus ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Evidence Focus This Turn</strong>
+                                  <div style={panelStyle}>{detail.sessionSummary.evidenceFocus}</div>
+                                </div>
+                              ) : null}
+                            </>
                           ) : (
                             <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No decision snapshot recorded yet.</p>
                           )}
@@ -272,6 +338,47 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                   </span>
                                 </div>
                                 <div style={{ color: "var(--muted)" }}>{item.summary}</div>
+                                {item.evidenceFocus ? (
+                                  <div style={{ color: "var(--muted)" }}>
+                                    <strong>Evidence focus:</strong> {item.evidenceFocus}
+                                  </div>
+                                ) : null}
+                                {item.answeredTargets && item.answeredTargets.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.answeredTargets.slice(0, 4).map((target) => (
+                                      <Badge key={`${item.id}-answered-${target}`} tone="neutral">
+                                        answered: {target}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {item.collectedEvidence && item.collectedEvidence.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.collectedEvidence.slice(0, 4).map((evidence) => (
+                                      <Badge key={`${item.id}-collected-${evidence}`} tone="info">
+                                        collected: {evidence}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {item.unresolvedIssues && item.unresolvedIssues.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.unresolvedIssues.slice(0, 3).map((issue) => (
+                                      <Badge key={`${item.id}-unresolved-${issue}`} tone="info">
+                                        unresolved: {issue}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {item.missingEvidence && item.missingEvidence.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.missingEvidence.slice(0, 3).map((evidence) => (
+                                      <Badge key={`${item.id}-missing-${evidence}`} tone="neutral">
+                                        missing: {evidence}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : null}
                                 <details>
                                   <summary style={{ cursor: "pointer", color: "var(--accent-strong)", fontWeight: 700 }}>
                                     View payload
@@ -536,6 +643,8 @@ function evidenceAreaLabel(area?: string) {
 function formatLabel(value: string) {
   return value.replace(/([A-Z])/g, " $1").replaceAll("_", " ").trim();
 }
+
+
 
 
 

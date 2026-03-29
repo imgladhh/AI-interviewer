@@ -1,4 +1,5 @@
 ﻿import { prisma } from "@/lib/db";
+import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import { describeCodingStage, isCodingInterviewStage } from "@/lib/assistant/stages";
 import { getPersonaJobSnapshot, type PersonaJobSnapshot } from "@/lib/persona/queue";
 
@@ -44,6 +45,11 @@ export type SessionSummary = {
   stageJourney: string[];
   latestSignals: Record<string, unknown> | null;
   latestDecision: Record<string, unknown> | null;
+  answeredTargets: string[];
+  collectedEvidence: string[];
+  unresolvedIssues: string[];
+  missingEvidence: string[];
+  evidenceFocus: string | null;
   latestCodeRunStatus: string | null;
   hintCount: number;
   failedRunCount: number;
@@ -56,6 +62,11 @@ export type SessionTimelineItem = {
   at: string;
   title: string;
   summary: string;
+  answeredTargets?: string[];
+  collectedEvidence?: string[];
+  unresolvedIssues?: string[];
+  missingEvidence?: string[];
+  evidenceFocus?: string | null;
   payload: Record<string, unknown>;
 };
 
@@ -219,6 +230,8 @@ function summarizeSession(
   const latestSignalEvent = [...ordered].reverse().find((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED");
   const latestDecisionEvent = [...ordered].reverse().find((event) => event.eventType === "DECISION_RECORDED");
   const latestCodeRunEvent = [...ordered].reverse().find((event) => event.eventType === "CODE_RUN_COMPLETED");
+  const latestSignals = latestSignalEvent ? asRecord(asRecord(latestSignalEvent.payloadJson).signals) : null;
+  const latestDecision = latestDecisionEvent ? asRecord(asRecord(latestDecisionEvent.payloadJson).decision) : null;
   const hintCount = ordered.filter((event) => event.eventType === "HINT_SERVED").length;
   const failedRunCount = ordered.filter((event) => {
     if (event.eventType !== "CODE_RUN_COMPLETED") {
@@ -229,13 +242,41 @@ function summarizeSession(
     return status === "FAILED" || status === "ERROR" || status === "TIMEOUT";
   }).length;
 
+  const ledger =
+    latestSignals
+      ? buildMemoryLedger({
+          currentStage: isCodingInterviewStage(currentStage) ? currentStage : "PROBLEM_UNDERSTANDING",
+          recentEvents: ordered.map((event) => ({
+            eventType: event.eventType,
+            payloadJson: event.payloadJson,
+          })),
+          signals: latestSignals as never,
+          latestExecutionRun: latestCodeRunEvent
+            ? ({
+                status: stringValue(asRecord(latestCodeRunEvent.payloadJson).status) as
+                  | "PASSED"
+                  | "FAILED"
+                  | "ERROR"
+                  | "TIMEOUT",
+                stdout: stringValue(asRecord(latestCodeRunEvent.payloadJson).stdout) ?? null,
+                stderr: stringValue(asRecord(latestCodeRunEvent.payloadJson).stderr) ?? null,
+              } as const)
+            : null,
+        })
+      : null;
+
   return {
     sessionId,
     currentStage,
     currentStageLabel: describeStage(currentStage) ?? currentStage,
     stageJourney: [...new Set(stageJourneyRaw.map((stage) => describeStage(stage) ?? stage))],
-    latestSignals: latestSignalEvent ? asRecord(asRecord(latestSignalEvent.payloadJson).signals) : null,
-    latestDecision: latestDecisionEvent ? asRecord(asRecord(latestDecisionEvent.payloadJson).decision) : null,
+    latestSignals,
+    latestDecision,
+    answeredTargets: ledger?.answeredTargets ?? [],
+    collectedEvidence: ledger?.collectedEvidence ?? [],
+    unresolvedIssues: ledger?.unresolvedIssues ?? [],
+    missingEvidence: ledger?.missingEvidence ?? [],
+    evidenceFocus: latestDecision ? stringValue(latestDecision.specificIssue) ?? stringValue(latestDecision.target) : null,
     latestCodeRunStatus: latestCodeRunEvent ? stringValue(asRecord(latestCodeRunEvent.payloadJson).status) : null,
     hintCount,
     failedRunCount,
@@ -276,6 +317,17 @@ function buildSessionTimeline(
         const signals = asRecord(payload.signals);
         const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
         const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
+        const signalLedger = buildMemoryLedger({
+          currentStage: "PROBLEM_UNDERSTANDING",
+          recentEvents: events
+            .filter((candidate) => candidate.eventTime.getTime() <= event.eventTime.getTime())
+            .map((candidate) => ({
+              eventType: candidate.eventType,
+              payloadJson: candidate.payloadJson,
+            })),
+          signals: signals as never,
+          latestExecutionRun: null,
+        });
         return {
           id: `${event.eventType}-${event.eventTime.toISOString()}`,
           kind: "signal" as const,
@@ -284,6 +336,10 @@ function buildSessionTimeline(
           summary: primaryIssue?.issue
             ? `Issue spotted: ${String(primaryIssue.issue)}`
             : `understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, quality=${stringOrFallback(signals.codeQuality, "unknown")}`,
+          unresolvedIssues: signalLedger.unresolvedIssues,
+          missingEvidence: signalLedger.missingEvidence,
+          answeredTargets: signalLedger.answeredTargets,
+          collectedEvidence: signalLedger.collectedEvidence,
           payload,
         };
       }
@@ -296,6 +352,9 @@ function buildSessionTimeline(
           at: event.eventTime.toISOString(),
           title: "Interviewer decision",
           summary: `${stringOrFallback(decision.action, "unknown action")} -> ${stringOrFallback(decision.target, "unknown target")}`,
+          evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
+          answeredTargets: [],
+          collectedEvidence: [],
           payload,
         };
       }
@@ -487,5 +546,8 @@ function describeStage(value: unknown) {
 
   return describeCodingStage(value);
 }
+
+
+
 
 

@@ -1,5 +1,7 @@
 ﻿import Link from "next/link";
 import { notFound } from "next/navigation";
+import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
+import { isCodingInterviewStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
 
 type ReportPageProps = {
@@ -115,6 +117,11 @@ type CandidateStateTimelineItem = {
   sortTime: number;
   title: string;
   summary: string;
+  answeredTargets?: string[];
+  collectedEvidence?: string[];
+  unresolvedIssues?: string[];
+  missingEvidence?: string[];
+  evidenceFocus?: string | null;
   payload: Record<string, unknown>;
 };
 
@@ -177,6 +184,24 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     reportJson,
   });
   const candidateStateTimeline = buildCandidateStateTimeline(session.events);
+  const reportLedger =
+    reportJson.candidateState
+      ? buildMemoryLedger({
+          currentStage:
+            typeof reportJson.currentStage === "string" && isCodingInterviewStage(reportJson.currentStage)
+              ? reportJson.currentStage
+              : "PROBLEM_UNDERSTANDING",
+          recentEvents: session.events.map((event) => ({ eventType: event.eventType, payloadJson: event.payloadJson })),
+          signals: reportJson.candidateState as never,
+          latestExecutionRun: session.executionRuns.at(-1)
+            ? ({
+                status: session.executionRuns.at(-1)!.status,
+                stdout: session.executionRuns.at(-1)!.stdout,
+                stderr: session.executionRuns.at(-1)!.stderr,
+              } as const)
+            : null,
+        })
+      : null;
 
   return (
     <main style={pageStyle}>
@@ -251,7 +276,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 <MetricRow label="Testing Discipline" value={reportJson.candidateState.testingDiscipline ?? "unknown"} />
                 <MetricRow label="Complexity Rigor" value={reportJson.candidateState.complexityRigor ?? "unknown"} />
                 <MetricRow
-                  label="Confidence"
+                  label="Signal Confidence"
                   value={
                     typeof reportJson.candidateState.confidence === "number"
                       ? `${Math.round(reportJson.candidateState.confidence * 100)}%`
@@ -316,7 +341,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 <MetricRow label="Target" value={reportJson.latestDecision.target ?? "unknown"} />
                 <MetricRow label="Policy Action" value={reportJson.latestDecision.policyAction ?? "unknown"} />
                 <MetricRow
-                  label="Confidence"
+                  label="Decision Confidence"
                   value={
                     typeof reportJson.latestDecision.confidence === "number"
                       ? `${Math.round(reportJson.latestDecision.confidence * 100)}%`
@@ -354,6 +379,58 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
               <p style={mutedParagraphStyle}>No interviewer decision snapshot was captured for this session.</p>
             )}
           </article>
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>Memory Ledger</h2>
+          <div style={{ display: "grid", gap: 12 }}>
+            {reportLedger ? (
+              <>
+                {reportLedger.unresolvedIssues.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Unresolved Issues</strong>
+                    {reportLedger.unresolvedIssues.map((item) => (
+                      <div key={`report-ledger-unresolved-${item}`} style={listItemStyle}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {reportLedger.answeredTargets.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Answered Targets</strong>
+                    {reportLedger.answeredTargets.map((item) => (
+                      <div key={`report-ledger-answered-${item}`} style={listItemStyle}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {reportLedger.collectedEvidence.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Collected Evidence</strong>
+                    {reportLedger.collectedEvidence.map((item) => (
+                      <div key={`report-ledger-collected-${item}`} style={listItemStyle}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {reportLedger.missingEvidence.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Missing Evidence</strong>
+                    {reportLedger.missingEvidence.map((item) => (
+                      <div key={`report-ledger-missing-${item}`} style={listItemStyle}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {reportJson.latestDecision?.specificIssue || reportJson.latestDecision?.target ? (
+                  <div style={listItemStyle}>
+                    <strong>Evidence Focus This Turn</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                      {reportJson.latestDecision?.specificIssue ?? reportJson.latestDecision?.target}
+                    </p>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p style={mutedParagraphStyle}>No memory-ledger snapshot is available for this report yet.</p>
+            )}
+          </div>
         </section>
 
         <section style={panelStyle}>
@@ -466,6 +543,47 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     <span style={{ color: "var(--muted)", fontSize: 13 }}>{item.time}</span>
                   </div>
                   <p style={mutedParagraphStyle}>{item.summary}</p>
+                  {item.evidenceFocus ? (
+                    <p style={mutedParagraphStyle}>
+                      <strong>Evidence focus:</strong> {item.evidenceFocus}
+                    </p>
+                  ) : null}
+                  {item.answeredTargets && item.answeredTargets.length > 0 ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.answeredTargets.slice(0, 4).map((target) => (
+                        <span key={`${item.id}-answered-${target}`} style={stagePillStyle}>
+                          answered: {target}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {item.collectedEvidence && item.collectedEvidence.length > 0 ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.collectedEvidence.slice(0, 4).map((evidence) => (
+                        <span key={`${item.id}-collected-${evidence}`} style={stagePillStyle}>
+                          collected: {evidence}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {item.unresolvedIssues && item.unresolvedIssues.length > 0 ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.unresolvedIssues.slice(0, 3).map((issue) => (
+                        <span key={`${item.id}-unresolved-${issue}`} style={stagePillStyle}>
+                          unresolved: {issue}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {item.missingEvidence && item.missingEvidence.length > 0 ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.missingEvidence.slice(0, 3).map((evidence) => (
+                        <span key={`${item.id}-missing-${evidence}`} style={stagePillStyle}>
+                          missing: {evidence}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <details>
                     <summary style={{ cursor: "pointer", color: "var(--accent-strong)", fontWeight: 700 }}>
                       View payload
@@ -717,6 +835,14 @@ function buildCandidateStateTimeline(
         const signals = asRecord(payload.signals);
         const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
         const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
+        const signalLedger = buildMemoryLedger({
+          currentStage: "PROBLEM_UNDERSTANDING",
+          recentEvents: events
+            .filter((candidate) => candidate.eventTime.getTime() <= event.eventTime.getTime())
+            .map((candidate) => ({ eventType: candidate.eventType, payloadJson: candidate.payloadJson })),
+          signals: signals as never,
+          latestExecutionRun: null,
+        });
         return {
           id: event.id,
           kind: "signal" as const,
@@ -727,6 +853,10 @@ function buildCandidateStateTimeline(
             primaryIssue?.issue ? `Observed issue: ${String(primaryIssue.issue)}` :
             stringValue(signals.summary) ??
             `understanding=${stringValue(signals.understanding) ?? "unknown"}, progress=${stringValue(signals.progress) ?? "unknown"}`,
+          unresolvedIssues: signalLedger.unresolvedIssues,
+          missingEvidence: signalLedger.missingEvidence,
+          answeredTargets: signalLedger.answeredTargets,
+          collectedEvidence: signalLedger.collectedEvidence,
           payload,
         };
       }
@@ -740,6 +870,9 @@ function buildCandidateStateTimeline(
           sortTime: event.eventTime.getTime(),
           title: "Interviewer decision",
           summary: `${stringValue(decision.action) ?? "decision"} -> ${stringValue(decision.target) ?? "unknown target"}`,
+          evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
+          answeredTargets: [],
+          collectedEvidence: [],
           payload,
         };
       }
@@ -973,6 +1106,18 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

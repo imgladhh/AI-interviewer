@@ -947,6 +947,14 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
           }
         }
       }
+    } catch (error) {
+      if (isExpectedAbortError(error)) {
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : "Unable to generate assistant reply.";
+      setRoomNotice(message);
+      throw error;
     } finally {
       assistantStreamAbortRef.current = null;
       setIsAssistantThinking(false);
@@ -1204,7 +1212,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     const wasStreaming = Boolean(assistantStreamAbortRef.current) || Boolean(assistantDraft);
     const wasSpeaking = voiceState === "speaking";
 
-    assistantStreamAbortRef.current?.abort();
+    assistantStreamAbortRef.current?.abort("ai_turn_interrupted");
     assistantStreamAbortRef.current = null;
     voiceAdapterRef.current?.cancelSpeaking();
     setAssistantDraft("");
@@ -1231,6 +1239,20 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       transcriptProvider: "browser-tts",
     });
     await voiceAdapterRef.current?.speakText(text);
+  }
+
+  function isExpectedAbortError(error: unknown) {
+    if (!error) {
+      return false;
+    }
+
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    return (
+      message.includes("abort") ||
+      message.includes("aborted") ||
+      message.includes("signal is aborted") ||
+      message.includes("ai_turn_interrupted")
+    );
   }
 
   return (

@@ -133,6 +133,9 @@ export function inferSuggestedCodingStage(input: {
   const combined = `${input.reply ?? ""} ${input.latestUserTurn ?? ""}`.toLowerCase();
 
   if (/\b(restate|clarify|constraint|input|output)\b/.test(combined)) {
+    if (currentStage === "IMPLEMENTATION" || currentStage === "TESTING_AND_COMPLEXITY" || currentStage === "WRAP_UP") {
+      return currentStage;
+    }
     return "PROBLEM_UNDERSTANDING";
   }
 
@@ -141,14 +144,17 @@ export function inferSuggestedCodingStage(input: {
   }
 
   if (/\b(edge case|test|complexity|time complexity|space complexity|correctness)\b/.test(combined)) {
-    return "TESTING_AND_COMPLEXITY";
+    return currentStage === "WRAP_UP" ? "WRAP_UP" : "TESTING_AND_COMPLEXITY";
   }
 
   if (/\b(code|implement|write|function|loop|pointer|index)\b/.test(combined)) {
-    return "IMPLEMENTATION";
+    return currentStage === "TESTING_AND_COMPLEXITY" || currentStage === "WRAP_UP" ? currentStage : "IMPLEMENTATION";
   }
 
   if (/\b(approach|example|walk me through|tradeoff|data structure|algorithm)\b/.test(combined)) {
+    if (currentStage === "IMPLEMENTATION" || currentStage === "TESTING_AND_COMPLEXITY" || currentStage === "WRAP_UP") {
+      return currentStage;
+    }
     return "APPROACH_DISCUSSION";
   }
 

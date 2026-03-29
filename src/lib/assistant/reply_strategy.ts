@@ -10,6 +10,8 @@ export function describeReplyStrategy(
   const issueStyle = describeIssueStyle(decision.specificIssue);
 
   switch (decision.action) {
+    case "ask_for_clarification":
+      return `Clarify before you judge. Ask the candidate to restate one tiny example, assumption, or expected state so the interviewer can reduce uncertainty. Trend context: ${trend}`;
     case "hold_and_listen":
       return `Be brief and non-intrusive. Give the candidate room to continue, while lightly naming the one invariant, branch, or state update worth narrating. Trend context: ${trend}`;
     case "ask_for_reasoning":
@@ -51,6 +53,12 @@ export function buildFallbackReplyFromDecision(input: {
   const issueType = classifyIssueType(decision.specificIssue);
 
   switch (decision.action) {
+    case "ask_for_clarification":
+      return chooseVariation(
+        "I want to make sure I am reading your state correctly. Walk me through one tiny example and tell me the exact state or output you expect there.",
+        previousAiTurn,
+        "Before I push further, restate the next step on one small example and tell me what you expect to happen.",
+      );
     case "hold_and_listen":
       return chooseVariation(
         improving

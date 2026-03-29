@@ -9,6 +9,7 @@ import {
 } from "@/lib/assistant/policy";
 import { buildFallbackReplyFromDecision, describeReplyStrategy } from "@/lib/assistant/reply_strategy";
 import { extractCandidateSignalsSmart, type CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
+import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import {
   describeCodingStage,
   inferSuggestedCodingStage,
@@ -72,6 +73,9 @@ type GenerateAssistantTurnResult = {
   };
 };
 
+const PROVIDER_COOLDOWN_MS = 90_000;
+const providerCooldowns: Partial<Record<"gemini" | "openai", number>> = {};
+
 export type StreamingAssistantTurnChunk = {
   textDelta?: string;
   final?: GenerateAssistantTurnResult;
@@ -103,6 +107,7 @@ export async function generateAssistantTurn(
           provider: "gemini",
           message: error instanceof Error ? error.message : "Gemini request failed.",
         };
+        rememberProviderFailure("gemini", providerFailure.message);
         logProviderFallback("gemini", providerFailure.message);
       }
       continue;
@@ -121,6 +126,7 @@ export async function generateAssistantTurn(
           provider: "openai",
           message: error instanceof Error ? error.message : "OpenAI request failed.",
         };
+        rememberProviderFailure("openai", providerFailure.message);
         logProviderFallback("openai", providerFailure.message);
       }
     }
@@ -153,6 +159,7 @@ export async function* streamAssistantTurn(
         provider: "gemini",
         message: "Gemini did not produce a reply for this turn.",
       };
+      rememberProviderFailure("gemini", providerFailure.message);
       logProviderFallback("gemini", providerFailure.message);
       continue;
     }
@@ -166,6 +173,7 @@ export async function* streamAssistantTurn(
         provider: "openai",
         message: "OpenAI did not produce a reply for this turn.",
       };
+      rememberProviderFailure("openai", providerFailure.message);
       logProviderFallback("openai", providerFailure.message);
     }
   }
@@ -270,7 +278,13 @@ function resolveProviderSequence() {
     sequence.push("openai");
   }
 
-  return sequence;
+  const now = Date.now();
+  const available = sequence.filter((provider) => {
+    const cooldownUntil = providerCooldowns[provider];
+    return !cooldownUntil || cooldownUntil <= now;
+  });
+
+  return available.length > 0 ? available : sequence;
 }
 
 async function generateWithOpenAI(
@@ -635,6 +649,13 @@ function buildInterviewerPrompt(
     .slice(input.lowCostMode ? -2 : -4)
     .map((item) => `${item.speaker}: ${truncate(item.text, input.lowCostMode ? 140 : 220)}`)
     .join("\n");
+  const sessionMemory = buildSessionMemorySummary(
+    input.recentEvents,
+    signals,
+    decision,
+    input.currentStage,
+    input.latestExecutionRun,
+  );
 
   return [
     `Mode: ${input.mode}`,
@@ -647,6 +668,7 @@ function buildInterviewerPrompt(
     `Interview policy:\n${formatCodingInterviewPolicy(policy)}`,
     `Candidate state snapshot: ${signals.summary}`,
     `Candidate state trend: ${signals.trendSummary ?? "No clear state trend yet."}`,
+    `Session memory: ${sessionMemory}`,
     `Candidate state confidence: ${signals.confidence}`,
     `Candidate evidence:\n- ${signals.evidence.join("\n- ")}`,
     signals.structuredEvidence.length > 0
@@ -681,6 +703,7 @@ function buildInterviewerPrompt(
     decision.hintLevel ? `Required hint level: ${decision.hintLevel}` : null,
     decision.suggestedStage ? `Suggested next stage after this turn: ${decision.suggestedStage}` : null,
     `Prompt strategy: ${policy.promptStrategy}. OPEN_ENDED means broader probing; GUIDED means narrower coaching; CONSTRAINED means ask the candidate to focus on one specific next step.`,
+    improvingOrWorseningInstruction(signals.trendSummary),
     `Persona summary: ${input.personaSummary ?? "generic interviewer"}`,
     `Applied prompt context: ${input.appliedPromptContext ?? "none"}`,
     input.latestExecutionRun
@@ -693,6 +716,9 @@ function buildInterviewerPrompt(
     "The reply should explicitly align with the decision engine target and should usually reuse the decision engine question semantically, even if you rephrase it naturally.",
     "If the decision action is give_hint, provide a hint and not a generic probe.",
     "If the decision action is ask_for_test_case or ask_for_complexity, ask exactly for those signals rather than a broad open-ended follow-up.",
+    "If the decision action is ask_for_clarification, do not pretend certainty. Ask a tiny-example or expectation-check question first.",
+    "If the recent state trend is worsening, reduce breadth and ask a narrower, more local follow-up.",
+    "If the recent state trend is improving, do not over-interrupt. Keep the candidate moving while still protecting the key signal the decision engine wants.",
     "Prefer 1 or 2 sentences. The last sentence should usually be the concrete follow-up or instruction.",
     "Advance the interview deliberately. Stay in the current stage unless there is a clear reason to move forward.",
     "Do not repeat the previous AI sentence verbatim.",
@@ -1224,22 +1250,111 @@ function logProviderFallback(provider: "gemini" | "openai" | "fallback", message
   console.warn(`[assistant-turn] ${provider}: ${message}`);
 }
 
+export function resetProviderCooldownsForTests() {
+  delete providerCooldowns.gemini;
+  delete providerCooldowns.openai;
+}
+
+function rememberProviderFailure(provider: "gemini" | "openai", message: string) {
+  if (isRetryableProviderFailure(message)) {
+    providerCooldowns[provider] = Date.now() + PROVIDER_COOLDOWN_MS;
+  }
+}
+
 async function buildProviderError(provider: "gemini" | "openai", response: Response) {
   const text = await response.text().catch(() => "");
+  const status = response.status;
 
   if (!text.trim()) {
-    return new Error(`${provider} request failed with status ${response.status}.`);
+    const error = new Error(`${provider} request failed with status ${status}.`);
+    rememberProviderFailure(provider, error.message);
+    return error;
   }
 
   try {
     const payload = JSON.parse(text) as Record<string, unknown>;
     const message =
       readProviderErrorMessage(payload) ??
-      `${provider} request failed with status ${response.status}.`;
-    return new Error(message);
+      `${provider} request failed with status ${status}.`;
+    const error = new Error(message);
+    rememberProviderFailure(provider, `${status} ${message}`);
+    return error;
   } catch {
-    return new Error(`${provider} request failed with status ${response.status}: ${truncate(text, 220)}`);
+    const error = new Error(`${provider} request failed with status ${status}: ${truncate(text, 220)}`);
+    rememberProviderFailure(provider, `${status} ${text}`);
+    return error;
   }
+}
+
+function isRetryableProviderFailure(message: string) {
+  return /\b429\b|rate limit|resource exhausted|too many requests|quota|temporar|unavailable|overloaded/i.test(
+    message,
+  );
+}
+
+export function buildSessionMemorySummary(
+  recentEvents: GenerateAssistantTurnInput["recentEvents"],
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
+  currentStage?: string | null,
+  latestExecutionRun?: ExecutionRunLike | null,
+) {
+  const events = recentEvents ?? [];
+  const stage = normalizeStage(currentStage);
+  const ledger = buildMemoryLedger({
+    currentStage: stage,
+    recentEvents: events,
+    signals,
+    latestExecutionRun,
+  });
+
+  return [
+    ledger.answeredTargets.length > 0
+      ? `Targets already answered recently: ${ledger.answeredTargets.slice(0, 4).join(", ")}. Do not immediately ask for the same target again unless new evidence reopens it.`
+      : "No answered-target memory is available yet.",
+    ledger.collectedEvidence.length > 0
+      ? `Collected evidence so far: ${ledger.collectedEvidence.slice(0, 4).join(", ")}. Prefer gathering missing evidence instead of repeating what is already on record.`
+      : "No collected-evidence memory is available yet.",
+    ledger.unresolvedIssues.length > 0
+      ? `Unresolved issues still in play: ${ledger.unresolvedIssues.slice(0, 3).join(" | ")}`
+      : "No unresolved issues are currently standing out.",
+    ledger.resolvedIssues.length > 0
+      ? `Recently resolved issues: ${ledger.resolvedIssues.slice(0, 2).join(" | ")}. Do not keep pressing them unless fresh evidence reopens them.`
+      : "No resolved issues have been captured yet.",
+    ledger.recentlyProbedTargets.length > 0
+      ? `Recently pressed targets: ${[...new Set(ledger.recentlyProbedTargets)].slice(0, 3).join(", ")}. Avoid repeating the same target unless there is fresh evidence or the candidate still has not answered it.`
+      : "No recently pressed targets captured yet.",
+    ledger.recentlyProbedIssues.length > 0
+      ? `Issues already asked about recently: ${ledger.recentlyProbedIssues.slice(0, 3).join(" | ")}. Avoid re-asking them verbatim.`
+      : "No recently asked issue list is available yet.",
+    ledger.missingEvidence.length > 0
+      ? `Missing evidence the interviewer should still collect before moving on: ${ledger.missingEvidence.join(", ")}.`
+      : "No major missing evidence is currently flagged.",
+    ledger.repeatedFailurePattern
+      ? `Repeated failure pattern: ${ledger.repeatedFailurePattern}.`
+      : "No repeated failure pattern is currently dominant.",
+    `Recent failed runs: ${ledger.recentFailedRuns}.`,
+    `Recent hints: ${ledger.recentHints}.`,
+    ledger.persistentWeakness ? `Persistent weakness across recent turns: ${ledger.persistentWeakness}.` : "No persistent weakness is dominating yet.",
+    `Current decision to execute: ${decision.action} -> ${decision.target}.`,
+    ...ledger.summary,
+  ].join(" ");
+}
+
+function improvingOrWorseningInstruction(trendSummary?: string) {
+  if (!trendSummary) {
+    return "State trend instruction: no strong trend signal yet.";
+  }
+
+  if (/\bfrom (stuck|partial|missing|buggy) to (progressing|done|present|strong|moderate|deep|correct)\b/i.test(trendSummary)) {
+    return "State trend instruction: the candidate appears to be improving, so avoid broad resets and keep the turn short and momentum-preserving.";
+  }
+
+  if (/\bfrom (progressing|correct|present|deep|strong) to (stuck|buggy|missing|thin)\b/i.test(trendSummary)) {
+    return "State trend instruction: the candidate appears to be getting less stable, so narrow the turn and focus on one local issue only.";
+  }
+
+  return "State trend instruction: the candidate state is broadly stable, so keep the pacing measured and targeted.";
 }
 
 function readProviderErrorMessage(payload: Record<string, unknown>) {
@@ -1309,7 +1424,7 @@ function enforceDecisionCompliance(
     !normalized.includes("?") &&
     !mentionsTarget;
 
-  const requiresConcreteFollowup = ["ask_for_test_case", "ask_for_complexity", "ask_for_debug_plan", "give_hint"].includes(
+  const requiresConcreteFollowup = ["ask_for_test_case", "ask_for_complexity", "ask_for_debug_plan", "give_hint", "ask_for_clarification"].includes(
     decision.action,
   );
   const allowsNonQuestion = ["encourage_and_continue", "hold_and_listen"].includes(decision.action);

@@ -44,6 +44,7 @@ export async function POST(request: Request) {
       type: input.mode,
       isActive: true,
       ...(input.companyStyle ? { companyStyle: input.companyStyle } : {}),
+      ...(input.difficulty ? { difficulty: input.difficulty } : {}),
       ...(input.targetLevel ? { levelTarget: input.targetLevel } : {}),
     },
     orderBy: { createdAt: "asc" },

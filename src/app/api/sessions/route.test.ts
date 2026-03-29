@@ -95,6 +95,16 @@ describe("POST /api/sessions", () => {
     expect(payload.data.interviewerContextApplied).toBe(false);
     expect(prisma.sessionInterviewerContext.create).not.toHaveBeenCalled();
     expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(3);
+    expect(prisma.question.findFirst).toHaveBeenCalledWith({
+      where: {
+        type: "CODING",
+        isActive: true,
+        companyStyle: "GENERIC",
+        difficulty: "MEDIUM",
+        levelTarget: "SDE2",
+      },
+      orderBy: { createdAt: "asc" },
+    });
   });
 
   it("creates interviewer context when a ready persona profile is provided", async () => {
@@ -208,5 +218,56 @@ describe("POST /api/sessions", () => {
     expect(response.status).toBe(404);
     expect(payload.ok).toBe(false);
     expect(payload.message).toMatch(/Interviewer profile not found/i);
+  });
+
+  it("uses the requested difficulty so easy coding sessions can pick Two Sum", async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: "user-1",
+      email: "demo@example.com",
+    });
+    prisma.question.findFirst.mockResolvedValue({
+      id: "question-two-sum",
+      title: "Two Sum",
+    });
+    prisma.interviewSession.create.mockResolvedValue({
+      id: "session-two-sum",
+      status: "READY",
+      personaStatus: null,
+      questionId: "question-two-sum",
+    });
+    prisma.sessionEvent.create.mockResolvedValue({
+      id: "event-two-sum",
+    });
+
+    const { POST } = await import("@/app/api/sessions/route");
+    const request = new Request("http://localhost/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "CODING",
+        targetLevel: "SDE1",
+        selectedLanguage: "C++",
+        companyStyle: "GENERIC",
+        difficulty: "EASY",
+        voiceEnabled: true,
+        personaEnabled: false,
+      }),
+    });
+
+    const response = await POST(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(payload.data.questionId).toBe("question-two-sum");
+    expect(prisma.question.findFirst).toHaveBeenCalledWith({
+      where: {
+        type: "CODING",
+        isActive: true,
+        companyStyle: "GENERIC",
+        difficulty: "EASY",
+        levelTarget: "SDE1",
+      },
+      orderBy: { createdAt: "asc" },
+    });
   });
 });

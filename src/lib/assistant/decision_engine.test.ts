@@ -10,6 +10,7 @@ const baseSignals: CandidateSignalSnapshot = {
   algorithmChoice: "reasonable",
   edgeCaseAwareness: "partial",
   behavior: "structured",
+  readyToCode: false,
   reasoningDepth: "moderate",
   testingDiscipline: "partial",
   complexityRigor: "partial",
@@ -109,6 +110,111 @@ describe("makeCandidateDecision", () => {
     expect(result.question).toMatch(/runtime|efficient|alternative|tradeoff/i);
   });
 
+  it("moves directly into implementation from problem understanding when the direction is already workable", () => {
+    const result = makeCandidateDecision({
+      currentStage: "PROBLEM_UNDERSTANDING",
+      policy: {
+        ...basePolicy,
+        currentStage: "PROBLEM_UNDERSTANDING",
+        nextStage: "PROBLEM_UNDERSTANDING",
+        recommendedAction: "CLARIFY",
+      },
+      signals: {
+        ...baseSignals,
+        understanding: "clear",
+        algorithmChoice: "reasonable",
+        progress: "progressing",
+        communication: "clear",
+        behavior: "structured",
+        confidence: 0.78,
+      },
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+    expect(result.question).toMatch(/start implementing|go ahead and start implementing/i);
+  });
+
+  it("lets the candidate start coding in approach discussion when the direction is solid", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        understanding: "clear",
+        algorithmChoice: "strong",
+        progress: "progressing",
+        communication: "clear",
+        behavior: "structured",
+        confidence: 0.8,
+        structuredEvidence: [],
+      },
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+    expect(result.question).toMatch(/start implementing|start coding/i);
+  });
+
+  it("prefers implementation over generic clarification when implementation evidence already exists", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        confidence: 0.34,
+      },
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+    expect(result.reason).toMatch(/avoid regressing into generic clarification/i);
+  });
+
+  it("still prefers implementation if recent signal history already showed ready-to-code evidence", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: false,
+      },
+      recentEvents: [
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            signals: {
+              readyToCode: true,
+              understanding: "clear",
+              algorithmChoice: "strong",
+              progress: "progressing",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+  });
+
   it("uses correctness evidence to ask for an explicit invariant in approach discussion", () => {
     const result = makeCandidateDecision({
       currentStage: "APPROACH_DISCUSSION",
@@ -136,6 +242,124 @@ describe("makeCandidateDecision", () => {
     expect(result.action).toBe("probe_correctness");
     expect(result.specificIssue).toMatch(/invariant/i);
     expect(result.question).toMatch(/invariant|correctness/i);
+  });
+
+  it("defers proof-style probing until after implementation when the candidate is already ready to code", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        structuredEvidence: [
+          {
+            area: "correctness",
+            issue: "The correctness invariant is still underspecified.",
+            behavior: "The candidate described the plan, but did not anchor it to an invariant.",
+            evidence: "The recent explanation never stated what remains true after each step.",
+            impact: "The interviewer still lacks strong correctness evidence.",
+            fix: "State one invariant explicitly.",
+          },
+        ],
+      },
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+  });
+
+  it("does not spend more than one proof-style turn before implementation once the candidate is ready to code", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        structuredEvidence: [
+          {
+            area: "correctness",
+            issue: "The correctness invariant is still underspecified.",
+            behavior: "The candidate described the plan, but did not anchor it to an invariant.",
+            evidence: "The recent explanation never stated what remains true after each step.",
+            impact: "The interviewer still lacks strong correctness evidence.",
+            fix: "State one invariant explicitly.",
+          },
+        ],
+      },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              action: "probe_correctness",
+              target: "correctness",
+              specificIssue: "The correctness invariant is still underspecified.",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+    expect(result.reason).toMatch(/already spent a proof-style turn/i);
+  });
+
+  it("forces implementation once algorithm, complexity, and test evidence are already present before coding", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        complexityRigor: "partial",
+        testingDiscipline: "partial",
+        edgeCaseAwareness: "partial",
+      },
+      latestExecutionRun: null,
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+    expect(result.reason).toMatch(/enough pre-code evidence|move into implementation/i);
+  });
+
+  it("still prefers implementation from testing-and-complexity if no code exists yet but pre-code evidence is already sufficient", () => {
+    const result = makeCandidateDecision({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      policy: {
+        ...basePolicy,
+        currentStage: "TESTING_AND_COMPLEXITY",
+        nextStage: "WRAP_UP",
+        recommendedAction: "VALIDATE_AND_TEST",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        complexityRigor: "strong",
+        testingDiscipline: "strong",
+        edgeCaseAwareness: "present",
+      },
+      latestExecutionRun: null,
+    });
+
+    expect(result.action).toBe("encourage_and_continue");
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
   });
 
   it("uses tradeoff evidence to ask a more surgical tradeoff follow-up", () => {
@@ -212,6 +436,35 @@ describe("makeCandidateDecision", () => {
 
     expect(result.action).toBe("hold_and_listen");
     expect(result.target).toBe("implementation");
+  });
+
+  it("does not hold the floor when unresolved correctness issues are still on the ledger", () => {
+    const result = makeCandidateDecision({
+      currentStage: "IMPLEMENTATION",
+      policy: basePolicy,
+      signals: {
+        ...baseSignals,
+        progress: "progressing",
+        behavior: "structured",
+        structuredEvidence: [
+          {
+            area: "correctness",
+            issue: "The correctness invariant is still underspecified.",
+            behavior: "The candidate described the plan, but did not anchor it to an invariant.",
+            evidence: "The recent explanation never stated what remains true after each step.",
+            impact: "The interviewer still lacks strong correctness evidence.",
+            fix: "State one invariant explicitly.",
+          },
+        ],
+      },
+      recentEvents: [
+        { eventType: "CANDIDATE_SPOKE" },
+        { eventType: "AI_SPOKE" },
+        { eventType: "CANDIDATE_SPOKE" },
+      ],
+    });
+
+    expect(result.action).not.toBe("hold_and_listen");
   });
 
   it("probes correctness when the code looks close but the reasoning is still thin", () => {
@@ -291,6 +544,85 @@ describe("makeCandidateDecision", () => {
     expect(result.question).toMatch(/time and space complexity|tradeoff/i);
   });
 
+  it("does not immediately repeat complexity after the candidate already answered complexity and tradeoff", () => {
+    const result = makeCandidateDecision({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      policy: {
+        ...basePolicy,
+        currentStage: "TESTING_AND_COMPLEXITY",
+        nextStage: "WRAP_UP",
+        recommendedAction: "VALIDATE_AND_TEST",
+      },
+      signals: {
+        ...baseSignals,
+        testingDiscipline: "strong",
+        edgeCaseAwareness: "present",
+        complexityRigor: "strong",
+      },
+      latestExecutionRun: { status: "PASSED" },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "complexity", action: "ask_for_complexity" } },
+        },
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "tradeoff", action: "probe_tradeoff" } },
+        },
+      ],
+    });
+
+    expect(result.action).toBe("move_stage");
+    expect(result.suggestedStage).toBe("WRAP_UP");
+    expect(result.question).not.toMatch(/time complexity|space complexity|tradeoff/i);
+  });
+
+  it("does not immediately repeat testing after the candidate already supplied exact boundary cases and outputs", () => {
+    const result = makeCandidateDecision({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      policy: {
+        ...basePolicy,
+        currentStage: "TESTING_AND_COMPLEXITY",
+        nextStage: "WRAP_UP",
+        recommendedAction: "VALIDATE_AND_TEST",
+      },
+      signals: {
+        ...baseSignals,
+        testingDiscipline: "strong",
+        edgeCaseAwareness: "present",
+      },
+      latestExecutionRun: { status: "PASSED" },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "testing", action: "ask_for_test_case" } },
+        },
+      ],
+    });
+
+    expect(result.action).not.toBe("ask_for_test_case");
+  });
+
+  it("refuses to fully wrap up when correctness evidence is still missing", () => {
+    const result = makeCandidateDecision({
+      currentStage: "WRAP_UP",
+      policy: {
+        ...basePolicy,
+        currentStage: "WRAP_UP",
+        nextStage: "WRAP_UP",
+        recommendedAction: "WRAP_UP",
+      },
+      signals: {
+        ...baseSignals,
+        progress: "done",
+        reasoningDepth: "thin",
+      },
+    });
+
+    expect(result.action).toBe("probe_correctness");
+    expect(result.question).toMatch(/proof sketch|invariant|correct/i);
+  });
+
   it("moves faster into implementation when the candidate-state trend is clearly improving", () => {
     const result = makeCandidateDecision({
       currentStage: "APPROACH_DISCUSSION",
@@ -323,6 +655,165 @@ describe("makeCandidateDecision", () => {
     expect(result.action).toBe("ask_followup");
     expect(result.target).toBe("implementation");
     expect(result.question).toMatch(/state update|branch|tiny input/i);
+  });
+
+  it("treats repeated thin reasoning as a persistent weakness", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        reasoningDepth: "thin",
+      },
+      recentEvents: [
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: { signals: { reasoningDepth: "thin" } },
+        },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: { signals: { reasoningDepth: "moderate" } },
+        },
+      ],
+    });
+
+    expect(result.action).toBe("ask_for_reasoning");
+    expect(result.specificIssue).toMatch(/reasoning depth has remained weak/i);
+    expect(result.question).toMatch(/proof sketch|invariant/i);
+  });
+
+  it("treats repeated weak testing as a persistent weakness during testing stage", () => {
+    const result = makeCandidateDecision({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      policy: {
+        ...basePolicy,
+        currentStage: "TESTING_AND_COMPLEXITY",
+        nextStage: "WRAP_UP",
+        recommendedAction: "VALIDATE_AND_TEST",
+      },
+      signals: {
+        ...baseSignals,
+        testingDiscipline: "partial",
+      },
+      recentEvents: [
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: { signals: { testingDiscipline: "missing" } },
+        },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: { signals: { testingDiscipline: "partial" } },
+        },
+      ],
+    });
+
+    expect(result.action).toBe("ask_for_test_case");
+    expect(result.specificIssue).toMatch(/testing discipline has remained weak/i);
+    expect(result.question).toMatch(/exact high-risk test cases|expected output/i);
+  });
+
+  it("treats repeated weak complexity rigor as a persistent weakness during testing stage", () => {
+    const result = makeCandidateDecision({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      policy: {
+        ...basePolicy,
+        currentStage: "TESTING_AND_COMPLEXITY",
+        nextStage: "WRAP_UP",
+        recommendedAction: "VALIDATE_AND_TEST",
+      },
+      signals: {
+        ...baseSignals,
+        complexityRigor: "partial",
+      },
+      recentEvents: [
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: { signals: { complexityRigor: "missing" } },
+        },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: { signals: { complexityRigor: "partial" } },
+        },
+      ],
+    });
+
+    expect(result.action).toBe("probe_tradeoff");
+    expect(result.specificIssue).toMatch(/complexity reasoning has remained shallow/i);
+    expect(result.question).toMatch(/tradeoff|constraints/i);
+  });
+
+  it("avoids repeating the same reasoning target after it was already pressed multiple times", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        reasoningDepth: "thin",
+      },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "reasoning", action: "ask_for_reasoning", specificIssue: "Reasoning depth is weak." } },
+        },
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "correctness", action: "probe_correctness", specificIssue: "Invariant still weak." } },
+        },
+      ],
+    });
+
+    expect(result.action).not.toBe("ask_for_reasoning");
+    expect(result.question).not.toMatch(/proof sketch or invariant/i);
+  });
+
+  it("asks for clarification instead of probing hard when signal confidence is low", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        confidence: 0.34,
+        progress: "progressing",
+      },
+    });
+
+    expect(result.action).toBe("ask_for_clarification");
+    expect(result.question).toMatch(/tiny example|state or output|reading your state correctly/i);
+  });
+
+  it("holds and listens when confidence is low but the candidate still has the floor", () => {
+    const result = makeCandidateDecision({
+      currentStage: "IMPLEMENTATION",
+      policy: basePolicy,
+      signals: {
+        ...baseSignals,
+        confidence: 0.35,
+        progress: "progressing",
+      },
+      recentEvents: [
+        { eventType: "AI_SPOKE" },
+        { eventType: "CANDIDATE_SPOKE" },
+        { eventType: "CANDIDATE_SPOKE" },
+      ],
+    });
+
+    expect(result.action).toBe("hold_and_listen");
+    expect(result.reason).toMatch(/confidence is low/i);
   });
 });
 

@@ -7,6 +7,7 @@ import type {
   CodingInterviewPolicy,
   CodingInterviewPolicyAction,
 } from "@/lib/assistant/policy";
+import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
 
 type ExecutionRunLike = {
@@ -17,6 +18,7 @@ type ExecutionRunLike = {
 
 export type CandidateDecisionAction =
   | "ask_followup"
+  | "ask_for_clarification"
   | "give_hint"
   | "move_stage"
   | "ask_for_test_case"
@@ -72,17 +74,98 @@ export function makeCandidateDecision(input: {
   latestExecutionRun?: ExecutionRunLike | null;
 }): CandidateDecision {
   const { currentStage, policy, signals, latestExecutionRun } = input;
-  const repeatedFailures = countRecentFailedRuns(input.recentEvents ?? []);
-  const repeatedHints = countRecentHints(input.recentEvents ?? []);
+  const ledger = buildMemoryLedger({
+    currentStage,
+    recentEvents: input.recentEvents ?? [],
+    signals,
+    latestExecutionRun,
+  });
+  const repeatedFailures = ledger.recentFailedRuns;
+  const repeatedHints = ledger.recentHints;
   const latestTurns = (input.recentEvents ?? []).slice(-8);
   const aiTurnCount = latestTurns.filter((event) => event.eventType === "AI_SPOKE").length;
   const candidateTurnCount = latestTurns.filter((event) => event.eventType === "CANDIDATE_SPOKE").length;
   const candidateHasFloor = candidateTurnCount > aiTurnCount;
   const improvingTrend = looksImproving(signals.trendSummary);
   const unstableTrend = looksUnstable(signals.trendSummary);
+  const persistentWeakness = ledger.persistentWeakness;
   const invariantEvidence = findStructuredEvidence(signals, "correctness", /invariant|correctness/i);
   const boundaryEvidence = findStructuredEvidence(signals, "edge_case", /boundary|edge-case|edge case/i);
   const tradeoffEvidence = findStructuredEvidence(signals, "complexity", /tradeoff/i);
+  const hadRecentImplementationReadiness = detectRecentImplementationReadiness(input.recentEvents ?? []);
+  const proofStyleAlreadyPressedTooMuch = ledger.recentProofStyleProbeCount >= 1;
+  const shouldPreferImplementation =
+    (signals.readyToCode || hadRecentImplementationReadiness) &&
+    signals.understanding === "clear" &&
+    (signals.algorithmChoice === "reasonable" || signals.algorithmChoice === "strong") &&
+    signals.progress === "progressing" &&
+    signals.communication !== "unclear";
+  const enoughPreCodeEvidence =
+    shouldPreferImplementation &&
+    signals.complexityRigor !== "missing" &&
+    (signals.testingDiscipline !== "missing" || signals.edgeCaseAwareness !== "missing");
+  const targetAlreadyAnswered = (...targets: string[]) =>
+    targets.some((target) => ledger.answeredTargets.includes(target));
+  const hasCollectedEvidence = (...evidence: string[]) =>
+    evidence.some((item) => ledger.collectedEvidence.includes(item));
+
+  if (signals.confidence <= 0.4) {
+    if (shouldPreferImplementation) {
+      return {
+        action: "encourage_and_continue",
+        target: "implementation",
+        question:
+          "Your direction is concrete enough to code. Go ahead and implement it, and as you write, briefly call out the key state update or branch you are relying on.",
+        reason:
+          "Confidence is low, but the candidate has already shown concrete implementation evidence, so the interviewer should avoid regressing into generic clarification and let coding start.",
+        confidence: 0.75,
+        targetCodeLine: "the first key loop, branch, or state update in the implementation",
+        specificIssue:
+          "The system is not confident enough to over-probe, but there is already enough implementation evidence to start coding.",
+        expectedAnswer: "Implementation progress plus one concise note about the key state update or branch.",
+        suggestedStage: "IMPLEMENTATION",
+        policyAction: "LET_IMPLEMENT",
+      };
+    }
+
+    if (candidateHasFloor && signals.progress === "progressing") {
+      return {
+        action: "hold_and_listen",
+        target: currentStage === "IMPLEMENTATION" ? "implementation" : "reasoning",
+        question:
+          "Keep going for a moment. I want to hear one more concrete example, branch, or state update before I narrow you further.",
+        reason: "The candidate-state confidence is low, so the interviewer should avoid a strong probe and give the candidate a little more room before judging.",
+        confidence: 0.72,
+        targetCodeLine: "the next concrete example, branch, or state update that will make the candidate state easier to classify",
+        specificIssue: "Current candidate-state confidence is low, so the next move should preserve information rather than over-commit to one diagnosis.",
+        expectedAnswer: "One more concrete explanation, branch walk-through, or state update that improves classifier confidence.",
+        suggestedStage: currentStage,
+        policyAction: policy.recommendedAction,
+      };
+    }
+
+    return {
+      action: "ask_for_clarification",
+      target: currentStage === "PROBLEM_UNDERSTANDING" ? "understanding" : "reasoning",
+      question:
+        currentStage === "PROBLEM_UNDERSTANDING"
+          ? "Let me make sure I understand your framing. What assumptions are you making about the input, and can you show one tiny example?"
+          : "I want to make sure I am reading your state correctly. Can you restate the next step on one tiny example and say what exact state or output you expect?",
+      reason: "The candidate-state confidence is low, so the interviewer should ask a clarifying question rather than making a strong evaluative probe.",
+      confidence: 0.78,
+      targetCodeLine:
+        currentStage === "PROBLEM_UNDERSTANDING"
+          ? "the candidate's assumptions and one tiny example"
+          : "the next step, expected state, or expected output on one tiny example",
+      specificIssue: "Current candidate-state confidence is low, so the interviewer needs clarification before making a sharper judgment.",
+      expectedAnswer:
+        currentStage === "PROBLEM_UNDERSTANDING"
+          ? "A clearer statement of assumptions and one example."
+          : "A tiny example, the exact next step, and the expected state or output.",
+      suggestedStage: currentStage,
+      policyAction: policy.recommendedAction,
+    };
+  }
 
   if (policy.shouldServeHint) {
     return {
@@ -133,8 +216,28 @@ export function makeCandidateDecision(input: {
     };
   }
 
+  if (!latestExecutionRun && enoughPreCodeEvidence) {
+    return {
+      action: "encourage_and_continue",
+      target: "implementation",
+      question:
+        "You've already specified the algorithm, complexity, and the main validation cases clearly enough. Go ahead and implement it now, and we can revisit correctness details after the code is written.",
+      reason:
+        "The candidate has already provided enough pre-code evidence, so the interviewer should stop front-loading more probing and move into implementation.",
+      confidence: 0.9,
+      targetCodeLine: "the main loop, lookup/update order, and return path in the implementation",
+      specificIssue: "Pre-code evidence is already sufficient; implementation should start now.",
+      expectedAnswer: "Implementation progress plus brief narration of the main loop or state update.",
+      suggestedStage: "IMPLEMENTATION",
+      policyAction: "LET_IMPLEMENT",
+    };
+  }
+
   if (latestExecutionRun?.status === "PASSED" && currentStage !== "WRAP_UP") {
-    if (signals.edgeCaseAwareness === "missing" || signals.edgeCaseAwareness === "partial") {
+    if (
+      !targetAlreadyAnswered("testing", "edge_case") &&
+      (signals.edgeCaseAwareness === "missing" || signals.edgeCaseAwareness === "partial")
+    ) {
       const testPrompt =
         signals.edgeCaseAwareness === "missing"
           ? "Your latest run passed. Before you call it done, what empty-input, single-element, or duplicate-heavy cases would you test next?"
@@ -162,21 +265,53 @@ export function makeCandidateDecision(input: {
       };
     }
 
+    if (!targetAlreadyAnswered("complexity", "tradeoff")) {
+      return {
+        action: "ask_for_complexity",
+        target: "complexity",
+        question: "Now that the implementation works, walk me through the final time and space complexity and the main tradeoff behind this approach.",
+        reason: "The solution appears to work, so the interviewer should close the loop on complexity and tradeoffs.",
+        confidence: 0.9,
+        targetCodeLine: "the dominant loop or operation that drives runtime and memory usage",
+        specificIssue: "The implementation is working, but the final performance story still needs to be made explicit.",
+        expectedAnswer: "Final time complexity, space complexity, and one tradeoff compared with an alternative.",
+        suggestedStage: "TESTING_AND_COMPLEXITY",
+        policyAction: "VALIDATE_AND_TEST",
+      };
+    }
+
     return {
-      action: "ask_for_complexity",
-      target: "complexity",
-      question: "Now that the implementation works, walk me through the final time and space complexity and the main tradeoff behind this approach.",
-      reason: "The solution appears to work, so the interviewer should close the loop on complexity and tradeoffs.",
-      confidence: 0.9,
-      targetCodeLine: "the dominant loop or operation that drives runtime and memory usage",
-      specificIssue: "The implementation is working, but the final performance story still needs to be made explicit.",
-      expectedAnswer: "Final time complexity, space complexity, and one tradeoff compared with an alternative.",
-      suggestedStage: "TESTING_AND_COMPLEXITY",
-      policyAction: "VALIDATE_AND_TEST",
+      action: "move_stage",
+      target: "summary",
+      question: "Good. You have already covered the implementation, validation, and performance story well enough. Give me a concise final wrap-up of the approach and one thing you would double-check in production.",
+      reason: "The candidate already answered the complexity and tradeoff target, so the interviewer should not immediately repeat it after a passing run.",
+      confidence: 0.88,
+      targetCodeLine: "the final solution summary and one production-risk check",
+      specificIssue: "The core performance target has already been answered, so the next move should advance the interview rather than repeat the same target.",
+      expectedAnswer: "A short final summary of the approach and one realistic production-risk check or improvement.",
+      suggestedStage: "WRAP_UP",
+      policyAction: "WRAP_UP",
     };
   }
 
   if (currentStage === "PROBLEM_UNDERSTANDING") {
+    if (shouldPreferImplementation && signals.behavior !== "overthinking" && signals.confidence >= 0.5) {
+      return {
+        action: "encourage_and_continue",
+        target: "implementation",
+        question:
+          "That direction is concrete enough to move on. Go ahead and start implementing it, and as you code, briefly call out the one branch, state update, or invariant that matters most.",
+        reason:
+          "The candidate already has a workable direction and enough framing signal, so the interviewer should let implementation begin rather than over-probing the setup.",
+        confidence: 0.83,
+        targetCodeLine: "the first key loop, branch, or state update in the implementation",
+        specificIssue: "The candidate is already on a workable path, so early momentum matters more than more framing questions.",
+        expectedAnswer: "Implementation progress with short narration of the key branch, state update, or invariant.",
+        suggestedStage: "IMPLEMENTATION",
+        policyAction: "LET_IMPLEMENT",
+      };
+    }
+
     if (signals.understanding !== "clear") {
       return {
         action: "ask_followup",
@@ -207,7 +342,62 @@ export function makeCandidateDecision(input: {
   }
 
   if (currentStage === "APPROACH_DISCUSSION") {
-    if (invariantEvidence) {
+    if (
+      shouldPreferImplementation &&
+      signals.behavior === "structured" &&
+      !unstableTrend &&
+      signals.confidence >= 0.5
+    ) {
+      return {
+        action: "encourage_and_continue",
+        target: "implementation",
+        question:
+          "That sounds like a workable plan. Start implementing it, and as you code, briefly narrate the one invariant, branch, or state update that is easiest to get wrong.",
+        reason:
+          "The candidate already has a viable approach, so the interviewer should let them start coding and revisit deeper correctness or tradeoff details after implementation evidence exists.",
+        confidence: 0.84,
+        targetCodeLine: "the first implementation step plus the one branch, invariant, or state update worth tracking",
+        specificIssue: "The interview has enough approach signal to prioritize implementation momentum over more front-loaded probing.",
+        expectedAnswer: "Implementation progress with one short note on the most failure-prone branch, state update, or invariant.",
+        suggestedStage: "IMPLEMENTATION",
+        policyAction: "LET_IMPLEMENT",
+      };
+    }
+
+    if (shouldPreferImplementation && proofStyleAlreadyPressedTooMuch) {
+      return {
+        action: "encourage_and_continue",
+        target: "implementation",
+        question:
+          "You've explained enough of the idea to start coding. Go ahead and implement it now, and we can come back to correctness details after the code is on the page.",
+        reason:
+          "The candidate is ready to implement and the interviewer has already spent a proof-style turn, so the next move should be implementation rather than another correctness probe.",
+        confidence: 0.87,
+        targetCodeLine: "the main loop, lookup/update order, and return path in the implementation",
+        specificIssue: "Implementation should start now; deeper correctness discussion can wait until after code exists.",
+        expectedAnswer: "Implementation progress with brief narration of the main loop or state update.",
+        suggestedStage: "IMPLEMENTATION",
+        policyAction: "LET_IMPLEMENT",
+      };
+    }
+
+    if (persistentWeakness === "reasoning" && !ledger.shouldAvoidTarget("reasoning", "correctness")) {
+      return {
+        action: "ask_for_reasoning",
+        target: "reasoning",
+        question:
+          "Let's make the logic sharper. Give me the proof sketch or invariant that makes this approach correct, not just the intuition.",
+        reason: "Recent candidate-state snapshots show that reasoning depth has stayed weak across multiple turns, so the interviewer should force a direct correctness explanation.",
+        confidence: 0.93,
+        targetCodeLine: "the proof sketch, invariant, or state relationship that justifies the approach",
+        specificIssue: "Reasoning depth has remained weak across multiple recent turns.",
+        expectedAnswer: "A short proof sketch, invariant, or state argument that explains why the approach stays correct.",
+        suggestedStage: "APPROACH_DISCUSSION",
+        policyAction: "PROBE_APPROACH",
+      };
+    }
+
+    if (invariantEvidence && !ledger.shouldAvoidTarget("correctness")) {
       return {
         action: "probe_correctness",
         target: "correctness",
@@ -224,7 +414,7 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (tradeoffEvidence && signals.algorithmChoice !== "strong") {
+    if (tradeoffEvidence && signals.algorithmChoice !== "strong" && !ledger.shouldAvoidTarget("tradeoff", "complexity")) {
       return {
         action: "probe_tradeoff",
         target: "tradeoff",
@@ -257,7 +447,11 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (signals.reasoningDepth === "thin" && signals.communication !== "unclear") {
+    if (
+      signals.reasoningDepth === "thin" &&
+      signals.communication !== "unclear" &&
+      !ledger.shouldAvoidTarget("reasoning", "correctness")
+    ) {
       return {
         action: "ask_for_reasoning",
         target: "reasoning",
@@ -349,7 +543,31 @@ export function makeCandidateDecision(input: {
   }
 
   if (currentStage === "IMPLEMENTATION") {
-    if (invariantEvidence && signals.codeQuality !== "buggy") {
+    if (
+      persistentWeakness === "reasoning" &&
+      signals.codeQuality !== "buggy" &&
+      !ledger.shouldAvoidTarget("reasoning", "correctness")
+    ) {
+      return {
+        action: "probe_correctness",
+        target: "correctness",
+        question:
+          "You are making progress, but the correctness story is still thin. What invariant stays true after each update, and why does that keep the implementation safe?",
+        reason: "Recent candidate-state snapshots show that correctness reasoning has remained weak even while implementation progressed.",
+        confidence: 0.9,
+        targetCodeLine: "the invariant or state relationship that the current implementation relies on",
+        specificIssue: "Correctness reasoning has stayed weak across multiple implementation turns.",
+        expectedAnswer: "The invariant, where the implementation maintains it, and why that invariant is enough to trust the code.",
+        suggestedStage: "IMPLEMENTATION",
+        policyAction: "LET_IMPLEMENT",
+      };
+    }
+
+    if (
+      invariantEvidence &&
+      signals.codeQuality !== "buggy" &&
+      !ledger.shouldAvoidTarget("correctness")
+    ) {
       return {
         action: "probe_correctness",
         target: "correctness",
@@ -382,7 +600,13 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (signals.progress === "progressing" && signals.behavior === "structured" && candidateHasFloor) {
+    if (
+      signals.progress === "progressing" &&
+      signals.behavior === "structured" &&
+      candidateHasFloor &&
+      persistentWeakness === null &&
+      ledger.unresolvedIssues.length === 0
+    ) {
       return {
         action: "hold_and_listen",
         target: "implementation",
@@ -470,7 +694,52 @@ export function makeCandidateDecision(input: {
   }
 
   if (currentStage === "TESTING_AND_COMPLEXITY") {
-    if (boundaryEvidence && signals.testingDiscipline !== "strong") {
+    if (
+      persistentWeakness === "testing" &&
+      !targetAlreadyAnswered("testing", "edge_case") &&
+      !ledger.shouldAvoidTarget("testing", "edge_case")
+    ) {
+      return {
+        action: "ask_for_test_case",
+        target: "testing",
+        question:
+          "Your validation has stayed a bit thin across the last few turns. Give me the exact high-risk test cases you would run next, and the exact expected output for each.",
+        reason: "Recent candidate-state snapshots show that testing discipline has remained weak, so the interviewer should stay focused on explicit validation evidence.",
+        confidence: 0.92,
+        targetCodeLine: "the exact high-risk tests and expected outputs needed to validate the current implementation",
+        specificIssue: "Testing discipline has remained weak across multiple recent turns.",
+        expectedAnswer: "Two or three concrete test cases, why they matter, and the exact expected output for each.",
+        suggestedStage: "TESTING_AND_COMPLEXITY",
+        policyAction: "VALIDATE_AND_TEST",
+      };
+    }
+
+    if (
+      persistentWeakness === "complexity" &&
+      !targetAlreadyAnswered("complexity", "tradeoff") &&
+      !ledger.shouldAvoidTarget("complexity", "tradeoff")
+    ) {
+      return {
+        action: "probe_tradeoff",
+        target: "tradeoff",
+        question:
+          "You've mentioned complexity more than once, but I still need the real tradeoff story. What are you paying in runtime, memory, or simplicity, and why is that tradeoff justified for these constraints?",
+        reason: "Recent candidate-state snapshots show that complexity rigor has remained weak, so the interviewer should force a constraint-aware tradeoff explanation.",
+        confidence: 0.91,
+        targetCodeLine: "the concrete tradeoff between the chosen solution and a realistic alternative under the given constraints",
+        specificIssue: "Complexity reasoning has remained shallow across multiple recent turns.",
+        expectedAnswer: "A constraint-aware tradeoff explanation comparing the chosen approach with one realistic alternative.",
+        suggestedStage: "TESTING_AND_COMPLEXITY",
+        policyAction: "VALIDATE_AND_TEST",
+      };
+    }
+
+    if (
+      boundaryEvidence &&
+      signals.testingDiscipline !== "strong" &&
+      !targetAlreadyAnswered("testing", "edge_case") &&
+      !ledger.shouldAvoidTarget("testing", "edge_case")
+    ) {
       return {
         action: "ask_for_test_case",
         target: "testing",
@@ -487,7 +756,11 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (tradeoffEvidence) {
+    if (
+      tradeoffEvidence &&
+      !targetAlreadyAnswered("complexity", "tradeoff") &&
+      !ledger.shouldAvoidTarget("complexity", "tradeoff")
+    ) {
       return {
         action: "probe_tradeoff",
         target: "tradeoff",
@@ -504,7 +777,11 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (unstableTrend && signals.testingDiscipline !== "strong") {
+    if (
+      unstableTrend &&
+      signals.testingDiscipline !== "strong" &&
+      !targetAlreadyAnswered("testing", "edge_case")
+    ) {
       return {
         action: "ask_for_test_case",
         target: "testing",
@@ -520,7 +797,10 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (signals.testingDiscipline === "missing" || signals.edgeCaseAwareness === "missing") {
+    if (
+      !targetAlreadyAnswered("testing", "edge_case") &&
+      (signals.testingDiscipline === "missing" || signals.edgeCaseAwareness === "missing")
+    ) {
       return {
         action: "ask_for_test_case",
         target: "testing",
@@ -535,7 +815,7 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    if (signals.complexityRigor !== "strong") {
+    if (!targetAlreadyAnswered("complexity", "tradeoff") && signals.complexityRigor !== "strong") {
       return {
         action: "ask_for_complexity",
         target: "complexity",
@@ -551,18 +831,97 @@ export function makeCandidateDecision(input: {
       };
     }
 
-    return {
-      action: "ask_for_complexity",
-      target: "complexity",
-      question: "Great. Give me the final time complexity, space complexity, and one tradeoff you made in choosing this approach.",
-      reason: "This is the right point to capture the final evaluation signals before wrap-up.",
-      confidence: 0.86,
-      targetCodeLine: "the final complexity statement and tradeoff summary",
-      specificIssue: "The interview is ready to capture final complexity and tradeoff signals before wrap-up.",
-      expectedAnswer: "A concise final complexity statement plus one tradeoff in the chosen approach.",
-      suggestedStage: "WRAP_UP",
-      policyAction: "WRAP_UP",
-    };
+    if (!targetAlreadyAnswered("complexity", "tradeoff")) {
+      return {
+        action: "ask_for_complexity",
+        target: "complexity",
+        question: "Great. Give me the final time complexity, space complexity, and one tradeoff you made in choosing this approach.",
+        reason: "This is the right point to capture the final evaluation signals before wrap-up.",
+        confidence: 0.86,
+        targetCodeLine: "the final complexity statement and tradeoff summary",
+        specificIssue: "The interview is ready to capture final complexity and tradeoff signals before wrap-up.",
+        expectedAnswer: "A concise final complexity statement plus one tradeoff in the chosen approach.",
+        suggestedStage: "WRAP_UP",
+        policyAction: "WRAP_UP",
+      };
+    }
+
+    if (
+      hasCollectedEvidence("complexity_tradeoff", "test_cases") &&
+      !ledger.missingEvidence.includes("correctness_proof")
+    ) {
+      return {
+        action: "move_stage",
+        target: "summary",
+        question: "Good. You have covered the tests and performance story. Summarize the final solution and one implementation detail you would still watch carefully.",
+        reason: "The candidate has already answered the active testing and complexity targets, so the interviewer should stop repeating them and move toward wrap-up.",
+        confidence: 0.87,
+        targetCodeLine: "the final solution summary and one implementation detail worth watching",
+        specificIssue: "Testing and performance evidence have already been collected for this stage.",
+        expectedAnswer: "A concise final summary plus one implementation detail or risk to watch.",
+        suggestedStage: "WRAP_UP",
+        policyAction: "WRAP_UP",
+      };
+    }
+  }
+
+  if (currentStage === "WRAP_UP") {
+    if (
+      ledger.missingEvidence.includes("correctness_proof") &&
+      !ledger.shouldAvoidTarget("reasoning", "correctness")
+    ) {
+      return {
+        action: "probe_correctness",
+        target: "correctness",
+        question:
+          "Before we close, give me the shortest proof sketch or invariant that makes you confident this solution is actually correct.",
+        reason: "The session is near wrap-up, but the memory ledger still shows missing correctness evidence.",
+        confidence: 0.88,
+        targetCodeLine: "the invariant, proof sketch, or correctness argument that justifies the final solution",
+        specificIssue: "The interview still lacks a concise correctness proof before wrap-up.",
+        expectedAnswer: "A short proof sketch, invariant, or state argument that explains why the final solution is correct.",
+        suggestedStage: "WRAP_UP",
+        policyAction: "WRAP_UP",
+      };
+    }
+
+    if (
+      ledger.missingEvidence.includes("exact_test_outputs") &&
+      !ledger.shouldAvoidTarget("testing", "edge_case")
+    ) {
+      return {
+        action: "ask_for_test_case",
+        target: "testing",
+        question:
+          "One last validation check: give me the highest-risk test case and the exact output you expect from the current implementation.",
+        reason: "The session is near wrap-up, but the memory ledger still shows missing exact test-output evidence.",
+        confidence: 0.86,
+        targetCodeLine: "the highest-risk test case and its exact expected output",
+        specificIssue: "The interview still lacks one explicit expected-output validation before wrap-up.",
+        expectedAnswer: "One high-risk test case, why it matters, and the precise expected output.",
+        suggestedStage: "WRAP_UP",
+        policyAction: "WRAP_UP",
+      };
+    }
+
+    if (
+      ledger.missingEvidence.includes("constraint_tradeoff") &&
+      !ledger.shouldAvoidTarget("complexity", "tradeoff")
+    ) {
+      return {
+        action: "probe_tradeoff",
+        target: "tradeoff",
+        question:
+          "Before we finish, justify the final tradeoff against the actual constraints. Why is this runtime, memory, or simplicity tradeoff the right one here?",
+        reason: "The session is near wrap-up, but the memory ledger still shows missing constraint-aware tradeoff evidence.",
+        confidence: 0.87,
+        targetCodeLine: "the final tradeoff story under the actual constraints",
+        specificIssue: "The interview still lacks a constraint-aware tradeoff justification before wrap-up.",
+        expectedAnswer: "A concise explanation of the accepted runtime, memory, or simplicity tradeoff and why it fits the constraints.",
+        suggestedStage: "WRAP_UP",
+        policyAction: "WRAP_UP",
+      };
+    }
   }
 
   if (repeatedHints >= 2 && signals.progress !== "done") {
@@ -765,4 +1124,29 @@ function findStructuredEvidence(
       return issuePattern.test(item.issue) || issuePattern.test(item.evidence);
     }) ?? null
   );
+}
+
+function detectRecentImplementationReadiness(
+  recentEvents: Array<{ eventType: string; payloadJson?: unknown }>,
+) {
+  return recentEvents
+    .filter((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED")
+    .slice(-3)
+    .some((event) => {
+      const payload =
+        typeof event.payloadJson === "object" && event.payloadJson !== null
+          ? (event.payloadJson as Record<string, unknown>)
+          : {};
+      const signals =
+        typeof payload.signals === "object" && payload.signals !== null
+          ? (payload.signals as Record<string, unknown>)
+          : {};
+
+      return (
+        signals.readyToCode === true ||
+        (signals.understanding === "clear" &&
+          (signals.algorithmChoice === "reasonable" || signals.algorithmChoice === "strong") &&
+          signals.progress === "progressing")
+      );
+    });
 }

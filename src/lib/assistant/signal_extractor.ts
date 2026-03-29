@@ -44,6 +44,7 @@ export type CandidateSignalSnapshot = {
   algorithmChoice: CandidateAlgorithmChoiceState;
   edgeCaseAwareness: CandidateEdgeCaseAwarenessState;
   behavior: CandidateBehaviorState;
+  readyToCode: boolean;
   reasoningDepth: CandidateReasoningDepthState;
   testingDiscipline: CandidateTestingDisciplineState;
   complexityRigor: CandidateComplexityRigorState;
@@ -77,14 +78,29 @@ export function extractCandidateSignals(input: {
   const algorithmChoice = resolveAlgorithmChoiceState(normalizedUserText, input.currentStage, evidence);
   const edgeCaseAwareness = resolveEdgeCaseAwarenessState(normalizedUserText, latestRun, evidence);
   const behavior = resolveBehaviorState(normalizedUserText, recentUserTurns, evidence);
+  const readyToCode = resolveReadyToCode({
+    normalizedUserText,
+    currentStage: input.currentStage,
+    understanding,
+    progress,
+    communication,
+    algorithmChoice,
+    behavior,
+    evidence,
+  });
   const reasoningDepth = resolveReasoningDepthState(normalizedUserText, recentUserTurns, evidence);
   const testingDiscipline = resolveTestingDisciplineState(normalizedUserText, latestRun, evidence);
   const complexityRigor = resolveComplexityRigorState(normalizedUserText, input.currentStage, evidence);
   const confidence = resolveConfidence({
     recentUserTurns,
+    recentEvents,
     latestRun,
     understanding,
     progress,
+    communication,
+    reasoningDepth,
+    testingDiscipline,
+    complexityRigor,
   });
   const trendSummary = buildTrendSummary(priorSignals, {
     understanding,
@@ -120,6 +136,7 @@ export function extractCandidateSignals(input: {
     algorithmChoice,
     edgeCaseAwareness,
     behavior,
+    readyToCode,
     reasoningDepth,
     testingDiscipline,
     complexityRigor,
@@ -134,6 +151,7 @@ export function extractCandidateSignals(input: {
       algorithmChoice,
       edgeCaseAwareness,
       behavior,
+      readyToCode,
       reasoningDepth,
       testingDiscipline,
       complexityRigor,
@@ -350,6 +368,69 @@ function resolveBehaviorState(normalizedUserText: string, recentUserTurns: Trans
   return "balanced";
 }
 
+function resolveReadyToCode(input: {
+  normalizedUserText: string;
+  currentStage: CodingInterviewStage;
+  understanding: CandidateUnderstandingState;
+  progress: CandidateProgressState;
+  communication: CandidateCommunicationState;
+  algorithmChoice: CandidateAlgorithmChoiceState;
+  behavior: CandidateBehaviorState;
+  evidence: string[];
+}) {
+  const explicitlyReadyToImplement =
+    /\b(ready to implement|ready to code|i can implement|i can code|let me code|let me implement|start coding|start implementing|write the code first|code it now|implement it now)\b/.test(
+      input.normalizedUserText,
+    );
+  const mentionsConcreteDataStructure =
+    /\b(hash map|hash table|dictionary|map|set|array|heap|stack|queue|pointer|two pointers|sliding window|binary search)\b/.test(
+      input.normalizedUserText,
+    );
+  const mentionsConcreteImplementationStep =
+    /\b(iterat|loop|scan|store|save|insert|update|look up|lookup|search|check|return|append)\b/.test(
+      input.normalizedUserText,
+    );
+  const mentionsControlFlow =
+    /\b(if|else|when|while iterating|as we iterate|for each number|for every number)\b/.test(input.normalizedUserText);
+  const mentionsSolutionShape =
+    /\b(target\s*-\s*\w+|indices?|index|return empty|return \[\]|one pass|single pass)\b/.test(
+      input.normalizedUserText,
+    );
+
+  const hasImplementationEvidence =
+    mentionsConcreteDataStructure &&
+    mentionsConcreteImplementationStep &&
+    (mentionsControlFlow || mentionsSolutionShape);
+
+  if (
+    explicitlyReadyToImplement &&
+    input.understanding === "clear" &&
+    (input.algorithmChoice === "reasonable" || input.algorithmChoice === "strong")
+  ) {
+    input.evidence.push("Candidate explicitly said they are ready to implement, so coding should start unless there is a strong contradiction.");
+    return true;
+  }
+
+  if (
+    hasImplementationEvidence &&
+    input.understanding === "clear" &&
+    input.progress === "progressing" &&
+    (input.algorithmChoice === "reasonable" || input.algorithmChoice === "strong") &&
+    input.communication !== "unclear" &&
+    input.behavior !== "overthinking"
+  ) {
+    input.evidence.push("Candidate already described concrete implementation steps, so they look ready to start coding.");
+    return true;
+  }
+
+  if (input.currentStage === "IMPLEMENTATION" && hasImplementationEvidence) {
+    input.evidence.push("Candidate is already reasoning in concrete implementation terms.");
+    return true;
+  }
+
+  return false;
+}
+
 function resolveReasoningDepthState(
   normalizedUserText: string,
   recentUserTurns: TranscriptLike[],
@@ -429,9 +510,14 @@ function resolveComplexityRigorState(
 
 function resolveConfidence(input: {
   recentUserTurns: TranscriptLike[];
+  recentEvents?: SessionEventLike[];
   latestRun?: ExecutionRunLike | null;
   understanding: CandidateUnderstandingState;
   progress: CandidateProgressState;
+  communication?: CandidateCommunicationState;
+  reasoningDepth?: CandidateReasoningDepthState;
+  testingDiscipline?: CandidateTestingDisciplineState;
+  complexityRigor?: CandidateComplexityRigorState;
 }) {
   let confidence = 0.45;
 
@@ -453,6 +539,48 @@ function resolveConfidence(input: {
     confidence += 0.1;
   }
 
+  if (input.communication === "unclear") {
+    confidence -= 0.08;
+  } else if (input.communication === "clear") {
+    confidence += 0.04;
+  }
+
+  if (input.reasoningDepth === "deep") {
+    confidence += 0.04;
+  } else if (input.reasoningDepth === "thin") {
+    confidence -= 0.05;
+  }
+
+  if (input.testingDiscipline === "strong") {
+    confidence += 0.03;
+  } else if (input.testingDiscipline === "missing") {
+    confidence -= 0.03;
+  }
+
+  if (input.complexityRigor === "strong") {
+    confidence += 0.03;
+  } else if (input.complexityRigor === "missing") {
+    confidence -= 0.03;
+  }
+
+  const recentSignalSnapshots = collectPriorSignalSnapshots(input.recentEvents ?? []);
+  const previous = recentSignalSnapshots.at(-1);
+  if (previous) {
+    const stateDisagreementScore = [
+      previous.understanding && previous.understanding !== input.understanding,
+      previous.progress && previous.progress !== input.progress,
+      previous.reasoningDepth && previous.reasoningDepth !== input.reasoningDepth,
+      previous.testingDiscipline && previous.testingDiscipline !== input.testingDiscipline,
+      previous.complexityRigor && previous.complexityRigor !== input.complexityRigor,
+    ].filter(Boolean).length;
+
+    if (stateDisagreementScore >= 3) {
+      confidence -= 0.08;
+    } else if (stateDisagreementScore === 0) {
+      confidence += 0.03;
+    }
+  }
+
   return Math.max(0.2, Math.min(0.95, Number(confidence.toFixed(2))));
 }
 
@@ -464,6 +592,7 @@ function buildSignalSummary(input: {
   algorithmChoice: CandidateAlgorithmChoiceState;
   edgeCaseAwareness: CandidateEdgeCaseAwarenessState;
   behavior: CandidateBehaviorState;
+  readyToCode: boolean;
   reasoningDepth: CandidateReasoningDepthState;
   testingDiscipline: CandidateTestingDisciplineState;
   complexityRigor: CandidateComplexityRigorState;
@@ -476,6 +605,7 @@ function buildSignalSummary(input: {
     `algorithm choice is ${input.algorithmChoice}`,
     `edge-case awareness is ${input.edgeCaseAwareness}`,
     `behavior is ${input.behavior}`,
+    `ready to code is ${input.readyToCode ? "yes" : "no"}`,
     `reasoning depth is ${input.reasoningDepth}`,
     `testing discipline is ${input.testingDiscipline}`,
     `complexity rigor is ${input.complexityRigor}`,
@@ -705,7 +835,7 @@ function buildSignalObserverPrompt(
     `Recent candidate-state history:\n${priorSignalHistory || "none"}`,
     `Heuristic baseline: ${JSON.stringify(heuristic)}`,
     "Return JSON only with keys:",
-    "understanding, progress, communication, codeQuality, algorithmChoice, edgeCaseAwareness, behavior, reasoningDepth, testingDiscipline, complexityRigor, confidence, evidence, structuredEvidence, summary, trendSummary",
+    "understanding, progress, communication, codeQuality, algorithmChoice, edgeCaseAwareness, behavior, readyToCode, reasoningDepth, testingDiscipline, complexityRigor, confidence, evidence, structuredEvidence, summary, trendSummary",
     "Allowed values:",
     'understanding: "confused" | "partial" | "clear"',
     'progress: "stuck" | "progressing" | "done"',
@@ -714,6 +844,7 @@ function buildSignalObserverPrompt(
     'algorithmChoice: "unknown" | "suboptimal" | "reasonable" | "strong"',
     'edgeCaseAwareness: "missing" | "partial" | "present"',
     'behavior: "structured" | "overthinking" | "rushing" | "balanced"',
+    "readyToCode: boolean",
     'reasoningDepth: "thin" | "moderate" | "deep"',
     'testingDiscipline: "missing" | "partial" | "strong"',
     'complexityRigor: "missing" | "partial" | "strong"',
@@ -749,6 +880,7 @@ function parseObservedSignals(
       algorithmChoice: coerceEnum(parsed.algorithmChoice, ["unknown", "suboptimal", "reasonable", "strong"], heuristic.algorithmChoice),
       edgeCaseAwareness: coerceEnum(parsed.edgeCaseAwareness, ["missing", "partial", "present"], heuristic.edgeCaseAwareness),
       behavior: coerceEnum(parsed.behavior, ["structured", "overthinking", "rushing", "balanced"], heuristic.behavior),
+      readyToCode: typeof parsed.readyToCode === "boolean" ? parsed.readyToCode : heuristic.readyToCode,
       reasoningDepth: coerceEnum(parsed.reasoningDepth, ["thin", "moderate", "deep"], heuristic.reasoningDepth),
       testingDiscipline: coerceEnum(parsed.testingDiscipline, ["missing", "partial", "strong"], heuristic.testingDiscipline),
       complexityRigor: coerceEnum(parsed.complexityRigor, ["missing", "partial", "strong"], heuristic.complexityRigor),

@@ -101,10 +101,13 @@ This repo now has a working MVP-plus skeleton with:
 - /admin now exposes latest session stage, latest candidate state, latest interviewer decision, and a dedicated session-state timeline.
 - /report/[id] now shares the same evidence backbone as /admin, including signal snapshots, interviewer decisions, hints, stage transitions, and code-run outcomes.
 - decision_engine now consumes fine-grained structured evidence directly, so issue classes like invariant gaps, narrow boundary coverage, and shallow tradeoff analysis can trigger more surgical follow-up questions.
+- memory_ledger now tracks `answeredTargets` and `collectedEvidence`, so the interviewer can tell the difference between "I already asked this" and "the candidate already answered this."
+- decision_engine now avoids immediately repeating `testing`, `edge_case`, `complexity`, and `tradeoff` targets once the candidate has already supplied the relevant evidence, and instead moves the interview forward.
 - Candidate-state and interviewer-decision snapshots now have dedicated persistence tables in addition to the existing session-event trail, so state tracking can migrate away from event-only replay over time.
 - Added tests for signal extraction, decision logic, evidence-based reporting, reply strategy shaping, provider compliance handling, and provider fallback ordering.
 - signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
 - /admin and /report now group observed candidate issues by Correctness, Testing, Complexity, and Debugging so interviewer quality is easier to inspect at a glance.
+- /admin and /report replay now surface unresolved issues, missing evidence, answered targets, collected evidence, and the current evidence focus so interviewer pacing is easier to debug visually.
 
 ## What Works Today
 

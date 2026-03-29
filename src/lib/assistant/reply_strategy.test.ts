@@ -11,6 +11,7 @@ const baseSignals: CandidateSignalSnapshot = {
   algorithmChoice: "reasonable",
   edgeCaseAwareness: "partial",
   behavior: "structured",
+  readyToCode: false,
   reasoningDepth: "moderate",
   testingDiscipline: "partial",
   complexityRigor: "partial",
