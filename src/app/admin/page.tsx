@@ -179,6 +179,37 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                   </div>
                                 ))}
                               </dl>
+                              {Array.isArray(detail.sessionSummary.latestSignals.structuredEvidence) && detail.sessionSummary.latestSignals.structuredEvidence.length > 0 ? (
+                                <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                                  <strong>Observed Issues</strong>
+                                  {groupStructuredEvidence(detail.sessionSummary.latestSignals.structuredEvidence).map((group) => (
+                                    <div key={`admin-structured-group-${group.label}`} style={{ display: "grid", gap: 10 }}>
+                                      <strong>{group.label}</strong>
+                                      {group.items.map((item, index) => {
+                                        const evidenceItem = typeof item === "object" && item !== null ? item as Record<string, unknown> : {};
+                                        return (
+                                          <div key={`admin-structured-evidence-${group.label}-${index}`} style={panelStyle}>
+                                            <strong>{String(evidenceItem.issue ?? "Observed issue")}</strong>
+                                            <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+                                              {String(evidenceItem.evidence ?? evidenceItem.behavior ?? "No concrete evidence captured.")}
+                                            </p>
+                                            {evidenceItem.impact ? (
+                                              <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+                                                <strong>Impact:</strong> {String(evidenceItem.impact)}
+                                              </p>
+                                            ) : null}
+                                            {evidenceItem.fix ? (
+                                              <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+                                                <strong>Fix:</strong> {String(evidenceItem.fix)}
+                                              </p>
+                                            ) : null}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No signal snapshot recorded yet.</p>
@@ -472,7 +503,40 @@ const topLinkStyle = {
   fontWeight: 700,
 } as const;
 
+function groupStructuredEvidence(evidence: unknown[]) {
+  const groups = new Map<string, unknown[]>();
+
+  for (const item of evidence) {
+    const record = typeof item === "object" && item !== null ? (item as Record<string, unknown>) : {};
+    const label = evidenceAreaLabel(typeof record.area === "string" ? record.area : undefined);
+    const current = groups.get(label) ?? [];
+    current.push(item);
+    groups.set(label, current);
+  }
+
+  return [...groups.entries()].map(([label, items]) => ({ label, items }));
+}
+
+function evidenceAreaLabel(area?: string) {
+  switch (area) {
+    case "correctness":
+    case "reasoning":
+      return "Correctness";
+    case "testing":
+    case "edge_case":
+      return "Testing";
+    case "complexity":
+      return "Complexity";
+    case "debugging":
+      return "Debugging";
+    default:
+      return "Other";
+  }
+}
 function formatLabel(value: string) {
   return value.replace(/([A-Z])/g, " $1").replaceAll("_", " ").trim();
 }
+
+
+
 

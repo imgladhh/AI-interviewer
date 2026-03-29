@@ -73,6 +73,145 @@ describe("extractCandidateSignals", () => {
 
     expect(snapshot.reasoningDepth).toBe("thin");
     expect(snapshot.complexityRigor).toBe("missing");
+    expect(snapshot.structuredEvidence.some((item) => item.area === "reasoning")).toBe(true);
+  });
+
+  it("records invariant evidence when the candidate explains the plan without a correctness invariant", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "First I build a hash map and then I iterate again to collect the answer, because that is faster than brute force.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.reasoningDepth).toBe("moderate");
+    expect(
+      snapshot.structuredEvidence.some(
+        (item) =>
+          item.area === "correctness" &&
+          /invariant/i.test(item.issue),
+      ),
+    ).toBe(true);
+  });
+
+  it("records shallow tradeoff evidence when complexity is named without comparison", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "The time complexity is O(n log k) and the space complexity is O(k).",
+        },
+      ],
+      latestExecutionRun: {
+        status: "PASSED",
+      },
+    });
+
+    expect(snapshot.complexityRigor).toBe("partial");
+    expect(
+      snapshot.structuredEvidence.some(
+        (item) =>
+          item.area === "complexity" &&
+          /tradeoff/i.test(item.issue),
+      ),
+    ).toBe(true);
+  });
+
+  it("records narrow boundary coverage when testing is mentioned without enough breadth", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "I would also test one edge case before finishing.",
+        },
+      ],
+      latestExecutionRun: {
+        status: "PASSED",
+      },
+    });
+
+    expect(snapshot.edgeCaseAwareness).toBe("partial");
+    expect(
+      snapshot.structuredEvidence.some(
+        (item) =>
+          item.area === "edge_case" &&
+          /boundary coverage/i.test(item.issue),
+      ),
+    ).toBe(true);
+  });
+
+  it("records proof-sketch evidence when the candidate gives intuition without a full correctness argument", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "The invariant is that the left side stays sorted, and that should make the idea work, because we keep moving the pointer forward.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(
+      snapshot.structuredEvidence.some(
+        (item) =>
+          item.area === "correctness" &&
+          /proof sketch|intuition/i.test(item.issue),
+      ),
+    ).toBe(true);
+  });
+
+  it("records imprecise expected-output evidence when tests are named without exact outcomes", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "I would test empty input and duplicates before wrapping up.",
+        },
+      ],
+      latestExecutionRun: {
+        status: "PASSED",
+      },
+    });
+
+    expect(snapshot.testingDiscipline).toBe("partial");
+    expect(
+      snapshot.structuredEvidence.some(
+        (item) =>
+          item.area === "testing" &&
+          /expected outputs stayed imprecise/i.test(item.issue),
+      ),
+    ).toBe(true);
+  });
+
+  it("records constraint-justification evidence when the tradeoff is named but not justified", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "This uses more memory, but the runtime is O(n log k), which is the tradeoff here.",
+        },
+      ],
+      latestExecutionRun: {
+        status: "PASSED",
+      },
+    });
+
+    expect(
+      snapshot.structuredEvidence.some(
+        (item) =>
+          item.area === "complexity" &&
+          /constraints/i.test(item.issue),
+      ),
+    ).toBe(true);
   });
 
   it("adds a trend summary when recent signal snapshots show state change", () => {
@@ -107,3 +246,4 @@ describe("extractCandidateSignals", () => {
     expect(snapshot.trendSummary).toMatch(/progress moved|testing discipline moved|complexity rigor changed/i);
   });
 });
+

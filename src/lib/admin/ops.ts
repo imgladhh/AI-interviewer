@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+﻿import { prisma } from "@/lib/db";
 import { describeCodingStage, isCodingInterviewStage } from "@/lib/assistant/stages";
 import { getPersonaJobSnapshot, type PersonaJobSnapshot } from "@/lib/persona/queue";
 
@@ -274,12 +274,16 @@ function buildSessionTimeline(
 
       if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
         const signals = asRecord(payload.signals);
+        const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
+        const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
         return {
           id: `${event.eventType}-${event.eventTime.toISOString()}`,
           kind: "signal" as const,
           at: event.eventTime.toISOString(),
           title: "Candidate state snapshot",
-          summary: `understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, quality=${stringOrFallback(signals.codeQuality, "unknown")}`,
+          summary: primaryIssue?.issue
+            ? `Issue spotted: ${String(primaryIssue.issue)}`
+            : `understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, quality=${stringOrFallback(signals.codeQuality, "unknown")}`,
           payload,
         };
       }
@@ -379,7 +383,11 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
 
   if (eventType === "SIGNAL_SNAPSHOT_RECORDED") {
     const signals = asRecord(payload.signals);
-    return `Candidate state updated: understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, edge cases=${stringOrFallback(signals.edgeCaseAwareness, "unknown")}.`;
+    const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
+    const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
+    return primaryIssue?.issue
+      ? `Candidate state updated. Primary observed issue: ${String(primaryIssue.issue)}`
+      : `Candidate state updated: understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, edge cases=${stringOrFallback(signals.edgeCaseAwareness, "unknown")}.`;
   }
 
   if (eventType === "DECISION_RECORDED") {
@@ -479,3 +487,5 @@ function describeStage(value: unknown) {
 
   return describeCodingStage(value);
 }
+
+

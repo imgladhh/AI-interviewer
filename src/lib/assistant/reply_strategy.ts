@@ -7,20 +7,21 @@ export function describeReplyStrategy(
   signals: CandidateSignalSnapshot,
 ) {
   const trend = signals.trendSummary ?? "No clear trend yet.";
+  const issueStyle = describeIssueStyle(decision.specificIssue);
 
   switch (decision.action) {
     case "hold_and_listen":
       return `Be brief and non-intrusive. Give the candidate room to continue, while lightly naming the one invariant, branch, or state update worth narrating. Trend context: ${trend}`;
     case "ask_for_reasoning":
-      return `Probe the candidate's reasoning, not just the surface approach. Ask for one concrete example, invariant, or correctness argument. Trend context: ${trend}`;
+      return `Probe the candidate's reasoning, not just the surface approach. ${issueStyle} Ask for one concrete example, invariant, or correctness argument. Trend context: ${trend}`;
     case "probe_tradeoff":
-      return `Press on tradeoffs and algorithm choice. Compare the current approach against a stronger alternative and ask what efficiency or simplicity tradeoff the candidate is making. Trend context: ${trend}`;
+      return `Press on tradeoffs and algorithm choice. ${issueStyle} Compare the current approach against a stronger alternative and ask what efficiency or simplicity tradeoff the candidate is making. Trend context: ${trend}`;
     case "probe_correctness":
-      return `Probe correctness tightly. Ask how the candidate knows the solution is correct on one example, branch, or invariant before moving on. Trend context: ${trend}`;
+      return `Probe correctness tightly. ${issueStyle} Ask how the candidate knows the solution is correct on one example, branch, or invariant before moving on. Trend context: ${trend}`;
     case "ask_for_test_case":
-      return `Ask explicitly for high-risk test cases or edge cases. Do not drift back into a broad approach discussion. Trend context: ${trend}`;
+      return `Ask explicitly for high-risk test cases or edge cases. ${issueStyle} Do not drift back into a broad approach discussion. Trend context: ${trend}`;
     case "ask_for_complexity":
-      return `Ask explicitly for final time complexity, space complexity, and tradeoffs. Keep the follow-up precise and evaluative. Trend context: ${trend}`;
+      return `Ask explicitly for final time complexity, space complexity, and tradeoffs. ${issueStyle} Keep the follow-up precise and evaluative. Trend context: ${trend}`;
     case "ask_for_debug_plan":
       return `Localize the debugging discussion. Force the candidate to identify one failing input, one branch, or one state transition to inspect next. Trend context: ${trend}`;
     case "give_hint":
@@ -47,6 +48,7 @@ export function buildFallbackReplyFromDecision(input: {
     /moved from (stuck|missing|partial) to (progressing|done|present|strong|moderate|deep)/i.test(
       signals.trendSummary,
     );
+  const issueType = classifyIssueType(decision.specificIssue);
 
   switch (decision.action) {
     case "hold_and_listen":
@@ -69,21 +71,41 @@ export function buildFallbackReplyFromDecision(input: {
       );
     case "probe_tradeoff":
       return chooseVariation(
-        decision.question,
+        issueType === "constraint_justification"
+          ? "You have named the tradeoff already. Now justify it against the actual constraints for me. Why is that runtime or memory cost acceptable here?"
+          : decision.question,
         previousAiTurn,
-        "Push on the tradeoff for me. What do you gain with this approach, and what stronger alternative are you giving up?",
+        issueType === "constraint_justification"
+          ? "Do not stop at naming the tradeoff. Tell me why that tradeoff is worth it for this problem's constraints."
+          : "Push on the tradeoff for me. What do you gain with this approach, and what stronger alternative are you giving up?",
       );
     case "probe_correctness":
       return chooseVariation(
-        decision.question,
+        issueType === "proof_sketch"
+          ? "I hear the intuition. Now turn that into a proof sketch for me. Why is that argument actually sufficient to guarantee correctness?"
+          : issueType === "invariant"
+            ? "Do not just describe the plan. State the invariant explicitly and tell me why it stays true after each step."
+            : decision.question,
         previousAiTurn,
-        "Before we move on, convince me the logic is correct on one concrete example or invariant.",
+        issueType === "proof_sketch"
+          ? "You have the right intuition, but I still need the proof sketch. What is the actual reason this logic must be correct?"
+          : issueType === "invariant"
+            ? "Before we move on, state the invariant cleanly and explain why each update preserves it."
+            : "Before we move on, convince me the logic is correct on one concrete example or invariant.",
       );
     case "ask_for_test_case":
       return chooseVariation(
-        decision.question,
+        issueType === "boundary_breadth"
+          ? "Make the boundary coverage concrete for me. Give me two exact boundary cases and the precise output you expect on each."
+          : issueType === "expected_output_precision"
+            ? "Do not just name the tests. Tell me the exact output each test case should produce."
+            : decision.question,
         previousAiTurn,
-        "Let's make validation explicit. Which edge cases would you test first, and what should happen on each one?",
+        issueType === "boundary_breadth"
+          ? "Your testing list is still too narrow. Which empty, minimal, or duplicate-heavy cases would you validate explicitly?"
+          : issueType === "expected_output_precision"
+            ? "Let's make validation explicit. For each test you named, what exact result should the code return?"
+            : "Let's make validation explicit. Which edge cases would you test first, and what should happen on each one?",
       );
     case "ask_for_complexity":
       return chooseVariation(
@@ -122,4 +144,46 @@ function chooseVariation(primary: string, previousAiTurn?: string, alternate?: s
   }
 
   return primary;
+}
+
+function classifyIssueType(issue?: string) {
+  const normalized = issue?.toLowerCase() ?? "";
+
+  if (!normalized) {
+    return "generic";
+  }
+  if (normalized.includes("proof sketch") || normalized.includes("intuition")) {
+    return "proof_sketch";
+  }
+  if (normalized.includes("invariant")) {
+    return "invariant";
+  }
+  if (normalized.includes("boundary coverage")) {
+    return "boundary_breadth";
+  }
+  if (normalized.includes("expected outputs") || normalized.includes("expected output")) {
+    return "expected_output_precision";
+  }
+  if (normalized.includes("tradeoff") && normalized.includes("constraints")) {
+    return "constraint_justification";
+  }
+
+  return "generic";
+}
+
+function describeIssueStyle(issue?: string) {
+  switch (classifyIssueType(issue)) {
+    case "proof_sketch":
+      return "The candidate already gave some intuition, so push for a short proof sketch rather than repeating the same broad prompt.";
+    case "invariant":
+      return "Focus on forcing a crisp invariant and how each step preserves it.";
+    case "boundary_breadth":
+      return "Ask for exact boundary cases, not vague validation talk.";
+    case "expected_output_precision":
+      return "Require the candidate to name exact expected outputs, not just test categories.";
+    case "constraint_justification":
+      return "Do not stop at naming the tradeoff; make the candidate justify why it is acceptable under the actual constraints.";
+    default:
+      return "Keep the follow-up concrete and avoid generic praise.";
+  }
 }

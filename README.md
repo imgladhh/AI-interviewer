@@ -1,4 +1,4 @@
-# AI Interviewer
+﻿# AI Interviewer
 
 Voice-first mock interview app for North American SDE interview prep, currently centered on coding interviews, a stage-governed AI interviewer, and an optional public interviewer persona flow.
 
@@ -91,6 +91,7 @@ This repo now has a working MVP-plus skeleton with:
 - Added signal_extractor as a perception layer with provider-backed structured observation first and heuristic fallback second.
 - Added decision_engine as a candidate-state-driven interviewer control layer, so turns are chosen from candidate signals plus stage and code-run evidence.
 - Gemini/OpenAI replies are now explicitly steered by the decision engine, shaped by a dedicated reply strategy layer, and post-processed to fall back to the required decision question when a model reply is too generic.
+- provider prompts now receive structured candidate issues, issue groups, issue-specific instructions, and expected-answer contracts so Gemini/OpenAI can act more like execution layers than free-form chat models.
 - Text-provider fallback is now an explicit sequence: preferred provider -> secondary provider -> local fallback.
 - Added `reply_strategy.ts` so decision actions such as `probe_tradeoff`, `probe_correctness`, and `hold_and_listen` map to more interviewer-like wording across provider-backed and local fallback turns.
 - decision_engine v2 now distinguishes between:
@@ -99,8 +100,11 @@ This repo now has a working MVP-plus skeleton with:
   - holding the floor and lightly steering when the candidate is progressing in a structured way
 - /admin now exposes latest session stage, latest candidate state, latest interviewer decision, and a dedicated session-state timeline.
 - /report/[id] now shares the same evidence backbone as /admin, including signal snapshots, interviewer decisions, hints, stage transitions, and code-run outcomes.
+- decision_engine now consumes fine-grained structured evidence directly, so issue classes like invariant gaps, narrow boundary coverage, and shallow tradeoff analysis can trigger more surgical follow-up questions.
 - Candidate-state and interviewer-decision snapshots now have dedicated persistence tables in addition to the existing session-event trail, so state tracking can migrate away from event-only replay over time.
-- Added tests for signal extraction, decision logic, evidence-based reporting, provider compliance handling, and provider fallback ordering.
+- Added tests for signal extraction, decision logic, evidence-based reporting, reply strategy shaping, provider compliance handling, and provider fallback ordering.
+- signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
+- /admin and /report now group observed candidate issues by Correctness, Testing, Complexity, and Debugging so interviewer quality is easier to inspect at a glance.
 
 ## What Works Today
 
@@ -300,6 +304,7 @@ npm run build
 - Interviewer profile preview route behavior
 - Sessions route behavior
 - Assistant-turn fallback generation and stage-aware behavior
+- Reply strategy shaping and issue-aware fallback phrasing
 - Signal extraction and candidate-state reasoning
 - Decision-engine behavior for stuck/debugging/tradeoff/testing cases
 - Stage inference, policy decisions, and prompt strategy behavior
@@ -382,6 +387,8 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
 
 
 

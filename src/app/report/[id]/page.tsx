@@ -9,6 +9,7 @@ type ReportPageProps = {
 type Dimension = {
   key: string;
   label: string;
+  issue?: string;
   score: number;
   maxScore: number;
   evidence: string;
@@ -29,6 +30,14 @@ type CandidateState = {
   complexityRigor?: string;
   confidence?: number;
   evidence?: string[];
+  structuredEvidence?: Array<{
+    area?: string;
+    issue?: string;
+    behavior?: string;
+    evidence?: string;
+    impact?: string;
+    fix?: string;
+  }>;
   summary?: string;
   trendSummary?: string;
 };
@@ -39,6 +48,9 @@ type LatestDecision = {
   question?: string;
   reason?: string;
   confidence?: number;
+  targetCodeLine?: string;
+  specificIssue?: string;
+  expectedAnswer?: string;
   suggestedStage?: string;
   hintStyle?: string;
   hintLevel?: string;
@@ -262,6 +274,34 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     ))}
                   </div>
                 ) : null}
+                {Array.isArray(reportJson.candidateState.structuredEvidence) && reportJson.candidateState.structuredEvidence.length > 0 ? (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <strong>Observed Issues</strong>
+                    {groupStructuredEvidence(reportJson.candidateState.structuredEvidence).map((group) => (
+                      <div key={`candidate-structured-group-${group.label}`} style={{ display: "grid", gap: 10 }}>
+                        <strong>{group.label}</strong>
+                        {group.items.map((item, index) => (
+                          <div key={`candidate-structured-evidence-${group.label}-${index}`} style={listItemStyle}>
+                            <strong>{item.issue ?? "Observed issue"}</strong>
+                            <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                              {item.evidence ?? item.behavior ?? "No concrete evidence captured."}
+                            </p>
+                            {item.impact ? (
+                              <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                                <strong>Impact:</strong> {item.impact}
+                              </p>
+                            ) : null}
+                            {item.fix ? (
+                              <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                                <strong>Fix:</strong> {item.fix}
+                              </p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p style={mutedParagraphStyle}>No candidate-state snapshot was captured for this session.</p>
@@ -291,6 +331,24 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                   <strong>Reason</strong>
                   <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.reason ?? "No decision reason captured."}</p>
                 </div>
+                {reportJson.latestDecision.specificIssue ? (
+                  <div style={listItemStyle}>
+                    <strong>Specific issue</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.specificIssue}</p>
+                  </div>
+                ) : null}
+                {reportJson.latestDecision.targetCodeLine ? (
+                  <div style={listItemStyle}>
+                    <strong>Target code line</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.targetCodeLine}</p>
+                  </div>
+                ) : null}
+                {reportJson.latestDecision.expectedAnswer ? (
+                  <div style={listItemStyle}>
+                    <strong>Expected answer</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.expectedAnswer}</p>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p style={mutedParagraphStyle}>No interviewer decision snapshot was captured for this session.</p>
@@ -310,6 +368,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                   </span>
                 </div>
                 <div style={{ display: "grid", gap: 8 }}>
+                  {dimension.issue ? (
+                    <div>
+                      <strong>Issue</strong>
+                      <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{dimension.issue}</p>
+                    </div>
+                  ) : null}
                   <div>
                     <strong>Evidence</strong>
                     <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{dimension.evidence}</p>
@@ -544,12 +608,14 @@ function buildReplayItems(input: {
 
     if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
       const signals = asRecord(payload.signals);
+      const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
+      const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
       items.push({
         id: event.id,
         time: event.eventTime.toLocaleTimeString(),
         sortTime: event.eventTime.getTime(),
         title: "Candidate State Updated",
-        description: stringValue(signals.summary) ?? "Candidate state snapshot recorded.",
+        description: primaryIssue?.issue ? `Observed issue: ${String(primaryIssue.issue)}` : stringValue(signals.summary) ?? "Candidate state snapshot recorded.",
         tone: "neutral",
       });
     }
@@ -649,6 +715,8 @@ function buildCandidateStateTimeline(
 
       if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
         const signals = asRecord(payload.signals);
+        const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
+        const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
         return {
           id: event.id,
           kind: "signal" as const,
@@ -656,6 +724,7 @@ function buildCandidateStateTimeline(
           sortTime: event.eventTime.getTime(),
           title: "Candidate state snapshot",
           summary:
+            primaryIssue?.issue ? `Observed issue: ${String(primaryIssue.issue)}` :
             stringValue(signals.summary) ??
             `understanding=${stringValue(signals.understanding) ?? "unknown"}, progress=${stringValue(signals.progress) ?? "unknown"}`,
           payload,
@@ -700,6 +769,37 @@ function buildCandidateStateTimeline(
     .sort((left, right) => right.sortTime - left.sortTime);
 }
 
+function groupStructuredEvidence(
+  evidence: NonNullable<CandidateState["structuredEvidence"]>,
+) {
+  const groups = new Map<string, NonNullable<CandidateState["structuredEvidence"]>>();
+
+  for (const item of evidence) {
+    const label = evidenceAreaLabel(item.area);
+    const current = groups.get(label) ?? [];
+    current.push(item);
+    groups.set(label, current);
+  }
+
+  return [...groups.entries()].map(([label, items]) => ({ label, items }));
+}
+
+function evidenceAreaLabel(area?: string) {
+  switch (area) {
+    case "correctness":
+    case "reasoning":
+      return "Correctness";
+    case "testing":
+    case "edge_case":
+      return "Testing";
+    case "complexity":
+      return "Complexity";
+    case "debugging":
+      return "Debugging";
+    default:
+      return "Other";
+  }
+}
 function prettifyKey(value: string) {
   return value
     .split("_")
@@ -873,4 +973,12 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
+
+
+
+
+
+
+
 

@@ -1,4 +1,4 @@
-﻿import {
+import {
   deriveCurrentCodingStage,
   describeCodingStage,
   isCodingInterviewStage,
@@ -39,6 +39,7 @@ type SessionReportInput = {
 type DimensionScore = {
   key: string;
   label: string;
+  issue?: string;
   score: number;
   maxScore: number;
   evidence: string;
@@ -59,6 +60,14 @@ type CandidateSignalSummary = {
   complexityRigor?: string;
   confidence?: number;
   evidence?: string[];
+  structuredEvidence?: Array<{
+    area?: string;
+    issue?: string;
+    behavior?: string;
+    evidence?: string;
+    impact?: string;
+    fix?: string;
+  }>;
   summary?: string;
 };
 
@@ -68,6 +77,9 @@ type CandidateDecisionSummary = {
   question?: string;
   reason?: string;
   confidence?: number;
+  targetCodeLine?: string;
+  specificIssue?: string;
+  expectedAnswer?: string;
   suggestedStage?: string;
   hintStyle?: string;
   hintLevel?: string;
@@ -202,6 +214,7 @@ function scoreProblemUnderstanding(
   return {
     key: "problem_understanding",
     label: "Problem Understanding",
+    issue: clear ? "Problem framing was sufficient." : "Problem framing stayed incomplete or only partially explicit.",
     score,
     maxScore: 5,
     evidence:
@@ -240,6 +253,10 @@ function scoreCommunication(userTurns: TranscriptLike[], latestSignal: Candidate
   return {
     key: "communication",
     label: "Communication",
+    issue:
+      score >= 4
+        ? "Communication exposed the candidate's thinking clearly."
+        : "Communication left parts of the reasoning implicit or compressed.",
     score,
     maxScore: 5,
     evidence:
@@ -277,6 +294,10 @@ function scoreImplementation(
   return {
     key: "implementation",
     label: "Implementation",
+    issue:
+      passedRuns > 0
+        ? "Implementation reached a working state."
+        : "Implementation evidence remained incomplete or unstable.",
     score,
     maxScore: 5,
     evidence:
@@ -304,6 +325,12 @@ function scoreDebugging(executionRuns: ExecutionRunLike[], latestDecision: Candi
   return {
     key: "debugging",
     label: "Debugging",
+    issue:
+      passedRuns > 0
+        ? "The candidate demonstrated at least one successful recovery from failure."
+        : failingRuns > 0
+          ? "The session surfaced failures without a strong recovery signal."
+          : "The session did not produce much explicit debugging evidence.",
     score,
     maxScore: 5,
     evidence:
@@ -341,6 +368,12 @@ function scoreTestingAndComplexity(
   return {
     key: "testing_and_complexity",
     label: "Testing and Complexity",
+    issue:
+      score >= 5
+        ? "Validation and complexity coverage were both visible."
+        : score >= 3
+          ? "Testing or complexity was discussed, but the close-out stayed incomplete."
+          : "The session ended without a strong testing and complexity close-out.",
     score,
     maxScore: 5,
     evidence:
@@ -535,6 +568,10 @@ function collectWeaknesses(
     weaknesses.push("Testing discipline: the candidate did not present a concrete test plan before closing the loop.");
   }
 
+  for (const item of latestSignal?.structuredEvidence ?? []) {
+    weaknesses.push(`${prettifyArea(item.area ?? "issue")}: ${item.issue ?? item.evidence ?? "A concrete issue was observed."}`);
+  }
+
   if (hintRequestedCount >= 2) {
     weaknesses.push("The candidate needed repeated hints, which may indicate difficulty sustaining momentum independently.");
   }
@@ -612,7 +649,20 @@ function collectImprovementPlan(
     improvements.push("Try to delay asking for hints until after you have walked through one concrete example yourself.");
   }
 
+  for (const item of latestSignal?.structuredEvidence ?? []) {
+    if (item.fix) {
+      improvements.push(item.fix);
+    }
+  }
+
   return improvements.slice(0, 4);
+}
+
+function prettifyArea(value: string) {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function findLatestSignalSnapshot(events: SessionEventLike[]) {
@@ -676,4 +726,11 @@ function stringValue(value: unknown) {
 function truncate(value: string, maxLength: number) {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
 }
+
+
+
+
+
+
+
 

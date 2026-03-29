@@ -27,6 +27,14 @@ export type CandidateBehaviorState = "structured" | "overthinking" | "rushing" |
 export type CandidateReasoningDepthState = "thin" | "moderate" | "deep";
 export type CandidateTestingDisciplineState = "missing" | "partial" | "strong";
 export type CandidateComplexityRigorState = "missing" | "partial" | "strong";
+export type CandidateEvidenceItem = {
+  area: "reasoning" | "testing" | "complexity" | "correctness" | "edge_case" | "debugging";
+  issue: string;
+  behavior: string;
+  evidence: string;
+  impact: string;
+  fix: string;
+};
 
 export type CandidateSignalSnapshot = {
   understanding: CandidateUnderstandingState;
@@ -41,6 +49,7 @@ export type CandidateSignalSnapshot = {
   complexityRigor: CandidateComplexityRigorState;
   confidence: number;
   evidence: string[];
+  structuredEvidence: CandidateEvidenceItem[];
   summary: string;
   trendSummary?: string;
   source?: "heuristic" | "gemini-observer" | "openai-observer";
@@ -91,6 +100,18 @@ export function extractCandidateSignals(input: {
     evidence.push(trendSummary);
   }
 
+  const structuredEvidence = buildStructuredEvidence({
+    normalizedUserText,
+    latestRun,
+    understanding,
+    progress,
+    codeQuality,
+    edgeCaseAwareness,
+    reasoningDepth,
+    testingDiscipline,
+    complexityRigor,
+  });
+
   return {
     understanding,
     progress,
@@ -104,6 +125,7 @@ export function extractCandidateSignals(input: {
     complexityRigor,
     confidence,
     evidence: dedupeEvidence(evidence).slice(0, 6),
+    structuredEvidence,
     summary: buildSignalSummary({
       understanding,
       progress,
@@ -434,7 +456,18 @@ function resolveConfidence(input: {
   return Math.max(0.2, Math.min(0.95, Number(confidence.toFixed(2))));
 }
 
-function buildSignalSummary(input: Omit<CandidateSignalSnapshot, "confidence" | "evidence" | "summary">) {
+function buildSignalSummary(input: {
+  understanding: CandidateUnderstandingState;
+  progress: CandidateProgressState;
+  communication: CandidateCommunicationState;
+  codeQuality: CandidateCodeQualityState;
+  algorithmChoice: CandidateAlgorithmChoiceState;
+  edgeCaseAwareness: CandidateEdgeCaseAwarenessState;
+  behavior: CandidateBehaviorState;
+  reasoningDepth: CandidateReasoningDepthState;
+  testingDiscipline: CandidateTestingDisciplineState;
+  complexityRigor: CandidateComplexityRigorState;
+}) {
   return [
     `Understanding is ${input.understanding}`,
     `progress is ${input.progress}`,
@@ -672,7 +705,7 @@ function buildSignalObserverPrompt(
     `Recent candidate-state history:\n${priorSignalHistory || "none"}`,
     `Heuristic baseline: ${JSON.stringify(heuristic)}`,
     "Return JSON only with keys:",
-    "understanding, progress, communication, codeQuality, algorithmChoice, edgeCaseAwareness, behavior, reasoningDepth, testingDiscipline, complexityRigor, confidence, evidence, summary, trendSummary",
+    "understanding, progress, communication, codeQuality, algorithmChoice, edgeCaseAwareness, behavior, reasoningDepth, testingDiscipline, complexityRigor, confidence, evidence, structuredEvidence, summary, trendSummary",
     "Allowed values:",
     'understanding: "confused" | "partial" | "clear"',
     'progress: "stuck" | "progressing" | "done"',
@@ -685,6 +718,7 @@ function buildSignalObserverPrompt(
     'testingDiscipline: "missing" | "partial" | "strong"',
     'complexityRigor: "missing" | "partial" | "strong"',
     "evidence must be a short array of strings, max 4 items.",
+    "structuredEvidence must be an array of up to 4 objects with keys: area, issue, behavior, evidence, impact, fix.",
     "summary must be one concise sentence.",
     "trendSummary should be one short sentence describing how the current state compares with the recent candidate-state history.",
     "Do not repeat the full heuristic baseline in summary or evidence unless the current evidence truly supports it.",
@@ -726,6 +760,13 @@ function parseObservedSignals(
         Array.isArray(parsed.evidence) && parsed.evidence.length > 0
           ? parsed.evidence.filter((item): item is string => typeof item === "string").slice(0, 6)
           : heuristic.evidence,
+      structuredEvidence:
+        Array.isArray(parsed.structuredEvidence) && parsed.structuredEvidence.length > 0
+          ? parsed.structuredEvidence
+              .map((item) => normalizeStructuredEvidenceItem(item))
+              .filter((item): item is CandidateEvidenceItem => item !== null)
+              .slice(0, 4)
+          : heuristic.structuredEvidence,
       summary: typeof parsed.summary === "string" && parsed.summary.trim() ? parsed.summary.trim() : heuristic.summary,
       trendSummary:
         typeof parsed.trendSummary === "string" && parsed.trendSummary.trim()
@@ -756,3 +797,196 @@ function extractJsonObject(text: string) {
 function coerceEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === "string" && allowed.includes(value as T) ? (value as T) : fallback;
 }
+
+function buildStructuredEvidence(input: {
+  normalizedUserText: string;
+  latestRun: ExecutionRunLike | null | undefined;
+  understanding: CandidateUnderstandingState;
+  progress: CandidateProgressState;
+  codeQuality: CandidateCodeQualityState;
+  edgeCaseAwareness: CandidateEdgeCaseAwarenessState;
+  reasoningDepth: CandidateReasoningDepthState;
+  testingDiscipline: CandidateTestingDisciplineState;
+  complexityRigor: CandidateComplexityRigorState;
+}) {
+  const items: CandidateEvidenceItem[] = [];
+  const mentionsInvariant = /\b(invariant|maintain|preserve|always true|after each step|before moving on)\b/.test(
+    input.normalizedUserText,
+  );
+  const mentionsExampleWalkthrough = /\b(example|walk through|step by step|for instance)\b/.test(input.normalizedUserText);
+  const mentionsComplexity = /\b(time complexity|space complexity|big-?o|o\([^)]+\)|linear|quadratic|logarithmic)\b/.test(
+    input.normalizedUserText,
+  );
+  const mentionsTradeoff = /\b(tradeoff|memory|runtime|space|extra space|optimi[sz]|compared to|instead of)\b/.test(
+    input.normalizedUserText,
+  );
+  const mentionsProofSketch = /\b(proof|prove|guarantee|why this works|must be true|correct because)\b/.test(
+    input.normalizedUserText,
+  );
+  const mentionsExpectedOutputPrecision = /\b(expect|expected|should return|should produce|output should be|result should be)\b/.test(
+    input.normalizedUserText,
+  );
+  const mentionsConstraintJustification = /\b(under these constraints|given the constraints|acceptable because|worth it because|since n|for this input size|because memory)\b/.test(
+    input.normalizedUserText,
+  );
+  const mentionsBoundaryBreadth =
+    /(empty|single element|duplicate|boundary|corner case|null|negative|zero).*(empty|single element|duplicate|boundary|corner case|null|negative|zero)/.test(
+      input.normalizedUserText,
+    );
+
+  if (input.edgeCaseAwareness === "missing") {
+    items.push({
+      area: "edge_case",
+      issue: "Edge-case handling is still underspecified.",
+      behavior: "The candidate focused on the main path without naming boundary conditions.",
+      evidence:
+        input.latestRun?.status === "FAILED" || input.latestRun?.status === "ERROR"
+          ? "There is a failing code run, but the candidate still did not name the edge case that could reproduce it."
+          : "The recent explanation did not mention empty input, single-element input, duplicates, or other boundary cases.",
+      impact: "Unseen boundary cases can break otherwise reasonable implementations in production.",
+      fix: "Before closing the loop, name two or three high-risk edge cases and say what the code should do on each.",
+    });
+  } else if (input.edgeCaseAwareness === "partial" && !mentionsBoundaryBreadth) {
+    items.push({
+      area: "edge_case",
+      issue: "Boundary coverage is still too narrow.",
+      behavior: "The candidate mentioned validation, but only at a surface level.",
+      evidence:
+        "Recent turns referenced testing or edge cases, but they did not cover a broad enough set of boundary conditions like empty input, single-element input, or duplicate-heavy input.",
+      impact: "Thin boundary coverage leaves obvious correctness gaps even when the happy path sounds plausible.",
+      fix: "Name at least one empty or minimal input case and one high-risk boundary case, then say the exact expected output for each.",
+    });
+  }
+
+  if (input.reasoningDepth === "thin") {
+    items.push({
+      area: "reasoning",
+      issue: "Correctness reasoning is too implicit.",
+      behavior: "The candidate named an approach but did not fully explain why it stays correct.",
+      evidence: "Recent turns contain a proposed direction, but not a concrete invariant, example walkthrough, or explicit why-this-works argument.",
+      impact: "Without visible reasoning, the interviewer cannot distinguish memorized patterns from true understanding.",
+      fix: "After naming the approach, immediately explain one concrete example or invariant that makes the logic correct.",
+    });
+  } else if (input.reasoningDepth === "moderate" && !mentionsInvariant && !mentionsExampleWalkthrough) {
+    items.push({
+      area: "correctness",
+      issue: "The correctness invariant is still underspecified.",
+      behavior: "The candidate described the plan, but did not anchor it to an invariant or a concrete state transition.",
+      evidence:
+        "Recent turns explain the approach at a mid level, but they never state what remains true after each step or why each update preserves correctness.",
+      impact: "When the invariant stays implicit, the interviewer still has weak evidence that the candidate truly understands why the algorithm works.",
+      fix: "State one invariant explicitly, or walk through one concrete example and name what remains true after each step.",
+    });
+  } else if (input.reasoningDepth !== "deep" && !mentionsProofSketch && (mentionsInvariant || mentionsExampleWalkthrough)) {
+    items.push({
+      area: "correctness",
+      issue: "The candidate is giving intuition, but not a real proof sketch.",
+      behavior: "The explanation gestures at why the approach works, but stops before making the correctness argument explicit.",
+      evidence:
+        "Recent turns mention an invariant or example, but they do not finish the argument by explaining why that invariant or walkthrough is enough to guarantee correctness.",
+      impact: "A good intuition without a proof sketch still leaves uncertainty about whether the candidate can defend the solution under pressure.",
+      fix: "After the intuition, add one sentence that explicitly says why the invariant or example is sufficient to prove the logic is correct.",
+    });
+  }
+
+  if (input.testingDiscipline === "missing") {
+    items.push({
+      area: "testing",
+      issue: "Testing discipline is weak.",
+      behavior: "The candidate is not proactively validating with explicit test cases.",
+      evidence: "The discussion did not include a concrete test plan or named boundary cases before wrap-up.",
+      impact: "Weak validation discipline makes it easier to ship code that only passes happy-path reasoning.",
+      fix: "Always finish by naming at least one happy path, one boundary case, and one failure-prone case.",
+    });
+  } else if (input.testingDiscipline === "partial" && !mentionsExpectedOutputPrecision) {
+    items.push({
+      area: "testing",
+      issue: "Test cases were mentioned, but the expected outputs stayed imprecise.",
+      behavior: "The candidate named validation scenarios without stating what the code should actually return on them.",
+      evidence:
+        "Recent turns reference tests or edge cases, but they do not pin down the exact expected output or state for those cases.",
+      impact: "When expected outputs are vague, testing sounds procedural rather than genuinely correctness-driven.",
+      fix: "For each named test case, state the exact output or state the code should produce before moving on.",
+    });
+  }
+
+  if (input.complexityRigor === "missing") {
+    items.push({
+      area: "complexity",
+      issue: "Complexity analysis is still incomplete.",
+      behavior: "The candidate has not yet articulated final time and space complexity with tradeoffs.",
+      evidence: "Recent turns did not clearly state Big-O or explain what performance tradeoff the approach accepts.",
+      impact: "A missing complexity story weakens the final hiring signal, especially for mid-level and above roles.",
+      fix: "Close each solution with explicit time complexity, space complexity, and one tradeoff compared with alternatives.",
+    });
+  } else if (input.complexityRigor === "partial" && mentionsComplexity && !mentionsTradeoff) {
+    items.push({
+      area: "complexity",
+      issue: "Complexity was named, but the tradeoff analysis stayed shallow.",
+      behavior: "The candidate stated Big-O, but did not compare the approach against a meaningful alternative.",
+      evidence:
+        "Recent turns mention time or space complexity, but they do not explain why this complexity is acceptable or what memory/runtime tradeoff the solution is making.",
+      impact: "A shallow complexity story makes it harder to tell whether the candidate can evaluate design choices beyond memorized final answers.",
+      fix: "After giving Big-O, add one sentence that compares the chosen approach with a simpler or more memory-intensive alternative.",
+    });
+  } else if (input.complexityRigor === "partial" && mentionsTradeoff && !mentionsConstraintJustification) {
+    items.push({
+      area: "complexity",
+      issue: "A tradeoff was named, but not justified against the actual constraints.",
+      behavior: "The candidate acknowledged a tradeoff, but did not explain why it is acceptable for this problem setting.",
+      evidence:
+        "Recent turns mention runtime or memory tradeoffs, but they stop short of explaining why that tradeoff makes sense for the given constraints or expected input size.",
+      impact: "Tradeoff analysis feels formulaic when it is not tied back to the problem's real constraints.",
+      fix: "After naming the tradeoff, add one sentence explaining why that runtime or memory cost is acceptable under the actual constraints.",
+    });
+  }
+
+  if (input.codeQuality === "buggy" && (input.latestRun?.status === "FAILED" || input.latestRun?.status === "ERROR")) {
+    items.push({
+      area: "debugging",
+      issue: "The implementation is failing without a localized debugging hypothesis.",
+      behavior: "The candidate has execution evidence of failure, but the next debugging move is still broad.",
+      evidence:
+        input.latestRun.stderr?.trim()
+          ? `The latest execution failed with: ${input.latestRun.stderr.trim().slice(0, 140)}`
+          : "The latest code run did not pass, but no narrow failing branch or state transition was named yet.",
+      impact: "Broad debugging slows the interview down and makes recovery less likely under time pressure.",
+      fix: "Choose one failing input, identify the first wrong state, and name the branch or line you would inspect first.",
+    });
+  }
+
+  return items.slice(0, 4);
+}
+
+function normalizeStructuredEvidenceItem(value: unknown): CandidateEvidenceItem | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const area = typeof record.area === "string" ? record.area : null;
+  const allowedAreas = ["reasoning", "testing", "complexity", "correctness", "edge_case", "debugging"] as const;
+  if (!area || !allowedAreas.includes(area as (typeof allowedAreas)[number])) {
+    return null;
+  }
+
+  const issue = typeof record.issue === "string" ? record.issue.trim() : "";
+  const behavior = typeof record.behavior === "string" ? record.behavior.trim() : "";
+  const evidence = typeof record.evidence === "string" ? record.evidence.trim() : "";
+  const impact = typeof record.impact === "string" ? record.impact.trim() : "";
+  const fix = typeof record.fix === "string" ? record.fix.trim() : "";
+
+  if (!issue || !behavior || !evidence || !impact || !fix) {
+    return null;
+  }
+
+  return {
+    area: area as CandidateEvidenceItem["area"],
+    issue,
+    behavior,
+    evidence,
+    impact,
+    fix,
+  };
+}
+

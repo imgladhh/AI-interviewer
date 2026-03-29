@@ -649,13 +649,33 @@ function buildInterviewerPrompt(
     `Candidate state trend: ${signals.trendSummary ?? "No clear state trend yet."}`,
     `Candidate state confidence: ${signals.confidence}`,
     `Candidate evidence:\n- ${signals.evidence.join("\n- ")}`,
+    signals.structuredEvidence.length > 0
+      ? `Structured candidate issues:\n${signals.structuredEvidence
+          .map(
+            (item) =>
+              `- [${item.area}] issue=${item.issue}; evidence=${item.evidence}; impact=${item.impact}; fix=${item.fix}`,
+          )
+          .join("\n")}`
+      : null,
+    signals.structuredEvidence.length > 0
+      ? `Primary issue groups in this turn: ${[...new Set(signals.structuredEvidence.map((item) => item.area))].join(", ")}`
+      : null,
     `Reasoning depth: ${signals.reasoningDepth}`,
     `Testing discipline: ${signals.testingDiscipline}`,
     `Complexity rigor: ${signals.complexityRigor}`,
     `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}.`,
     `Decision reason: ${decision.reason}`,
+    decision.specificIssue ? `Specific issue to surface: ${decision.specificIssue}` : null,
+    decision.targetCodeLine ? `Target code line or focus area: ${decision.targetCodeLine}` : null,
+    decision.expectedAnswer ? `Expected answer shape: ${decision.expectedAnswer}` : null,
     `Preferred next interviewer question: ${decision.question}`,
     `Required turn contract: the reply must execute decision action "${decision.action}" and target "${decision.target}".`,
+    decision.specificIssue
+      ? `Issue-specific instruction: the turn should directly address this issue without drifting away: ${decision.specificIssue}`
+      : null,
+    decision.expectedAnswer
+      ? `Expected answer contract: push the candidate toward this exact answer shape: ${decision.expectedAnswer}`
+      : null,
     `Reply strategy: ${describeReplyStrategy(decision, signals)}`,
     decision.hintStyle ? `Required hint style: ${decision.hintStyle}` : null,
     decision.hintLevel ? `Required hint level: ${decision.hintLevel}` : null,
@@ -1327,3 +1347,4 @@ function collapseReply(reply: string) {
   const sentences = normalized.match(/[^.!?]+[.!?]?/g)?.map((part) => part.trim()).filter(Boolean) ?? [];
   return sentences.slice(0, 2).join(" ").trim();
 }
+

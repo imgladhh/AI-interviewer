@@ -118,6 +118,24 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/edge cases=missing/i);
   });
 
+  it("prefers the primary observed issue when structured evidence exists", () => {
+    const description = buildSessionEventDescription("SIGNAL_SNAPSHOT_RECORDED", {
+      signals: {
+        understanding: "clear",
+        progress: "progressing",
+        structuredEvidence: [
+          {
+            area: "correctness",
+            issue: "The correctness invariant is still underspecified.",
+          },
+        ],
+      },
+    });
+
+    expect(description).toMatch(/primary observed issue/i);
+    expect(description).toMatch(/invariant/i);
+  });
+
   it("describes interviewer decisions in a readable way", () => {
     const description = buildSessionEventDescription("DECISION_RECORDED", {
       decision: {

@@ -32,6 +32,16 @@ describe("generateSessionReport", () => {
               complexityRigor: "strong",
               confidence: 0.82,
               evidence: ["Candidate named a hash map and a heap."],
+              structuredEvidence: [
+                {
+                  area: "complexity",
+                  issue: "Complexity analysis is still incomplete.",
+                  behavior: "The candidate named an approach without finishing the tradeoff story.",
+                  evidence: "The explanation named the data structures but not the final cost tradeoff.",
+                  impact: "This leaves the final performance story incomplete.",
+                  fix: "Close with explicit time and space complexity plus one tradeoff.",
+                },
+              ],
               summary: "Understanding is clear and the candidate is progressing with a strong algorithm choice.",
               trendSummary: "Recent state trend: progress moved from partial to progressing.",
             },
@@ -66,9 +76,13 @@ describe("generateSessionReport", () => {
     expect(stageReplay.length).toBeGreaterThan(0);
     expect(stageReplay[0]?.evidence).toBeTruthy();
     expect(stageReplay[0]?.decisions).toBeTruthy();
+    expect(dimensions.some((dimension) => Boolean(dimension.issue))).toBe(true);
     expect(dimensions.some((dimension) => Boolean(dimension.impact))).toBe(true);
     expect(dimensions.some((dimension) => Array.isArray(dimension.improvement) && dimension.improvement.length > 0)).toBe(true);
     expect((reportJson.candidateState as Record<string, unknown>).reasoningDepth).toBe("deep");
+    expect(
+      Array.isArray((reportJson.candidateState as Record<string, unknown>).structuredEvidence),
+    ).toBe(true);
   });
 
   it("groups replay evidence around stage, signals, decisions, and code runs", () => {
@@ -128,4 +142,6 @@ describe("generateSessionReport", () => {
     expect(JSON.stringify(testingGroup)).toMatch(/Signal snapshot|Decision: ask_for_complexity|Code run result: PASSED/i);
   });
 });
+
+
 
