@@ -333,7 +333,8 @@ npm run build
 - Authentication is still stubbed around a demo user
 - Evaluation/report is intentionally lightweight v0 and should still become more rubric-driven over time
 - Replay is currently heuristic and event-driven, not yet a full stage-grouped interview playback view
-- Prisma generation on Windows can fail if `dev` or `worker` processes are locking the Prisma engine file
+- Prisma generation on Windows can fail if `dev` or `worker` processes are locking the Prisma engine file.
+- After applying the 20260328020000_session_state_snapshots migration to the local Docker Postgres, session snapshot persistence now requires the app process to be restarted once if it had previously auto-disabled snapshot writes due to missing tables.
 
 ## Next Recommended Work
 
@@ -387,6 +388,8 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
 
 
 

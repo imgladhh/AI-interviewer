@@ -1,6 +1,9 @@
 ﻿import { randomUUID } from "crypto";
 import { prisma } from "@/lib/db";
 
+let snapshotPersistenceDisabled = false;
+let hasWarnedAboutMissingSnapshotTables = false;
+
 function escapeJson(value: unknown) {
   const json = JSON.stringify(value ?? null);
   return json.replace(/'/g, "''");
@@ -21,6 +24,10 @@ export async function persistSessionSnapshots(input: {
   signals?: unknown;
   decision?: unknown;
 }) {
+  if (snapshotPersistenceDisabled) {
+    return;
+  }
+
   const operations: Promise<unknown>[] = [];
 
   if (input.signals) {
@@ -46,8 +53,31 @@ export async function persistSessionSnapshots(input: {
   try {
     await Promise.all(operations);
   } catch (error) {
+    const isMissingSnapshotTable =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "P2010" &&
+      "meta" in error &&
+      typeof (error as { meta?: unknown }).meta === "object" &&
+      (error as { meta?: { code?: string; message?: string } }).meta?.code === "42P01";
+
+    if (isMissingSnapshotTable) {
+      snapshotPersistenceDisabled = true;
+
+      if (!hasWarnedAboutMissingSnapshotTables && process.env.NODE_ENV !== "production") {
+        hasWarnedAboutMissingSnapshotTables = true;
+        console.warn(
+          "[session-snapshots] snapshot tables are missing in the current database, so snapshot persistence has been disabled. Apply the session_state_snapshots migration to enable it again.",
+        );
+      }
+
+      return;
+    }
+
     if (process.env.NODE_ENV !== "production") {
       console.warn("[session-snapshots] snapshot persistence skipped", error);
     }
   }
 }
+
