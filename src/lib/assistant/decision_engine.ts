@@ -7,6 +7,7 @@ import type {
   CodingInterviewPolicy,
   CodingInterviewPolicyAction,
 } from "@/lib/assistant/policy";
+import type { DecisionPressure } from "@/lib/assistant/pacing";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
 
@@ -46,6 +47,7 @@ export type CandidateDecisionTarget =
 export type CandidateDecision = {
   action: CandidateDecisionAction;
   target: CandidateDecisionTarget;
+  pressure?: DecisionPressure;
   question: string;
   reason: string;
   confidence: number;

@@ -116,6 +116,21 @@ export async function POST(_: Request, { params }: RouteContext) {
     events.push(decisionEvent);
   }
 
+  if (turn.criticVerdict) {
+    const criticEvent = await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.CRITIC_VERDICT_RECORDED,
+        payloadJson: {
+          stage: currentStage,
+          source: turn.source,
+          criticVerdict: turn.criticVerdict,
+        },
+      },
+    });
+    events.push(criticEvent);
+  }
+
   await persistSessionSnapshots({
     sessionId: id,
     stage: currentStage,
@@ -138,6 +153,7 @@ export async function POST(_: Request, { params }: RouteContext) {
           escalationReason: turn.escalationReason ?? null,
           signals: turn.signals ?? null,
           decision: turn.decision ?? null,
+          criticVerdict: turn.criticVerdict ?? null,
         },
       },
   });
@@ -208,6 +224,7 @@ export async function POST(_: Request, { params }: RouteContext) {
       escalationReason: turn.escalationReason ?? null,
       signals: turn.signals ?? null,
       decision: turn.decision ?? null,
+      criticVerdict: turn.criticVerdict ?? null,
       providerFailure: turn.providerFailure ?? null,
     },
   });

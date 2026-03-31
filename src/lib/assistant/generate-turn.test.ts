@@ -219,6 +219,119 @@ describe("generateAssistantTurn", () => {
     expect(result.reply).toMatch(/time complexity|space complexity|tradeoff/i);
   });
 
+  it("uses the critic pass to avoid repeating complexity after that target was already answered", async () => {
+    process.env.GEMINI_API_KEY = "fake-key";
+    process.env.LLM_PROVIDER = "gemini";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: "Now that the implementation works, walk me through the final time and space complexity and the main tradeoff behind this approach." }],
+            },
+          },
+        ],
+      }),
+    } as Response) as typeof fetch;
+
+    const result = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Two Sum",
+      questionPrompt: "Return indices of two numbers that add up to target.",
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [{ speaker: "USER", text: "Time complexity is O(n), space complexity is O(n), and the tradeoff is extra hash-map space for linear runtime." }],
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              target: "complexity",
+              action: "ask_for_complexity",
+            },
+          },
+        },
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              target: "tradeoff",
+              action: "probe_tradeoff",
+            },
+          },
+        },
+      ],
+      latestExecutionRun: { status: "PASSED" },
+    });
+
+    expect(result.source).toBe("gemini");
+    expect(result.reply).not.toMatch(/time complexity|space complexity|tradeoff/i);
+    expect(result.reply).toMatch(/summary|production|watch carefully|implementation detail/i);
+  });
+
+  it("uses a low-cost rewrite pass before falling back when gemini replies too generically", async () => {
+    process.env.GEMINI_API_KEY = "fake-key";
+    process.env.LLM_PROVIDER = "gemini";
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "That sounds like a good start. Keep going." }],
+              },
+            },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "Be precise: which exact alternative would you compare against, and why is your memory/runtime tradeoff acceptable here?" }],
+              },
+            },
+          ],
+        }),
+      } as Response) as typeof fetch;
+
+    const result = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Two Sum",
+      questionPrompt: "Return indices of two numbers that add up to target.",
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [{ speaker: "USER", text: "The runtime is O(n) and the tradeoff is extra space for the hash map." }],
+    });
+
+    expect(result.source).toBe("gemini");
+    expect(result.reply).toMatch(/exact alternative|tradeoff acceptable/i);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(result.criticVerdict?.reason).toBe("generic_reply");
+  });
+
+  it("treats a concrete Two Sum walkthrough as enough evidence to move into implementation", async () => {
+    const result = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Two Sum",
+      questionPrompt: "Return indices of two numbers that add up to target.",
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "We can use a hash table to store the index of the numbers while iterating the array. For any number x, we first check if target - x exists in the hash table. If yes, then we return the index of x and index of target - x. If not, we save x and its index in the hash table. If the iteration stops, we return empty array. Overall runtime is O(n) and overall space is O(n).",
+        },
+      ],
+    });
+
+    expect(result.suggestedStage).toBe("IMPLEMENTATION");
+    expect(result.reply).toMatch(/implement|start coding|go ahead and implement/i);
+    expect(result.reply).not.toMatch(/invariant|proof sketch|assumptions are you making|algorithmic strategy would you choose/i);
+  });
+
   it("falls through from gemini to openai before using local fallback", async () => {
     process.env.GEMINI_API_KEY = "fake-gemini-key";
     process.env.OPENAI_API_KEY = "fake-openai-key";

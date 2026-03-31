@@ -73,4 +73,35 @@ describe("reply strategy issue shaping", () => {
 
     expect(strategy).toMatch(/acceptable under the actual constraints|justify/i);
   });
+
+  it("uses sharper fallback wording for surgical tradeoff probes", () => {
+    const reply = buildFallbackReplyFromDecision({
+      decision: {
+        ...baseDecision,
+        action: "probe_tradeoff",
+        target: "tradeoff",
+        pressure: "surgical",
+      },
+      signals: baseSignals,
+      currentStage: "APPROACH_DISCUSSION",
+    });
+
+    expect(reply).toMatch(/be precise|exact|alternative|tradeoff/i);
+  });
+
+  it("keeps clarification gentle when pressure is soft", () => {
+    const reply = buildFallbackReplyFromDecision({
+      decision: {
+        ...baseDecision,
+        action: "ask_for_clarification",
+        target: "understanding",
+        pressure: "soft",
+      },
+      signals: baseSignals,
+      currentStage: "PROBLEM_UNDERSTANDING",
+    });
+
+    expect(reply).toMatch(/tiny example|what you expect/i);
+    expect(reply).not.toMatch(/be precise/i);
+  });
 });

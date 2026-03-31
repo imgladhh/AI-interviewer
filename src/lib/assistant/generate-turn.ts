@@ -1,4 +1,5 @@
 import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/interviewer-skills";
+import { reviewInterviewerReply, type CriticVerdict } from "@/lib/assistant/critic";
 import { makeCandidateDecision, type CandidateDecision } from "@/lib/assistant/decision_engine";
 import {
   formatCodingInterviewPolicy,
@@ -10,6 +11,7 @@ import {
 import { buildFallbackReplyFromDecision, describeReplyStrategy } from "@/lib/assistant/reply_strategy";
 import { extractCandidateSignalsSmart, type CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
+import { applyDecisionPressure, assessInterviewPacing } from "@/lib/assistant/pacing";
 import {
   describeCodingStage,
   inferSuggestedCodingStage,
@@ -67,6 +69,7 @@ type GenerateAssistantTurnResult = {
   };
   signals?: CandidateSignalSnapshot;
   decision?: CandidateDecision;
+  criticVerdict?: CriticVerdict;
   providerFailure?: {
     provider: "gemini" | "openai";
     message: string;
@@ -331,7 +334,14 @@ async function generateWithOpenAI(
     return null;
   }
 
-  const enforcedReply = enforceDecisionCompliance(reply, decision, input);
+  const reviewed = await applyCriticPass(
+    enforceDecisionCompliance(reply, decision, input),
+    input,
+    signals,
+    decision,
+    "openai",
+  );
+  const enforcedReply = reviewed.reply;
 
   return {
     reply: finalizeReply(enforcedReply),
@@ -340,6 +350,7 @@ async function generateWithOpenAI(
     model,
     signals,
     decision,
+    criticVerdict: reviewed.verdict,
     usage: {
       inputTokens,
       outputTokens: estimateTokens(enforcedReply),
@@ -424,7 +435,14 @@ async function* streamWithOpenAI(
     return;
   }
 
-  const final = finalizeReply(enforceDecisionCompliance(accumulated, decision, input));
+  const reviewed = await applyCriticPass(
+    enforceDecisionCompliance(accumulated, decision, input),
+    input,
+    signals,
+    decision,
+    "openai",
+  );
+  const final = finalizeReply(reviewed.reply);
   yield {
     final: {
         reply: final,
@@ -433,6 +451,7 @@ async function* streamWithOpenAI(
         model,
         signals,
         decision,
+        criticVerdict: reviewed.verdict,
         usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
@@ -495,7 +514,14 @@ async function generateWithGemini(
     return null;
   }
 
-  const enforcedReply = enforceDecisionCompliance(reply, decision, input);
+  const reviewed = await applyCriticPass(
+    enforceDecisionCompliance(reply, decision, input),
+    input,
+    signals,
+    decision,
+    "gemini",
+  );
+  const enforcedReply = reviewed.reply;
 
   return {
     reply: finalizeReply(enforcedReply),
@@ -504,6 +530,7 @@ async function generateWithGemini(
     model,
     signals,
     decision,
+    criticVerdict: reviewed.verdict,
     usage: {
       inputTokens,
       outputTokens: estimateTokens(enforcedReply),
@@ -594,7 +621,14 @@ async function* streamWithGemini(
     return;
   }
 
-  const final = finalizeReply(enforceDecisionCompliance(accumulated, decision, input));
+  const reviewed = await applyCriticPass(
+    enforceDecisionCompliance(accumulated, decision, input),
+    input,
+    signals,
+    decision,
+    "gemini",
+  );
+  const final = finalizeReply(reviewed.reply);
   yield {
     final: {
       reply: final,
@@ -603,6 +637,7 @@ async function* streamWithGemini(
       model,
       signals,
       decision,
+      criticVerdict: reviewed.verdict,
       usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
@@ -685,7 +720,7 @@ function buildInterviewerPrompt(
     `Reasoning depth: ${signals.reasoningDepth}`,
     `Testing discipline: ${signals.testingDiscipline}`,
     `Complexity rigor: ${signals.complexityRigor}`,
-    `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}.`,
+      `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}, pressure=${decision.pressure ?? "neutral"}.`,
     `Decision reason: ${decision.reason}`,
     decision.specificIssue ? `Specific issue to surface: ${decision.specificIssue}` : null,
     decision.targetCodeLine ? `Target code line or focus area: ${decision.targetCodeLine}` : null,
@@ -1357,6 +1392,142 @@ function improvingOrWorseningInstruction(trendSummary?: string) {
   return "State trend instruction: the candidate state is broadly stable, so keep the pacing measured and targeted.";
 }
 
+async function rewriteWithOpenAi(
+  originalReply: string,
+    verdict: CriticVerdict,
+  decision: CandidateDecision,
+  input: GenerateAssistantTurnInput,
+) {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+
+  const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_output_tokens: 120,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Rewrite one interviewer turn. Keep it to 1 or 2 sentences. Make it specific, concrete, and evaluative. Return plain text only.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                `Original reply: ${originalReply}`,
+                `Critic verdict: ${verdict.reason}. ${verdict.explanation}`,
+                `Decision action: ${decision.action}`,
+                `Decision target: ${decision.target}`,
+                `Decision pressure: ${decision.pressure ?? "neutral"}`,
+                `Specific issue: ${decision.specificIssue ?? "none"}`,
+                `Expected answer shape: ${decision.expectedAnswer ?? "none"}`,
+                `Required fallback if rewriting fails: ${verdict.revisedReply ?? decision.question}`,
+                "Rewrite the interviewer turn so it is sharper and does not repeat an already-answered target.",
+              ].join("\n"),
+            },
+          ],
+        },
+      ],
+    }),
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    return null;
+  }
+
+  const payload = (await response.json().catch(() => null)) as { output_text?: string } | null;
+  return payload?.output_text?.trim() || null;
+}
+
+async function rewriteWithGemini(
+  originalReply: string,
+    verdict: CriticVerdict,
+  decision: CandidateDecision,
+  input: GenerateAssistantTurnInput,
+) {
+  if (!process.env.GEMINI_API_KEY) {
+    return null;
+  }
+
+  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": process.env.GEMINI_API_KEY ?? "",
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
+            {
+              text:
+                "Rewrite one interviewer turn. Keep it to 1 or 2 sentences. Make it specific, concrete, and evaluative. Return plain text only.",
+            },
+          ],
+        },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: [
+                  `Original reply: ${originalReply}`,
+                  `Critic verdict: ${verdict.reason}. ${verdict.explanation}`,
+                  `Decision action: ${decision.action}`,
+                  `Decision target: ${decision.target}`,
+                  `Decision pressure: ${decision.pressure ?? "neutral"}`,
+                  `Specific issue: ${decision.specificIssue ?? "none"}`,
+                  `Expected answer shape: ${decision.expectedAnswer ?? "none"}`,
+                  `Required fallback if rewriting fails: ${verdict.revisedReply ?? decision.question}`,
+                  "Rewrite the interviewer turn so it is sharper and does not repeat an already-answered target.",
+                ].join("\n"),
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 120,
+        },
+      }),
+    },
+  ).catch(() => null);
+
+  if (!response?.ok) {
+    return null;
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{
+              text?: string;
+            }>;
+          };
+        }>;
+      }
+    | null;
+  return payload?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() || null;
+}
+
 function readProviderErrorMessage(payload: Record<string, unknown>) {
   const error = payload.error;
   if (typeof error === "string") {
@@ -1389,14 +1560,75 @@ function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSign
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
-
-  return makeCandidateDecision({
+  const rawDecision = makeCandidateDecision({
     currentStage,
     policy,
     signals,
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
+  const ledger = buildMemoryLedger({
+    currentStage,
+    recentEvents: input.recentEvents,
+    signals,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const pacing = assessInterviewPacing({
+    currentStage,
+    signals,
+    ledger,
+    latestExecutionRun: input.latestExecutionRun,
+    decision: rawDecision,
+  });
+
+  return applyDecisionPressure({
+    decision: rawDecision,
+    signals,
+    ledger,
+    pacing,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+}
+
+async function applyCriticPass(
+  reply: string,
+  input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
+  provider: "openai" | "gemini",
+) {
+  const verdict = reviewInterviewerReply({
+    reply,
+    decision,
+    signals,
+    currentStage: normalizeStage(input.currentStage),
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+
+  if (verdict.approved) {
+    return { reply, verdict };
+  }
+
+  const rewritten =
+    provider === "openai"
+      ? await rewriteWithOpenAi(reply, verdict, decision, input)
+      : await rewriteWithGemini(reply, verdict, decision, input);
+  const candidateReply = rewritten ? collapseReply(rewritten) : verdict.revisedReply ?? reply;
+  const finalReview = reviewInterviewerReply({
+    reply: candidateReply,
+    decision,
+    signals,
+    currentStage: normalizeStage(input.currentStage),
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const finalReply = finalReview.approved ? candidateReply : verdict.revisedReply ?? candidateReply;
+
+  return {
+    reply: finalReply,
+    verdict: finalReview.approved ? finalReview : verdict,
+  };
 }
 
 function enforceDecisionCompliance(

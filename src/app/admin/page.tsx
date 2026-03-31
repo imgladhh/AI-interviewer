@@ -277,6 +277,20 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                       : "unknown"
                                   }
                                 />
+                                <MetricCard
+                                  label="Pressure"
+                                  value={String(detail.sessionSummary.latestDecision.pressure ?? "unknown")}
+                                />
+                                <MetricCard
+                                  label="Worth Asking"
+                                  value={
+                                    typeof detail.sessionSummary.latestCritic?.questionWorthAsking === "boolean"
+                                      ? detail.sessionSummary.latestCritic.questionWorthAsking
+                                        ? "Yes"
+                                        : "No"
+                                      : "unknown"
+                                  }
+                                />
                               </div>
                               <dl style={definitionListStyle}>
                                 {Object.entries(detail.sessionSummary.latestDecision).map(([key, value]) => (
@@ -292,6 +306,12 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
                                   <strong>Evidence Focus This Turn</strong>
                                   <div style={panelStyle}>{detail.sessionSummary.evidenceFocus}</div>
+                                </div>
+                              ) : null}
+                              {detail.sessionSummary.latestCritic?.worthReason ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Worth Reason</strong>
+                                  <div style={panelStyle}>{String(detail.sessionSummary.latestCritic.worthReason)}</div>
                                 </div>
                               ) : null}
                             </>

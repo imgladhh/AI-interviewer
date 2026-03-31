@@ -47,6 +47,7 @@ type CandidateState = {
 type LatestDecision = {
   action?: string;
   target?: string;
+  pressure?: string;
   question?: string;
   reason?: string;
   confidence?: number;
@@ -184,6 +185,10 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     reportJson,
   });
   const candidateStateTimeline = buildCandidateStateTimeline(session.events);
+  const latestCriticEvent = [...session.events]
+    .reverse()
+    .find((event) => event.eventType === 'CRITIC_VERDICT_RECORDED');
+  const latestCritic = latestCriticEvent ? asRecord(asRecord(latestCriticEvent.payloadJson).criticVerdict) : null;
   const reportLedger =
     reportJson.candidateState
       ? buildMemoryLedger({
@@ -348,6 +353,17 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       : "unknown"
                   }
                 />
+                <MetricRow label="Pressure" value={String(reportJson.latestDecision.pressure ?? "unknown")} />
+                <MetricRow
+                  label="Worth Asking"
+                  value={
+                    typeof latestCritic?.questionWorthAsking === "boolean"
+                      ? latestCritic.questionWorthAsking
+                        ? "Yes"
+                        : "No"
+                      : "unknown"
+                  }
+                />
                 <div style={listItemStyle}>
                   <strong>Question</strong>
                   <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.question ?? "No question captured."}</p>
@@ -372,6 +388,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                   <div style={listItemStyle}>
                     <strong>Expected answer</strong>
                     <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.expectedAnswer}</p>
+                  </div>
+                ) : null}
+                {latestCritic?.worthReason ? (
+                  <div style={listItemStyle}>
+                    <strong>Worth reason</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{String(latestCritic.worthReason)}</p>
                   </div>
                 ) : null}
               </div>
@@ -750,6 +772,18 @@ function buildReplayItems(input: {
       });
     }
 
+    if (event.eventType === "CRITIC_VERDICT_RECORDED") {
+      const criticVerdict = asRecord(payload.criticVerdict);
+      items.push({
+        id: event.id,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Critic Verdict",
+        description: `${stringValue(criticVerdict.verdict) ?? "verdict"} / ${stringValue(criticVerdict.reason) ?? "unknown reason"}${stringValue(criticVerdict.explanation) ? `: ${stringValue(criticVerdict.explanation)}` : ""}`,
+        tone: "warning",
+      });
+    }
+
     if (event.eventType === "HINT_SERVED") {
       items.push({
         id: event.id,
@@ -812,6 +846,7 @@ function buildCandidateStateTimeline(
         "STAGE_ADVANCED",
         "SIGNAL_SNAPSHOT_RECORDED",
         "DECISION_RECORDED",
+        "CRITIC_VERDICT_RECORDED",
         "HINT_SERVED",
         "CODE_RUN_COMPLETED",
       ].includes(event.eventType),
@@ -871,6 +906,22 @@ function buildCandidateStateTimeline(
           title: "Interviewer decision",
           summary: `${stringValue(decision.action) ?? "decision"} -> ${stringValue(decision.target) ?? "unknown target"}`,
           evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
+          answeredTargets: [],
+          collectedEvidence: [],
+          payload,
+        };
+      }
+
+      if (event.eventType === "CRITIC_VERDICT_RECORDED") {
+        const criticVerdict = asRecord(payload.criticVerdict);
+        return {
+          id: event.id,
+          kind: "decision" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Critic verdict",
+          summary: `${stringValue(criticVerdict.verdict) ?? "verdict"} / ${stringValue(criticVerdict.reason) ?? "unknown reason"}${typeof criticVerdict.questionWorthAsking === "boolean" ? ` / worth=${criticVerdict.questionWorthAsking ? "yes" : "no"}` : ""}`,
+          evidenceFocus: stringValue(criticVerdict.focus) ?? stringValue(criticVerdict.reason),
           answeredTargets: [],
           collectedEvidence: [],
           payload,
@@ -1106,6 +1157,12 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
+
+
+
+
+
 
 
 

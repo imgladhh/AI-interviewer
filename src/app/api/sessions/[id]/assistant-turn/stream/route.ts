@@ -90,6 +90,7 @@ export async function POST(request: Request, { params }: RouteContext) {
               escalationReason?: string;
               signals?: unknown;
               decision?: unknown;
+              criticVerdict?: unknown;
               providerFailure?: {
                 provider: "gemini" | "openai";
                 message: string;
@@ -170,6 +171,21 @@ export async function POST(request: Request, { params }: RouteContext) {
             },
           });
           events.push(decisionEvent);
+        }
+
+        if (finalTurn.criticVerdict) {
+          const criticEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.CRITIC_VERDICT_RECORDED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                criticVerdict: finalTurn.criticVerdict,
+              },
+            },
+          });
+          events.push(criticEvent);
         }
 
         await persistSessionSnapshots({
@@ -267,6 +283,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 escalationReason: finalTurn.escalationReason ?? null,
                 signals: finalTurn.signals ?? null,
                 decision: finalTurn.decision ?? null,
+                criticVerdict: finalTurn.criticVerdict ?? null,
                 providerFailure: finalTurn.providerFailure ?? null,
               },
             })}\n\n`,

@@ -45,6 +45,7 @@ export type SessionSummary = {
   stageJourney: string[];
   latestSignals: Record<string, unknown> | null;
   latestDecision: Record<string, unknown> | null;
+  latestCritic: Record<string, unknown> | null;
   answeredTargets: string[];
   collectedEvidence: string[];
   unresolvedIssues: string[];
@@ -58,7 +59,7 @@ export type SessionSummary = {
 
 export type SessionTimelineItem = {
   id: string;
-  kind: "stage" | "signal" | "decision" | "hint" | "code_run";
+  kind: "stage" | "signal" | "decision" | "critic" | "hint" | "code_run";
   at: string;
   title: string;
   summary: string;
@@ -229,9 +230,11 @@ function summarizeSession(
   const currentStage = stageJourneyRaw.at(-1) ?? "PROBLEM_UNDERSTANDING";
   const latestSignalEvent = [...ordered].reverse().find((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED");
   const latestDecisionEvent = [...ordered].reverse().find((event) => event.eventType === "DECISION_RECORDED");
+  const latestCriticEvent = [...ordered].reverse().find((event) => event.eventType === "CRITIC_VERDICT_RECORDED");
   const latestCodeRunEvent = [...ordered].reverse().find((event) => event.eventType === "CODE_RUN_COMPLETED");
   const latestSignals = latestSignalEvent ? asRecord(asRecord(latestSignalEvent.payloadJson).signals) : null;
   const latestDecision = latestDecisionEvent ? asRecord(asRecord(latestDecisionEvent.payloadJson).decision) : null;
+  const latestCritic = latestCriticEvent ? asRecord(asRecord(latestCriticEvent.payloadJson).criticVerdict) : null;
   const hintCount = ordered.filter((event) => event.eventType === "HINT_SERVED").length;
   const failedRunCount = ordered.filter((event) => {
     if (event.eventType !== "CODE_RUN_COMPLETED") {
@@ -272,6 +275,7 @@ function summarizeSession(
     stageJourney: [...new Set(stageJourneyRaw.map((stage) => describeStage(stage) ?? stage))],
     latestSignals,
     latestDecision,
+    latestCritic,
     answeredTargets: ledger?.answeredTargets ?? [],
     collectedEvidence: ledger?.collectedEvidence ?? [],
     unresolvedIssues: ledger?.unresolvedIssues ?? [],
@@ -293,6 +297,7 @@ function buildSessionTimeline(
         "STAGE_ADVANCED",
         "SIGNAL_SNAPSHOT_RECORDED",
         "DECISION_RECORDED",
+        "CRITIC_VERDICT_RECORDED",
         "HINT_SERVED",
         "CODE_RUN_COMPLETED",
       ].includes(event.eventType),
@@ -358,6 +363,19 @@ function buildSessionTimeline(
           payload,
         };
       }
+
+        if (event.eventType === "CRITIC_VERDICT_RECORDED") {
+          const criticVerdict = asRecord(payload.criticVerdict);
+          return {
+            id: `${event.eventType}-${event.eventTime.toISOString()}`,
+            kind: "critic" as const,
+            at: event.eventTime.toISOString(),
+            title: "Critic verdict",
+            summary: `${stringOrFallback(criticVerdict.verdict, "verdict")} / ${stringOrFallback(criticVerdict.reason, "unknown reason")}${typeof criticVerdict.questionWorthAsking === "boolean" ? ` / worth=${criticVerdict.questionWorthAsking ? "yes" : "no"}` : ""}`,
+            evidenceFocus: stringValue(criticVerdict.focus) ?? stringValue(criticVerdict.reason),
+            payload,
+          };
+        }
 
       if (event.eventType === "HINT_SERVED") {
         return {
@@ -452,6 +470,11 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
   if (eventType === "DECISION_RECORDED") {
     const decision = asRecord(payload.decision);
     return `Interviewer decision: ${stringOrFallback(decision.action, "unknown action")} toward ${stringOrFallback(decision.target, "unknown target")}.`;
+  }
+
+  if (eventType === "CRITIC_VERDICT_RECORDED") {
+    const criticVerdict = asRecord(payload.criticVerdict);
+    return `Critic verdict: ${stringOrFallback(criticVerdict.verdict, "unknown verdict")} because ${stringOrFallback(criticVerdict.reason, "unknown reason")}${stringValue(criticVerdict.worthReason) ? `. ${stringValue(criticVerdict.worthReason)}` : ""}.`;
   }
 
   if (eventType === "LLM_USAGE_RECORDED") {

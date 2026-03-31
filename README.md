@@ -102,12 +102,19 @@ This repo now has a working MVP-plus skeleton with:
 - /report/[id] now shares the same evidence backbone as /admin, including signal snapshots, interviewer decisions, hints, stage transitions, and code-run outcomes.
 - decision_engine now consumes fine-grained structured evidence directly, so issue classes like invariant gaps, narrow boundary coverage, and shallow tradeoff analysis can trigger more surgical follow-up questions.
 - memory_ledger now tracks `answeredTargets` and `collectedEvidence`, so the interviewer can tell the difference between "I already asked this" and "the candidate already answered this."
+- Added `critic.ts` as a lightweight turn-review layer after generation, with structured verdicts for `accept`, `rewrite`, `move_on`, and `move_to_implementation`.
+- Added `pacing.ts` as an explicit flow-control layer that scores whether a question is still worth asking now, whether implementation should start, and whether testing/complexity evidence is already sufficient.
+- decision_engine decisions now carry a `pressure` level (`soft`, `neutral`, `challenging`, `surgical`) so interviewer turns can vary not just by target but by how hard they should press.
+- Critic verdicts now also include `questionWorthAsking` and `worthReason`, so the system can distinguish between “bad wording” and “wrong timing”.
+- Critic verdicts are now written into session events and surfaced in `/admin` and `/report` replay so reviewer pressure, specificity, and repetition handling are inspectable.
+- Gemini/OpenAI now have a low-cost rewrite pass for weak turns before falling back to rule-based rewrites, which reduces generic follow-ups and repeated answered targets.
 - decision_engine now avoids immediately repeating `testing`, `edge_case`, `complexity`, and `tradeoff` targets once the candidate has already supplied the relevant evidence, and instead moves the interview forward.
 - Candidate-state and interviewer-decision snapshots now have dedicated persistence tables in addition to the existing session-event trail, so state tracking can migrate away from event-only replay over time.
 - Added tests for signal extraction, decision logic, evidence-based reporting, reply strategy shaping, provider compliance handling, and provider fallback ordering.
 - signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
 - /admin and /report now group observed candidate issues by Correctness, Testing, Complexity, and Debugging so interviewer quality is easier to inspect at a glance.
 - /admin and /report replay now surface unresolved issues, missing evidence, answered targets, collected evidence, and the current evidence focus so interviewer pacing is easier to debug visually.
+- `/admin` and `/report` now also surface the latest interviewer `pressure`, critic `Worth Asking`, and critic `Worth Reason` as top-level summary cards instead of hiding them only in replay payloads.
 
 ## What Works Today
 
@@ -199,7 +206,9 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/decision_engine.ts`: candidate-state-driven interviewer decision selection
 - `src/lib/assistant/reply_strategy.ts`: action-specific interviewer wording and fallback turn shaping
 - `src/lib/assistant/policy.ts`: explicit stage policy, exit criteria, hint escalation, and prompt strategy selection
-- `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation, provider sequencing, and decision-compliance enforcement
+- `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation, provider sequencing, critic-aware rewrite passes, and decision-compliance enforcement
+- `src/lib/assistant/critic.ts`: structured interviewer-turn review for specificity, intensity, repetition, code-readiness gating, and “worth asking now” timing checks
+- `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, and pressure selection
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
 - `src/lib/evaluation/report.ts`: evidence-based report generation and session feedback scoring
 - `src/lib/session/snapshots.ts`: best-effort persistence for candidate-state and interviewer-decision snapshots
@@ -391,6 +400,8 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
 
 
 
