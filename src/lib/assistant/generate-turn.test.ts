@@ -269,6 +269,53 @@ describe("generateAssistantTurn", () => {
     expect(result.reply).toMatch(/summary|production|watch carefully|implementation detail/i);
   });
 
+  it("does not repeat wrap-up once implementation, validation, and performance have already been summarized", async () => {
+    process.env.GEMINI_API_KEY = "fake-key";
+    process.env.LLM_PROVIDER = "gemini";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: "Good. You have already covered the implementation, validation, and performance story well enough. Give me a concise final wrap-up of the approach and one thing you would double-check in production." }],
+            },
+          },
+        ],
+      }),
+    } as Response) as typeof fetch;
+
+    const result = await generateAssistantTurn({
+      mode: "CODING",
+      questionTitle: "Two Sum",
+      questionPrompt: "Return indices of two numbers that add up to target.",
+      currentStage: "WRAP_UP",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "The final approach is a one-pass hash map with O(n) time and O(n) space, and in production I would still double-check empty input and numeric range assumptions.",
+        },
+      ],
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              target: "summary",
+              action: "move_stage",
+            },
+          },
+        },
+      ],
+      latestExecutionRun: { status: "PASSED" },
+    });
+
+    expect(result.source).toBe("gemini");
+    expect(result.criticVerdict?.questionWorthAsking).toBe(false);
+    expect(result.criticVerdict?.timingVerdict).toBe("skip");
+    expect(result.reply).not.toMatch(/final wrap-up|double-check in production/i);
+  });
+
   it("uses a low-cost rewrite pass before falling back when gemini replies too generically", async () => {
     process.env.GEMINI_API_KEY = "fake-key";
     process.env.LLM_PROVIDER = "gemini";

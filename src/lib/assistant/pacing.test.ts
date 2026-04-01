@@ -91,4 +91,32 @@ describe("pacing", () => {
 
     expect(enriched.pressure).toBe("surgical");
   });
+
+  it("defers optional probing when implementation flow is good and interruption cost is higher than urgency", () => {
+    const decision: CandidateDecision = {
+      ...baseDecision,
+      action: "ask_for_clarification",
+      target: "reasoning",
+      question: "Can you restate the next step on a tiny example?",
+    };
+    const ledger = buildMemoryLedger({
+      currentStage: "IMPLEMENTATION",
+      signals: baseSignals,
+      recentEvents: [],
+      latestExecutionRun: null,
+    });
+
+    const pacing = assessInterviewPacing({
+      currentStage: "IMPLEMENTATION",
+      signals: baseSignals,
+      ledger,
+      latestExecutionRun: null,
+      decision,
+    });
+
+    expect(pacing.questionWorthAsking).toBe(false);
+    expect(pacing.timingVerdict).toBe("defer");
+    expect(pacing.interruptionCost).toBe("high");
+    expect(pacing.urgency).toBe("low");
+  });
 });

@@ -1,6 +1,7 @@
 import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/interviewer-skills";
 import { reviewInterviewerReply, type CriticVerdict } from "@/lib/assistant/critic";
 import { makeCandidateDecision, type CandidateDecision } from "@/lib/assistant/decision_engine";
+import type { HintGranularity, RescueMode } from "@/lib/assistant/hinting_ledger";
 import {
   formatCodingInterviewPolicy,
   resolveCodingInterviewPolicy,
@@ -61,6 +62,9 @@ type GenerateAssistantTurnResult = {
   hintServed?: boolean;
   hintStyle?: CodingInterviewHintStyle;
   hintLevel?: CodingInterviewHintLevel;
+  rescueMode?: RescueMode;
+  hintGranularity?: HintGranularity;
+  hintCost?: number;
   escalationReason?: string;
   usage?: {
     inputTokens: number;
@@ -351,6 +355,12 @@ async function generateWithOpenAI(
     signals,
     decision,
     criticVerdict: reviewed.verdict,
+    hintServed: decision.action === "give_hint",
+    hintStyle: decision.hintStyle,
+    hintLevel: decision.hintLevel,
+    rescueMode: decision.rescueMode,
+    hintGranularity: decision.hintGranularity,
+    hintCost: decision.hintCost,
     usage: {
       inputTokens,
       outputTokens: estimateTokens(enforcedReply),
@@ -452,6 +462,12 @@ async function* streamWithOpenAI(
         signals,
         decision,
         criticVerdict: reviewed.verdict,
+        hintServed: decision.action === "give_hint",
+        hintStyle: decision.hintStyle,
+        hintLevel: decision.hintLevel,
+        rescueMode: decision.rescueMode,
+        hintGranularity: decision.hintGranularity,
+        hintCost: decision.hintCost,
         usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
@@ -531,6 +547,12 @@ async function generateWithGemini(
     signals,
     decision,
     criticVerdict: reviewed.verdict,
+    hintServed: decision.action === "give_hint",
+    hintStyle: decision.hintStyle,
+    hintLevel: decision.hintLevel,
+    rescueMode: decision.rescueMode,
+    hintGranularity: decision.hintGranularity,
+    hintCost: decision.hintCost,
     usage: {
       inputTokens,
       outputTokens: estimateTokens(enforcedReply),
@@ -637,8 +659,14 @@ async function* streamWithGemini(
       model,
       signals,
       decision,
-      criticVerdict: reviewed.verdict,
-      usage: {
+        criticVerdict: reviewed.verdict,
+        hintServed: decision.action === "give_hint",
+        hintStyle: decision.hintStyle,
+        hintLevel: decision.hintLevel,
+        rescueMode: decision.rescueMode,
+        hintGranularity: decision.hintGranularity,
+        hintCost: decision.hintCost,
+        usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
         estimatedCostUsd: null,
@@ -720,7 +748,7 @@ function buildInterviewerPrompt(
     `Reasoning depth: ${signals.reasoningDepth}`,
     `Testing discipline: ${signals.testingDiscipline}`,
     `Complexity rigor: ${signals.complexityRigor}`,
-      `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}, pressure=${decision.pressure ?? "neutral"}.`,
+    `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}, pressure=${decision.pressure ?? "neutral"}, urgency=${decision.urgency ?? "medium"}, can_defer=${decision.canDefer ?? false}, interruption_cost=${decision.interruptionCost ?? "medium"}, evidence_importance=${decision.evidenceImportance ?? "important"}, batchable=${decision.batchable ?? false}${decision.batchGroup ? `, batch_group=${decision.batchGroup}` : ""}.`,
     `Decision reason: ${decision.reason}`,
     decision.specificIssue ? `Specific issue to surface: ${decision.specificIssue}` : null,
     decision.targetCodeLine ? `Target code line or focus area: ${decision.targetCodeLine}` : null,
@@ -736,6 +764,9 @@ function buildInterviewerPrompt(
     `Reply strategy: ${describeReplyStrategy(decision, signals)}`,
     decision.hintStyle ? `Required hint style: ${decision.hintStyle}` : null,
     decision.hintLevel ? `Required hint level: ${decision.hintLevel}` : null,
+    decision.rescueMode ? `Hint rescue mode: ${decision.rescueMode}` : null,
+    decision.hintGranularity ? `Hint granularity: ${decision.hintGranularity}` : null,
+    typeof decision.hintCost === "number" ? `Hint cost score: ${decision.hintCost}` : null,
     decision.suggestedStage ? `Suggested next stage after this turn: ${decision.suggestedStage}` : null,
     `Prompt strategy: ${policy.promptStrategy}. OPEN_ENDED means broader probing; GUIDED means narrower coaching; CONSTRAINED means ask the candidate to focus on one specific next step.`,
     improvingOrWorseningInstruction(signals.trendSummary),
@@ -752,6 +783,8 @@ function buildInterviewerPrompt(
     "If the decision action is give_hint, provide a hint and not a generic probe.",
     "If the decision action is ask_for_test_case or ask_for_complexity, ask exactly for those signals rather than a broad open-ended follow-up.",
     "If the decision action is ask_for_clarification, do not pretend certainty. Ask a tiny-example or expectation-check question first.",
+    "If can_defer is true and interruption_cost is higher than urgency, prefer preserving the candidate's flow over collecting optional evidence immediately.",
+    "If batchable is true, avoid interrupting for a single optional point when that evidence can be collected later as part of the same batch group.",
     "If the recent state trend is worsening, reduce breadth and ask a narrower, more local follow-up.",
     "If the recent state trend is improving, do not over-interrupt. Keep the candidate moving while still protecting the key signal the decision engine wants.",
     "Prefer 1 or 2 sentences. The last sentence should usually be the concrete follow-up or instruction.",
@@ -835,8 +868,11 @@ function generateFallbackTurn(
       policyAction: policy.recommendedAction,
       policyReason: policy.reason,
       hintServed: true,
-      hintStyle: policy.hintStyle,
-      hintLevel: policy.hintLevel,
+      hintStyle: decision.hintStyle ?? policy.hintStyle,
+      hintLevel: decision.hintLevel ?? policy.hintLevel,
+      rescueMode: decision.rescueMode,
+      hintGranularity: decision.hintGranularity,
+      hintCost: decision.hintCost,
       escalationReason: policy.escalationReason,
     };
   }
@@ -1372,6 +1408,7 @@ export function buildSessionMemorySummary(
     `Recent hints: ${ledger.recentHints}.`,
     ledger.persistentWeakness ? `Persistent weakness across recent turns: ${ledger.persistentWeakness}.` : "No persistent weakness is dominating yet.",
     `Current decision to execute: ${decision.action} -> ${decision.target}.`,
+    `Decision timing metadata: urgency=${decision.urgency ?? "medium"}, can_defer=${decision.canDefer ?? false}, interruption_cost=${decision.interruptionCost ?? "medium"}, evidence_importance=${decision.evidenceImportance ?? "important"}${decision.batchGroup ? `, batch_group=${decision.batchGroup}` : ""}.`,
     ...ledger.summary,
   ].join(" ");
 }
@@ -1434,6 +1471,11 @@ async function rewriteWithOpenAi(
                 `Decision action: ${decision.action}`,
                 `Decision target: ${decision.target}`,
                 `Decision pressure: ${decision.pressure ?? "neutral"}`,
+                `Decision urgency: ${decision.urgency ?? "medium"}`,
+                `Decision can defer: ${decision.canDefer ?? false}`,
+                `Decision interruption cost: ${decision.interruptionCost ?? "medium"}`,
+                `Decision evidence importance: ${decision.evidenceImportance ?? "important"}`,
+                `Decision batch group: ${decision.batchGroup ?? "none"}`,
                 `Specific issue: ${decision.specificIssue ?? "none"}`,
                 `Expected answer shape: ${decision.expectedAnswer ?? "none"}`,
                 `Required fallback if rewriting fails: ${verdict.revisedReply ?? decision.question}`,
@@ -1493,6 +1535,11 @@ async function rewriteWithGemini(
                   `Decision action: ${decision.action}`,
                   `Decision target: ${decision.target}`,
                   `Decision pressure: ${decision.pressure ?? "neutral"}`,
+                  `Decision urgency: ${decision.urgency ?? "medium"}`,
+                  `Decision can defer: ${decision.canDefer ?? false}`,
+                  `Decision interruption cost: ${decision.interruptionCost ?? "medium"}`,
+                  `Decision evidence importance: ${decision.evidenceImportance ?? "important"}`,
+                  `Decision batch group: ${decision.batchGroup ?? "none"}`,
                   `Specific issue: ${decision.specificIssue ?? "none"}`,
                   `Expected answer shape: ${decision.expectedAnswer ?? "none"}`,
                   `Required fallback if rewriting fails: ${verdict.revisedReply ?? decision.question}`,

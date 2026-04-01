@@ -98,4 +98,28 @@ describe("reviewInterviewerReply", () => {
     expect(result.specificity).toBe("low");
     expect(result.questionWorthAsking).toBe(true);
   });
+
+  it("defers a low-urgency clarification when the candidate is coding smoothly", () => {
+    const result = reviewInterviewerReply({
+      reply: "Can you restate the next step on one tiny example and say what exact state you expect?",
+      decision: {
+        ...baseDecision,
+        action: "ask_for_clarification",
+        target: "reasoning",
+        question: "Can you restate the next step on one tiny example and say what exact state you expect?",
+      },
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+      },
+      currentStage: "IMPLEMENTATION",
+      latestExecutionRun: null,
+    });
+
+    expect(result.approved).toBe(false);
+    expect(result.verdict).toBe("move_on");
+    expect(result.timingVerdict).toBe("defer");
+    expect(result.reason).toBe("poor_timing");
+    expect(result.questionWorthAsking).toBe(false);
+  });
 });

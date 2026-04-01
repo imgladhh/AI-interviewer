@@ -63,6 +63,10 @@ export type SessionTimelineItem = {
   at: string;
   title: string;
   summary: string;
+  timingVerdict?: string | null;
+  urgency?: string | null;
+  interruptionCost?: string | null;
+  batchGroup?: string | null;
   answeredTargets?: string[];
   collectedEvidence?: string[];
   unresolvedIssues?: string[];
@@ -357,6 +361,10 @@ function buildSessionTimeline(
           at: event.eventTime.toISOString(),
           title: "Interviewer decision",
           summary: `${stringOrFallback(decision.action, "unknown action")} -> ${stringOrFallback(decision.target, "unknown target")}`,
+          timingVerdict: stringValue(decision.canDefer) === "true" ? "defer-capable" : null,
+          urgency: stringValue(decision.urgency),
+          interruptionCost: stringValue(decision.interruptionCost),
+          batchGroup: stringValue(decision.batchGroup),
           evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
           answeredTargets: [],
           collectedEvidence: [],
@@ -372,6 +380,10 @@ function buildSessionTimeline(
             at: event.eventTime.toISOString(),
             title: "Critic verdict",
             summary: `${stringOrFallback(criticVerdict.verdict, "verdict")} / ${stringOrFallback(criticVerdict.reason, "unknown reason")}${typeof criticVerdict.questionWorthAsking === "boolean" ? ` / worth=${criticVerdict.questionWorthAsking ? "yes" : "no"}` : ""}`,
+            timingVerdict: stringValue(criticVerdict.timingVerdict),
+            urgency: stringValue(criticVerdict.urgency),
+            interruptionCost: stringValue(criticVerdict.interruptionCost),
+            batchGroup: stringValue(criticVerdict.batchGroup),
             evidenceFocus: stringValue(criticVerdict.focus) ?? stringValue(criticVerdict.reason),
             payload,
           };
@@ -469,12 +481,31 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
 
   if (eventType === "DECISION_RECORDED") {
     const decision = asRecord(payload.decision);
-    return `Interviewer decision: ${stringOrFallback(decision.action, "unknown action")} toward ${stringOrFallback(decision.target, "unknown target")}.`;
+    const timing = [
+      stringValue(decision.urgency) ? `urgency=${stringValue(decision.urgency)}` : null,
+      stringValue(decision.interruptionCost)
+        ? `interruption=${stringValue(decision.interruptionCost)}`
+        : null,
+      stringValue(decision.batchGroup) ? `batch=${stringValue(decision.batchGroup)}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return `Interviewer decision: ${stringOrFallback(decision.action, "unknown action")} toward ${stringOrFallback(decision.target, "unknown target")}${timing ? ` (${timing})` : ""}.`;
   }
 
   if (eventType === "CRITIC_VERDICT_RECORDED") {
     const criticVerdict = asRecord(payload.criticVerdict);
-    return `Critic verdict: ${stringOrFallback(criticVerdict.verdict, "unknown verdict")} because ${stringOrFallback(criticVerdict.reason, "unknown reason")}${stringValue(criticVerdict.worthReason) ? `. ${stringValue(criticVerdict.worthReason)}` : ""}.`;
+    const timing = [
+      stringValue(criticVerdict.timingVerdict) ? `timing=${stringValue(criticVerdict.timingVerdict)}` : null,
+      stringValue(criticVerdict.urgency) ? `urgency=${stringValue(criticVerdict.urgency)}` : null,
+      stringValue(criticVerdict.interruptionCost)
+        ? `interruption=${stringValue(criticVerdict.interruptionCost)}`
+        : null,
+      stringValue(criticVerdict.batchGroup) ? `batch=${stringValue(criticVerdict.batchGroup)}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return `Critic verdict: ${stringOrFallback(criticVerdict.verdict, "unknown verdict")} because ${stringOrFallback(criticVerdict.reason, "unknown reason")}${timing ? ` (${timing})` : ""}${stringValue(criticVerdict.worthReason) ? `. ${stringValue(criticVerdict.worthReason)}` : ""}.`;
   }
 
   if (eventType === "LLM_USAGE_RECORDED") {
@@ -569,6 +600,7 @@ function describeStage(value: unknown) {
 
   return describeCodingStage(value);
 }
+
 
 
 

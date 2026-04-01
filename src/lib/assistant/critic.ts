@@ -18,16 +18,24 @@ type ExecutionRunLike = {
 export type CriticVerdict = {
   approved: boolean;
   verdict: "accept" | "rewrite" | "move_on" | "move_to_implementation";
+  timingVerdict: "ask_now" | "defer" | "skip" | "move_to_implementation";
   revisedReply?: string;
   questionWorthAsking: boolean;
   worthReason: string;
+  urgency?: "low" | "medium" | "high";
+  interruptionCost?: "low" | "medium" | "high";
+  evidenceImportance?: "optional" | "important" | "critical";
+  batchGroup?: string;
+  interruptsGoodFlow: boolean;
+  canDefer: boolean;
   reason:
     | "reply_ok"
     | "generic_reply"
     | "not_specific_enough"
     | "not_tough_enough"
     | "repeated_answered_target"
-    | "should_move_to_implementation";
+    | "should_move_to_implementation"
+    | "poor_timing";
   specificity: "low" | "medium" | "high";
   intensity: "soft" | "balanced" | "sharp";
   explanation: string;
@@ -50,6 +58,12 @@ export function reviewInterviewerReply(input: {
       revisedReply: input.decision.question,
       questionWorthAsking: true,
       worthReason: "The interviewer move itself is still useful, but the generated reply was empty.",
+      timingVerdict: "ask_now",
+      urgency: "medium",
+      interruptionCost: "medium",
+      evidenceImportance: "important",
+      interruptsGoodFlow: false,
+      canDefer: false,
       reason: "generic_reply",
       specificity: "low",
       intensity: "soft",
@@ -90,14 +104,47 @@ export function reviewInterviewerReply(input: {
     return {
       approved: false,
       verdict: "move_to_implementation",
+      timingVerdict: "move_to_implementation",
       revisedReply:
         "Your approach is concrete enough now. Go ahead and implement it, and we can come back to correctness, testing, and tradeoffs after the code is written.",
       questionWorthAsking: false,
       worthReason: pacing.worthReason,
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: pacing.interruptionCost === "high",
+      canDefer: pacing.canDefer,
       reason: "should_move_to_implementation",
       specificity: "medium",
       intensity: "balanced",
       explanation: "The candidate is already ready to code, so more pre-code probing would hurt pacing.",
+      focus,
+    } satisfies CriticVerdict;
+  }
+
+  if (pacing.timingVerdict === "defer") {
+    return {
+      approved: false,
+      verdict: "move_on",
+      timingVerdict: "defer",
+      revisedReply:
+        input.currentStage === "IMPLEMENTATION"
+          ? "Keep coding for a moment. I want to see one more concrete branch, update, or result before I interrupt you."
+          : "Keep going for a moment. I want one more concrete step or example before I press on that point.",
+      questionWorthAsking: false,
+      worthReason: pacing.worthReason,
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: true,
+      canDefer: pacing.canDefer,
+      reason: "poor_timing",
+      specificity,
+      intensity,
+      explanation:
+        "The interviewer target may still matter, but asking it now would interrupt productive flow, so it should be deferred.",
       focus,
     } satisfies CriticVerdict;
   }
@@ -112,6 +159,7 @@ export function reviewInterviewerReply(input: {
     return {
       approved: false,
       verdict: input.decision.target === "implementation" ? "move_to_implementation" : "move_on",
+      timingVerdict: pacing.timingVerdict,
       revisedReply:
         input.decision.target === "complexity" || input.decision.target === "tradeoff"
           ? "You have already covered the performance story clearly enough. Give me a concise final summary of the approach and one implementation detail you would still watch carefully."
@@ -122,6 +170,12 @@ export function reviewInterviewerReply(input: {
               : "You have already addressed that point enough for now. Keep moving, and we can return to any remaining gaps after the implementation evidence is stronger.",
       questionWorthAsking: false,
       worthReason: pacing.worthReason,
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: pacing.interruptionCost === "high",
+      canDefer: pacing.canDefer,
       reason: targetAlreadyAnswered ? "repeated_answered_target" : "should_move_to_implementation",
       specificity,
       intensity,
@@ -134,9 +188,16 @@ export function reviewInterviewerReply(input: {
     return {
       approved: false,
       verdict: "rewrite",
+      timingVerdict: "ask_now",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
       worthReason: "The target is still worth asking, but this wording is too generic.",
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: false,
+      canDefer: pacing.canDefer,
       reason: "generic_reply",
       specificity: "low",
       intensity,
@@ -149,9 +210,16 @@ export function reviewInterviewerReply(input: {
     return {
       approved: false,
       verdict: "rewrite",
+      timingVerdict: "ask_now",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
       worthReason: "The interviewer is pressing on the right issue, but the question needs to be more specific.",
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: false,
+      canDefer: pacing.canDefer,
       reason: "not_specific_enough",
       specificity,
       intensity,
@@ -164,9 +232,16 @@ export function reviewInterviewerReply(input: {
     return {
       approved: false,
       verdict: "rewrite",
+      timingVerdict: "ask_now",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
       worthReason: "The issue is worth probing, but the question needs more interviewing pressure.",
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: false,
+      canDefer: pacing.canDefer,
       reason: "not_tough_enough",
       specificity,
       intensity,
@@ -184,10 +259,17 @@ export function reviewInterviewerReply(input: {
     return {
       approved: false,
       verdict: "move_to_implementation",
+      timingVerdict: "move_to_implementation",
       revisedReply:
         "That is enough pre-code discussion. Go ahead and implement it now, and then we can review correctness and tradeoffs against the actual code.",
       questionWorthAsking: false,
       worthReason: pacing.worthReason,
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: pacing.interruptionCost === "high",
+      canDefer: pacing.canDefer,
       reason: "should_move_to_implementation",
       specificity,
       intensity,
@@ -199,8 +281,15 @@ export function reviewInterviewerReply(input: {
   return {
     approved: true,
     verdict: "accept",
+    timingVerdict: pacing.timingVerdict,
     questionWorthAsking: pacing.questionWorthAsking,
     worthReason: pacing.worthReason,
+    urgency: pacing.urgency,
+    interruptionCost: pacing.interruptionCost,
+    evidenceImportance: pacing.evidenceImportance,
+    batchGroup: pacing.batchGroup,
+    interruptsGoodFlow: pacing.interruptionCost === "high" && pacing.canDefer,
+    canDefer: pacing.canDefer,
     reason: "reply_ok",
     specificity,
     intensity,

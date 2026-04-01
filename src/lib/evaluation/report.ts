@@ -1,9 +1,10 @@
-import {
+﻿import {
   deriveCurrentCodingStage,
   describeCodingStage,
   isCodingInterviewStage,
   type CodingInterviewStage,
 } from "@/lib/assistant/stages";
+import { buildHintingLedger, type HintLedger } from "@/lib/assistant/hinting_ledger";
 import type { Recommendation } from "@prisma/client";
 
 type TranscriptLike = {
@@ -86,6 +87,12 @@ type CandidateDecisionSummary = {
   policyAction?: string;
 };
 
+type HintSummary = HintLedger & {
+  requested: number;
+  served: number;
+  penaltyApplied: number;
+};
+
 type StageReplayGroup = {
   stage: string;
   label: string;
@@ -119,6 +126,8 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const latestDecision = findLatestDecisionSnapshot(input.events);
   const hintRequestedCount = input.events.filter((event) => event.eventType === "HINT_REQUESTED").length;
   const hintServedCount = input.events.filter((event) => event.eventType === "HINT_SERVED").length;
+  const hintLedger = buildHintingLedger(input.events);
+  const hintSummary = buildHintSummary(hintLedger, hintRequestedCount, hintServedCount, latestSignal);
   const userTurns = input.transcripts.filter((segment) => segment.speaker === "USER");
   const aiTurns = input.transcripts.filter((segment) => segment.speaker === "AI");
   const latestUserText = [...userTurns].reverse().map((segment) => segment.text.toLowerCase()).join(" ");
@@ -137,23 +146,25 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const scoreSum = dimensions.reduce((total, dimension) => total + dimension.score, 0);
   const maxSum = dimensions.reduce((total, dimension) => total + dimension.maxScore, 0);
   const overallScore = Math.round((scoreSum / maxSum) * 100);
-  const recommendation = toRecommendation(overallScore);
-  const strengths = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount);
-  const weaknesses = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount);
+  const adjustedOverallScore = Math.max(0, Math.round(overallScore - hintSummary.penaltyApplied));
+  const recommendation = toRecommendation(adjustedOverallScore);
+  const strengths = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount, hintSummary);
+  const weaknesses = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount, hintSummary);
   const missedSignals = collectMissedSignals(stageJourney, latestSignal, latestUserText, passedRuns);
-  const improvementPlan = collectImprovementPlan(dimensions, latestSignal, hintServedCount);
+  const improvementPlan = collectImprovementPlan(dimensions, latestSignal, hintServedCount, hintSummary);
   const overallSummary = buildOverallSummary({
     recommendation,
     currentStage,
     passedRuns,
     failedRuns,
     hintRequestedCount,
+    hintSummary,
     stageJourney,
     latestSignal,
   });
 
   return {
-    overallScore,
+    overallScore: adjustedOverallScore,
     recommendation,
     overallSummary,
     strengths,
@@ -175,8 +186,14 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
         failedRuns,
       },
       hintSummary: {
-        requested: hintRequestedCount,
-        served: hintServedCount,
+        requested: hintSummary.requested,
+        served: hintSummary.served,
+        totalHintCost: hintSummary.totalHintCost,
+        averageHintCost: hintSummary.averageHintCost,
+        strongestHintLevel: hintSummary.strongestHintLevel,
+        byGranularity: hintSummary.byGranularity,
+        byRescueMode: hintSummary.byRescueMode,
+        penaltyApplied: hintSummary.penaltyApplied,
       },
       transcriptSummary: {
         userTurns: userTurns.length,
@@ -190,7 +207,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       weaknesses,
       missedSignals,
       improvementPlan,
-      overallScore,
+      overallScore: adjustedOverallScore,
       recommendation,
       overallSummary,
     },
@@ -461,7 +478,7 @@ function buildStageReplay(
     }
 
     if (event.eventType === "HINT_SERVED") {
-      groups.get(activeStage)?.evidence.push(`Hint served: ${(stringValue(asRecord(event.payloadJson).hintLevel) ?? "LIGHT").toLowerCase()} ${(stringValue(asRecord(event.payloadJson).hintStyle) ?? "hint").replaceAll("_", " ").toLowerCase()}.`);
+      groups.get(activeStage)?.evidence.push(`Hint served: ${(stringValue(asRecord(event.payloadJson).hintLevel) ?? "LIGHT").toLowerCase()} ${(stringValue(asRecord(event.payloadJson).hintStyle) ?? "hint").replaceAll("_", " ").toLowerCase()}${stringValue(asRecord(event.payloadJson).rescueMode) ? ` / ${stringValue(asRecord(event.payloadJson).rescueMode)?.replaceAll("_", " ")}` : ""}${typeof asRecord(event.payloadJson).hintCost === "number" ? ` / cost ${Number(asRecord(event.payloadJson).hintCost).toFixed(2)}` : ""}.`);
       continue;
     }
 
@@ -492,6 +509,7 @@ function buildOverallSummary(input: {
   passedRuns: number;
   failedRuns: number;
   hintRequestedCount: number;
+  hintSummary: HintSummary;
   stageJourney: string[];
   latestSignal: CandidateSignalSummary | null;
 }) {
@@ -501,7 +519,7 @@ function buildOverallSummary(input: {
     input.latestSignal?.summary ? `Latest candidate state: ${input.latestSignal.summary}.` : null,
     `Code execution produced ${input.passedRuns} passing run(s) and ${input.failedRuns} non-passing run(s).`,
     input.hintRequestedCount > 0
-      ? `The candidate requested ${input.hintRequestedCount} hint(s), which suggests some reliance on interviewer guidance.`
+      ? `The candidate requested ${input.hintRequestedCount} hint(s), with a total hint cost of ${input.hintSummary.totalHintCost.toFixed(2)} and an interview-score penalty of ${input.hintSummary.penaltyApplied}.`
       : "The candidate completed the session without asking for explicit hints.",
   ]
     .filter(Boolean)
@@ -514,6 +532,7 @@ function collectStrengths(
   stageReplay: StageReplayGroup[],
   passedRuns: number,
   hintRequestedCount: number,
+  hintSummary: HintSummary,
 ) {
   const strengths = dimensions
     .filter((dimension) => dimension.score >= 4)
@@ -541,6 +560,8 @@ function collectStrengths(
 
   if (hintRequestedCount === 0) {
     strengths.push("Independence: the candidate did not rely on explicit hint requests.");
+  } else if (hintSummary.strongestHintLevel === "LIGHT" && hintSummary.totalHintCost <= 2.5) {
+    strengths.push("Guidance usage: the candidate only needed light-touch hints rather than implementation-heavy rescue.");
   }
 
   return strengths.slice(0, 4);
@@ -551,6 +572,7 @@ function collectWeaknesses(
   currentStage: string,
   latestSignal: CandidateSignalSummary | null,
   hintRequestedCount: number,
+  hintSummary: HintSummary,
 ) {
   const weaknesses = dimensions
     .filter((dimension) => dimension.score <= 3)
@@ -574,6 +596,10 @@ function collectWeaknesses(
 
   if (hintRequestedCount >= 2) {
     weaknesses.push("The candidate needed repeated hints, which may indicate difficulty sustaining momentum independently.");
+  }
+
+  if (hintSummary.penaltyApplied > 0) {
+    weaknesses.push(`Hint reliance: interviewer rescue carried a measurable cost (${hintSummary.totalHintCost.toFixed(2)} total hint cost, ${hintSummary.penaltyApplied}-point report penalty).`);
   }
 
   if (currentStage !== "WRAP_UP") {
@@ -618,6 +644,7 @@ function collectImprovementPlan(
   dimensions: DimensionScore[],
   latestSignal: CandidateSignalSummary | null,
   hintServedCount: number,
+  hintSummary: HintSummary,
 ) {
   const improvements: string[] = [];
 
@@ -647,6 +674,10 @@ function collectImprovementPlan(
 
   if (hintServedCount > 0) {
     improvements.push("Try to delay asking for hints until after you have walked through one concrete example yourself.");
+  }
+
+  if (hintSummary.byRescueMode.implementation_rescue > 0 || hintSummary.byRescueMode.debug_rescue > 0) {
+    improvements.push("Practice recovering from implementation stalls with one local debugging hypothesis before asking for code-level rescue.");
   }
 
   for (const item of latestSignal?.structuredEvidence ?? []) {
@@ -731,6 +762,45 @@ function truncate(value: string, maxLength: number) {
 
 
 
+
+
+
+
+
+
+
+
+
+function buildHintSummary(
+  ledger: HintLedger,
+  requested: number,
+  served: number,
+  latestSignal: CandidateSignalSummary | null,
+): HintSummary {
+  const reasoningMultiplier =
+    latestSignal?.reasoningDepth === "deep"
+      ? 0.65
+      : latestSignal?.reasoningDepth === "moderate"
+        ? 0.85
+        : latestSignal?.reasoningDepth === "thin"
+          ? 1.15
+          : 1;
+  const rescueWeight =
+    ledger.byRescueMode.implementation_rescue * 0.45 +
+    ledger.byRescueMode.debug_rescue * 0.6 +
+    ledger.byGranularity.near_solution * 0.8;
+  const penaltyApplied = Math.max(
+    0,
+    Math.round(Math.min(10, ledger.totalHintCost * reasoningMultiplier + rescueWeight)),
+  );
+
+  return {
+    ...ledger,
+    requested,
+    served,
+    penaltyApplied,
+  };
+}
 
 
 

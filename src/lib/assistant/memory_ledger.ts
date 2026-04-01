@@ -294,6 +294,13 @@ function inferAnsweredTargets(input: {
       answered.add("implementation");
       answered.add("approach");
     }
+
+    if (
+      target === "summary" &&
+      (hasEvidence("complexity_tradeoff") || hasEvidence("test_cases") || hasEvidence("implementation_plan"))
+    ) {
+      answered.add("summary");
+    }
   }
 
   if (input.latestExecutionRun?.status === "PASSED") {

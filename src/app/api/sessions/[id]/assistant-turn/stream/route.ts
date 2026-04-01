@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+﻿import { prisma } from "@/lib/db";
 import { fail } from "@/lib/http";
 import { streamAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
@@ -87,6 +87,9 @@ export async function POST(request: Request, { params }: RouteContext) {
               hintServed?: boolean;
               hintStyle?: string;
               hintLevel?: string;
+              rescueMode?: string;
+              hintGranularity?: string;
+              hintCost?: number;
               escalationReason?: string;
               signals?: unknown;
               decision?: unknown;
@@ -260,6 +263,9 @@ export async function POST(request: Request, { params }: RouteContext) {
                 source: finalTurn.source,
                 hintStyle: finalTurn.hintStyle ?? null,
                 hintLevel: finalTurn.hintLevel ?? null,
+                rescueMode: finalTurn.rescueMode ?? null,
+                hintGranularity: finalTurn.hintGranularity ?? null,
+                hintCost: finalTurn.hintCost ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
                 reason: finalTurn.policyReason ?? null,
               },
@@ -280,6 +286,9 @@ export async function POST(request: Request, { params }: RouteContext) {
                 policyAction: finalTurn.policyAction ?? null,
                 hintServed: finalTurn.hintServed ?? false,
                 hintLevel: finalTurn.hintLevel ?? null,
+                rescueMode: finalTurn.rescueMode ?? null,
+                hintGranularity: finalTurn.hintGranularity ?? null,
+                hintCost: finalTurn.hintCost ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
                 signals: finalTurn.signals ?? null,
                 decision: finalTurn.decision ?? null,
@@ -311,3 +320,5 @@ export async function POST(request: Request, { params }: RouteContext) {
     },
   });
 }
+
+

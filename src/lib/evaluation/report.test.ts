@@ -141,7 +141,61 @@ describe("generateSessionReport", () => {
     expect(testingGroup).toBeTruthy();
     expect(JSON.stringify(testingGroup)).toMatch(/Signal snapshot|Decision: ask_for_complexity|Code run result: PASSED/i);
   });
+
+  it("includes hint cost and rescue metadata in the report summary", () => {
+    const report = generateSessionReport({
+      sessionId: "session-3",
+      questionTitle: "Two Sum",
+      transcripts: [
+        { speaker: "USER", text: "I got stuck implementing the hashmap update." },
+        { speaker: "AI", text: "Try focusing on the lookup before insert order." },
+      ],
+      events: [
+        { eventType: "HINT_REQUESTED", payloadJson: { source: "candidate" } },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            stage: "IMPLEMENTATION",
+            signals: {
+              understanding: "clear",
+              progress: "stuck",
+              communication: "clear",
+              codeQuality: "buggy",
+              algorithmChoice: "reasonable",
+              edgeCaseAwareness: "partial",
+              behavior: "structured",
+              reasoningDepth: "thin",
+              testingDiscipline: "partial",
+              complexityRigor: "moderate",
+              confidence: 0.78,
+              summary: "The candidate understands the approach but stalled in implementation.",
+            },
+          },
+        },
+        {
+          eventType: "HINT_SERVED",
+          payloadJson: {
+            stage: "IMPLEMENTATION",
+            hintLevel: "STRONG",
+            hintStyle: "IMPLEMENTATION_NUDGE",
+            rescueMode: "implementation_rescue",
+            hintGranularity: "near_solution",
+            hintCost: 4.05,
+          },
+        },
+      ],
+      executionRuns: [],
+    });
+
+    const reportJson = report.reportJson as Record<string, unknown>;
+    const hintSummary = reportJson.hintSummary as Record<string, unknown>;
+
+    expect(hintSummary.totalHintCost).toBe(4.05);
+    expect(hintSummary.strongestHintLevel).toBe("STRONG");
+    expect(hintSummary.penaltyApplied).toBeGreaterThan(0);
+    expect((hintSummary.byRescueMode as Record<string, number>).implementation_rescue).toBe(1);
+    expect(report.overallScore).toBeLessThan(100);
+    expect(report.weaknesses.some((item) => item.includes("Hint reliance"))).toBe(true);
+    expect(report.improvementPlan.some((item) => item.includes("code-level rescue"))).toBe(true);
+  });
 });
-
-
-

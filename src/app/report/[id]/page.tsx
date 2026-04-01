@@ -48,6 +48,9 @@ type LatestDecision = {
   action?: string;
   target?: string;
   pressure?: string;
+  urgency?: string;
+  interruptionCost?: string;
+  batchGroup?: string;
   question?: string;
   reason?: string;
   confidence?: number;
@@ -84,6 +87,12 @@ type ReportJson = {
   hintSummary?: {
     requested?: number;
     served?: number;
+    totalHintCost?: number;
+    averageHintCost?: number;
+    strongestHintLevel?: string | null;
+    byGranularity?: Record<string, number>;
+    byRescueMode?: Record<string, number>;
+    penaltyApplied?: number;
   };
   transcriptSummary?: {
     userTurns?: number;
@@ -118,6 +127,10 @@ type CandidateStateTimelineItem = {
   sortTime: number;
   title: string;
   summary: string;
+  timingVerdict?: string | null;
+  urgency?: string | null;
+  interruptionCost?: string | null;
+  batchGroup?: string | null;
   answeredTargets?: string[];
   collectedEvidence?: string[];
   unresolvedIssues?: string[];
@@ -257,6 +270,18 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 value={`${reportJson.hintSummary?.requested ?? 0} requested / ${reportJson.hintSummary?.served ?? 0} served`}
               />
               <MetricRow
+                label="Hint Cost"
+                value={`${reportJson.hintSummary?.totalHintCost ?? 0} total / ${reportJson.hintSummary?.averageHintCost ?? 0} avg`}
+              />
+              <MetricRow
+                label="Hint Penalty"
+                value={`${reportJson.hintSummary?.penaltyApplied ?? 0} pts`}
+              />
+              <MetricRow
+                label="Strongest Hint"
+                value={reportJson.hintSummary?.strongestHintLevel ?? "none"}
+              />
+              <MetricRow
                 label="Turns"
                 value={`${reportJson.transcriptSummary?.userTurns ?? 0} user / ${reportJson.transcriptSummary?.aiTurns ?? 0} AI`}
               />
@@ -364,6 +389,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       : "unknown"
                   }
                 />
+                <MetricRow label="Timing Verdict" value={String(latestCritic?.timingVerdict ?? "unknown")} />
+                <MetricRow label="Urgency" value={String(latestCritic?.urgency ?? reportJson.latestDecision.urgency ?? "unknown")} />
+                <MetricRow
+                  label="Interruption Cost"
+                  value={String(latestCritic?.interruptionCost ?? reportJson.latestDecision.interruptionCost ?? "unknown")}
+                />
                 <div style={listItemStyle}>
                   <strong>Question</strong>
                   <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.question ?? "No question captured."}</p>
@@ -394,6 +425,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                   <div style={listItemStyle}>
                     <strong>Worth reason</strong>
                     <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{String(latestCritic.worthReason)}</p>
+                  </div>
+                ) : null}
+                {latestCritic?.batchGroup ? (
+                  <div style={listItemStyle}>
+                    <strong>Deferred batch group</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{String(latestCritic.batchGroup)}</p>
                   </div>
                 ) : null}
               </div>
@@ -569,6 +606,14 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     <p style={mutedParagraphStyle}>
                       <strong>Evidence focus:</strong> {item.evidenceFocus}
                     </p>
+                  ) : null}
+                  {item.timingVerdict || item.urgency || item.interruptionCost ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.timingVerdict ? <span style={stagePillStyle}>timing: {item.timingVerdict}</span> : null}
+                      {item.urgency ? <span style={stagePillStyle}>urgency: {item.urgency}</span> : null}
+                      {item.interruptionCost ? <span style={stagePillStyle}>interrupt: {item.interruptionCost}</span> : null}
+                      {item.batchGroup ? <span style={stagePillStyle}>batch: {item.batchGroup}</span> : null}
+                    </div>
                   ) : null}
                   {item.answeredTargets && item.answeredTargets.length > 0 ? (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -774,12 +819,18 @@ function buildReplayItems(input: {
 
     if (event.eventType === "CRITIC_VERDICT_RECORDED") {
       const criticVerdict = asRecord(payload.criticVerdict);
+      const timingBits = [
+        stringValue(criticVerdict.timingVerdict) ? `timing=${stringValue(criticVerdict.timingVerdict)}` : null,
+        stringValue(criticVerdict.urgency) ? `urgency=${stringValue(criticVerdict.urgency)}` : null,
+        stringValue(criticVerdict.interruptionCost) ? `interrupt=${stringValue(criticVerdict.interruptionCost)}` : null,
+        stringValue(criticVerdict.batchGroup) ? `batch=${stringValue(criticVerdict.batchGroup)}` : null,
+      ].filter(Boolean).join(", ");
       items.push({
         id: event.id,
         time: event.eventTime.toLocaleTimeString(),
         sortTime: event.eventTime.getTime(),
         title: "Critic Verdict",
-        description: `${stringValue(criticVerdict.verdict) ?? "verdict"} / ${stringValue(criticVerdict.reason) ?? "unknown reason"}${stringValue(criticVerdict.explanation) ? `: ${stringValue(criticVerdict.explanation)}` : ""}`,
+        description: `${stringValue(criticVerdict.verdict) ?? "verdict"} / ${stringValue(criticVerdict.reason) ?? "unknown reason"}${timingBits ? ` (${timingBits})` : ""}${stringValue(criticVerdict.explanation) ? `: ${stringValue(criticVerdict.explanation)}` : ""}`,
         tone: "warning",
       });
     }
@@ -921,6 +972,10 @@ function buildCandidateStateTimeline(
           sortTime: event.eventTime.getTime(),
           title: "Critic verdict",
           summary: `${stringValue(criticVerdict.verdict) ?? "verdict"} / ${stringValue(criticVerdict.reason) ?? "unknown reason"}${typeof criticVerdict.questionWorthAsking === "boolean" ? ` / worth=${criticVerdict.questionWorthAsking ? "yes" : "no"}` : ""}`,
+          timingVerdict: stringValue(criticVerdict.timingVerdict),
+          urgency: stringValue(criticVerdict.urgency),
+          interruptionCost: stringValue(criticVerdict.interruptionCost),
+          batchGroup: stringValue(criticVerdict.batchGroup),
           evidenceFocus: stringValue(criticVerdict.focus) ?? stringValue(criticVerdict.reason),
           answeredTargets: [],
           collectedEvidence: [],
@@ -1157,6 +1212,16 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
+
+
+
+
+
+
+
+
+
 
 
 

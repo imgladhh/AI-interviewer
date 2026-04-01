@@ -115,6 +115,9 @@ This repo now has a working MVP-plus skeleton with:
 - /admin and /report now group observed candidate issues by Correctness, Testing, Complexity, and Debugging so interviewer quality is easier to inspect at a glance.
 - /admin and /report replay now surface unresolved issues, missing evidence, answered targets, collected evidence, and the current evidence focus so interviewer pacing is easier to debug visually.
 - `/admin` and `/report` now also surface the latest interviewer `pressure`, critic `Worth Asking`, and critic `Worth Reason` as top-level summary cards instead of hiding them only in replay payloads.
+- Added `hinting_ledger.ts` so the interviewer can classify hint granularity, rescue mode, and hint cost instead of only recording that a hint happened.
+- decision_engine hint actions now carry `rescueMode`, `hintGranularity`, and `hintCost`, so rescue behavior is explicit rather than buried in generic hint metadata.
+- report generation now aggregates hint cost, strongest hint level, rescue-mode mix, and a small hint-penalty signal so feedback reflects not just whether help happened, but how much help the candidate needed.
 
 ## What Works Today
 
@@ -209,6 +212,7 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation, provider sequencing, critic-aware rewrite passes, and decision-compliance enforcement
 - `src/lib/assistant/critic.ts`: structured interviewer-turn review for specificity, intensity, repetition, code-readiness gating, and “worth asking now” timing checks
 - `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, and pressure selection
+- `src/lib/assistant/hinting_ledger.ts`: hint granularity, rescue-mode classification, and hint-cost aggregation
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
 - `src/lib/evaluation/report.ts`: evidence-based report generation and session feedback scoring
 - `src/lib/session/snapshots.ts`: best-effort persistence for candidate-state and interviewer-decision snapshots
@@ -343,7 +347,7 @@ npm run build
 - Live provider drafts are periodic previews rather than true token-level streaming ASR
 - Code execution is local-process based and currently supports Python and JavaScript only
 - Authentication is still stubbed around a demo user
-- Evaluation/report is intentionally lightweight v0 and should still become more rubric-driven over time
+- Evaluation/report is still lightweight compared with a full rubric system, but it now includes evidence-backed state, replay, timing metadata, and hint-cost accounting
 - Replay is currently heuristic and event-driven, not yet a full stage-grouped interview playback view
 - Prisma generation on Windows can fail if `dev` or `worker` processes are locking the Prisma engine file.
 - After applying the 20260328020000_session_state_snapshots migration to the local Docker Postgres, session snapshot persistence now requires the app process to be restarted once if it had previously auto-disabled snapshot writes due to missing tables.
@@ -400,6 +404,8 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
 
 
 

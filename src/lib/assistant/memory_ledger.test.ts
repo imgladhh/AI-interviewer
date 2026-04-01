@@ -95,4 +95,25 @@ describe("buildMemoryLedger", () => {
     );
     expect(ledger.answeredTargets).toEqual(expect.arrayContaining(["testing", "tradeoff", "complexity"]));
   });
+
+  it("treats wrap-up as answered once summary evidence has already been collected", () => {
+    const ledger = buildMemoryLedger({
+      currentStage: "WRAP_UP",
+      signals: {
+        ...baseSignals,
+        testingDiscipline: "strong",
+        edgeCaseAwareness: "present",
+        complexityRigor: "strong",
+      },
+      latestExecutionRun: { status: "PASSED" },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "summary", action: "move_stage" } },
+        },
+      ],
+    });
+
+    expect(ledger.answeredTargets).toContain("summary");
+  });
 });

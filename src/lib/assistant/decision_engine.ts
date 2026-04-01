@@ -7,7 +7,19 @@ import type {
   CodingInterviewPolicy,
   CodingInterviewPolicyAction,
 } from "@/lib/assistant/policy";
-import type { DecisionPressure } from "@/lib/assistant/pacing";
+import {
+  classifyHintGranularity,
+  estimateHintCost,
+  resolveRescueMode,
+  type HintGranularity,
+  type RescueMode,
+} from "@/lib/assistant/hinting_ledger";
+import type {
+  DecisionPressure,
+  DecisionUrgency,
+  EvidenceImportance,
+  InterruptionCost,
+} from "@/lib/assistant/pacing";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
 
@@ -48,6 +60,12 @@ export type CandidateDecision = {
   action: CandidateDecisionAction;
   target: CandidateDecisionTarget;
   pressure?: DecisionPressure;
+  urgency?: DecisionUrgency;
+  canDefer?: boolean;
+  interruptionCost?: InterruptionCost;
+  evidenceImportance?: EvidenceImportance;
+  batchable?: boolean;
+  batchGroup?: string;
   question: string;
   reason: string;
   confidence: number;
@@ -57,6 +75,9 @@ export type CandidateDecision = {
   suggestedStage?: CodingInterviewStage;
   hintStyle?: CodingInterviewHintStyle;
   hintLevel?: CodingInterviewHintLevel;
+  rescueMode?: RescueMode;
+  hintGranularity?: HintGranularity;
+  hintCost?: number;
   policyAction: CodingInterviewPolicyAction;
 };
 
@@ -170,11 +191,22 @@ export function makeCandidateDecision(input: {
   }
 
   if (policy.shouldServeHint) {
+    const hintGranularity = classifyHintGranularity(policy.hintStyle, policy.hintLevel);
+    const hintCost = estimateHintCost({
+      hintStyle: policy.hintStyle,
+      hintLevel: policy.hintLevel,
+    });
+    const rescueMode = resolveRescueMode({
+      currentStage,
+      signals,
+      recentFailedRuns: repeatedFailures,
+      hintStyle: policy.hintStyle,
+    });
     return {
       action: "give_hint",
       target: mapHintTarget(policy.hintStyle),
       question: buildHintDecisionQuestion(policy.hintStyle, policy.hintLevel),
-      reason: `Policy requested a hint because ${policy.escalationReason ?? "the candidate needs guidance"} and the candidate currently looks ${signals.progress}.`,
+      reason: `Policy requested a ${hintGranularity} hint because ${policy.escalationReason ?? "the candidate needs guidance"} and the current turn is in ${rescueMode.replaceAll("_", " ")}.`,
       confidence: 0.86,
       targetCodeLine: "the single next state update or branch to focus on",
       specificIssue: "The candidate needs a bounded hint instead of another broad prompt.",
@@ -182,6 +214,9 @@ export function makeCandidateDecision(input: {
       suggestedStage: policy.nextStage,
       hintStyle: policy.hintStyle,
       hintLevel: policy.hintLevel,
+      rescueMode,
+      hintGranularity,
+      hintCost,
       policyAction: policy.recommendedAction,
     };
   }

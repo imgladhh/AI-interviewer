@@ -172,4 +172,23 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/hire/i);
     expect(description).toMatch(/78/);
   });
+
+  it("includes timing metadata in critic verdict descriptions", () => {
+    const description = buildSessionEventDescription("CRITIC_VERDICT_RECORDED", {
+      criticVerdict: {
+        verdict: "move_on",
+        reason: "poor_timing",
+        timingVerdict: "defer",
+        urgency: "low",
+        interruptionCost: "high",
+        batchGroup: "complexity_and_tradeoff",
+        worthReason: "The candidate is in a good implementation flow, so this can wait.",
+      },
+    });
+
+    expect(description).toMatch(/timing=defer/i);
+    expect(description).toMatch(/urgency=low/i);
+    expect(description).toMatch(/interrupt=high/i);
+    expect(description).toMatch(/batch=complexity_and_tradeoff/i);
+  });
 });

@@ -291,6 +291,26 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                       : "unknown"
                                   }
                                 />
+                                <MetricCard
+                                  label="Timing Verdict"
+                                  value={String(detail.sessionSummary.latestCritic?.timingVerdict ?? "unknown")}
+                                />
+                                <MetricCard
+                                  label="Urgency"
+                                  value={String(
+                                    detail.sessionSummary.latestCritic?.urgency ??
+                                      detail.sessionSummary.latestDecision.urgency ??
+                                      "unknown",
+                                  )}
+                                />
+                                <MetricCard
+                                  label="Interruption Cost"
+                                  value={String(
+                                    detail.sessionSummary.latestCritic?.interruptionCost ??
+                                      detail.sessionSummary.latestDecision.interruptionCost ??
+                                      "unknown",
+                                  )}
+                                />
                               </div>
                               <dl style={definitionListStyle}>
                                 {Object.entries(detail.sessionSummary.latestDecision).map(([key, value]) => (
@@ -306,6 +326,12 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
                                   <strong>Evidence Focus This Turn</strong>
                                   <div style={panelStyle}>{detail.sessionSummary.evidenceFocus}</div>
+                                </div>
+                              ) : null}
+                              {detail.sessionSummary.latestCritic?.batchGroup ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Deferred Batch Group</strong>
+                                  <div style={panelStyle}>{String(detail.sessionSummary.latestCritic.batchGroup)}</div>
                                 </div>
                               ) : null}
                               {detail.sessionSummary.latestCritic?.worthReason ? (
@@ -361,6 +387,22 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 {item.evidenceFocus ? (
                                   <div style={{ color: "var(--muted)" }}>
                                     <strong>Evidence focus:</strong> {item.evidenceFocus}
+                                  </div>
+                                ) : null}
+                                {item.timingVerdict || item.urgency || item.interruptionCost ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.timingVerdict ? (
+                                      <Badge tone="info">timing: {item.timingVerdict}</Badge>
+                                    ) : null}
+                                    {item.urgency ? (
+                                      <Badge tone="neutral">urgency: {item.urgency}</Badge>
+                                    ) : null}
+                                    {item.interruptionCost ? (
+                                      <Badge tone="neutral">interrupt: {item.interruptionCost}</Badge>
+                                    ) : null}
+                                    {item.batchGroup ? (
+                                      <Badge tone="neutral">batch: {item.batchGroup}</Badge>
+                                    ) : null}
                                   </div>
                                 ) : null}
                                 {item.answeredTargets && item.answeredTargets.length > 0 ? (
