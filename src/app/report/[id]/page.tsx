@@ -109,6 +109,24 @@ type ReportJson = {
   candidateState?: CandidateState | null;
   latestDecision?: LatestDecision | null;
   stageReplay?: StageReplayGroup[];
+  candidateDna?: {
+    headline?: string;
+    traits?: string[];
+    strengths?: string[];
+    watchouts?: string[];
+    growthEdge?: string;
+  };
+  momentsOfTruth?: Array<{
+    title?: string;
+    detail?: string;
+    evidence?: string[];
+    importance?: string;
+  }>;
+  rubricSummary?: Array<{
+    dimension?: string;
+    verdict?: string;
+    rationale?: string;
+  }>;
 };
 
 type ReplayItem = {
@@ -242,6 +260,98 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
           </div>
         </section>
 
+        <section style={gridStyle}>
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Candidate DNA</h2>
+            {reportJson.candidateDna ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={listItemStyle}>
+                  <strong>{reportJson.candidateDna.headline ?? "Candidate profile"}</strong>
+                  {Array.isArray(reportJson.candidateDna.traits) && reportJson.candidateDna.traits.length > 0 ? (
+                    <div style={{ ...pillRowStyle, marginTop: 8 }}>
+                      {reportJson.candidateDna.traits.map((trait) => (
+                        <span key={`dna-trait-${trait}`} style={stagePillStyle}>{trait}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                {Array.isArray(reportJson.candidateDna.strengths) && reportJson.candidateDna.strengths.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Natural strengths</strong>
+                    {reportJson.candidateDna.strengths.map((item) => (
+                      <div key={`dna-strength-${item}`} style={listItemStyle}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {Array.isArray(reportJson.candidateDna.watchouts) && reportJson.candidateDna.watchouts.length > 0 ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Watchouts</strong>
+                    {reportJson.candidateDna.watchouts.map((item) => (
+                      <div key={`dna-watchout-${item}`} style={listItemStyle}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {reportJson.candidateDna.growthEdge ? (
+                  <div style={listItemStyle}>
+                    <strong>Growth edge</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.candidateDna.growthEdge}</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p style={mutedParagraphStyle}>No candidate profile was generated yet.</p>
+            )}
+          </article>
+
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Rubric Summary</h2>
+            <div style={{ display: "grid", gap: 10 }}>
+              {(reportJson.rubricSummary ?? []).length === 0 ? (
+                <p style={mutedParagraphStyle}>No rubric summary is available yet.</p>
+              ) : (
+                (reportJson.rubricSummary ?? []).map((item, index) => (
+                  <div key={`rubric-summary-${index}`} style={listItemStyle}>
+                    <strong>{item.dimension ?? "Dimension"}</strong>
+                    {item.verdict ? (
+                      <p style={{ ...mutedParagraphStyle, marginTop: 8 }}><strong>Verdict:</strong> {item.verdict}</p>
+                    ) : null}
+                    {item.rationale ? (
+                      <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{item.rationale}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </article>
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>Moments of Truth</h2>
+          <div style={{ display: "grid", gap: 12 }}>
+            {(reportJson.momentsOfTruth ?? []).length === 0 ? (
+              <p style={mutedParagraphStyle}>No pivotal moments were captured for this report yet.</p>
+            ) : (
+              (reportJson.momentsOfTruth ?? []).map((item, index) => (
+                <div key={`moment-of-truth-${index}`} style={listItemStyle}>
+                  <strong>{item.title ?? "Moment of truth"}</strong>
+                  {item.importance ? (
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}><strong>Importance:</strong> {item.importance}</p>
+                  ) : null}
+                  {item.detail ? (
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{item.detail}</p>
+                  ) : null}
+                  {Array.isArray(item.evidence) && item.evidence.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      {item.evidence.map((point, pointIndex) => (
+                        <div key={`moment-of-truth-${index}-${pointIndex}`} style={listItemStyle}>{point}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
         <section style={gridStyle}>
           <article style={panelStyle}>
             <h2 style={sectionTitleStyle}>Stage Journey</h2>
@@ -1212,6 +1322,7 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
 
 
 

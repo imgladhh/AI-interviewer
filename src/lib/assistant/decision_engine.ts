@@ -8,12 +8,10 @@ import type {
   CodingInterviewPolicyAction,
 } from "@/lib/assistant/policy";
 import {
-  classifyHintGranularity,
-  estimateHintCost,
-  resolveRescueMode,
   type HintGranularity,
   type RescueMode,
 } from "@/lib/assistant/hinting_ledger";
+import { resolveHintStrategy, type HintTier } from "@/lib/assistant/hint_strategy";
 import type {
   DecisionPressure,
   DecisionUrgency,
@@ -77,6 +75,7 @@ export type CandidateDecision = {
   hintLevel?: CodingInterviewHintLevel;
   rescueMode?: RescueMode;
   hintGranularity?: HintGranularity;
+  hintTier?: HintTier;
   hintCost?: number;
   policyAction: CodingInterviewPolicyAction;
 };
@@ -191,22 +190,18 @@ export function makeCandidateDecision(input: {
   }
 
   if (policy.shouldServeHint) {
-    const hintGranularity = classifyHintGranularity(policy.hintStyle, policy.hintLevel);
-    const hintCost = estimateHintCost({
-      hintStyle: policy.hintStyle,
-      hintLevel: policy.hintLevel,
-    });
-    const rescueMode = resolveRescueMode({
+    const hintStrategy = resolveHintStrategy({
       currentStage,
       signals,
       recentFailedRuns: repeatedFailures,
       hintStyle: policy.hintStyle,
+      hintLevel: policy.hintLevel,
     });
     return {
       action: "give_hint",
       target: mapHintTarget(policy.hintStyle),
       question: buildHintDecisionQuestion(policy.hintStyle, policy.hintLevel),
-      reason: `Policy requested a ${hintGranularity} hint because ${policy.escalationReason ?? "the candidate needs guidance"} and the current turn is in ${rescueMode.replaceAll("_", " ")}.`,
+      reason: `Policy requested a ${hintStrategy.tier.toLowerCase().replaceAll("_", " ")} / ${hintStrategy.granularity} hint because ${policy.escalationReason ?? "the candidate needs guidance"} and the current turn is in ${hintStrategy.rescueMode.replaceAll("_", " ")}.`,
       confidence: 0.86,
       targetCodeLine: "the single next state update or branch to focus on",
       specificIssue: "The candidate needs a bounded hint instead of another broad prompt.",
@@ -214,9 +209,10 @@ export function makeCandidateDecision(input: {
       suggestedStage: policy.nextStage,
       hintStyle: policy.hintStyle,
       hintLevel: policy.hintLevel,
-      rescueMode,
-      hintGranularity,
-      hintCost,
+      rescueMode: hintStrategy.rescueMode,
+      hintGranularity: hintStrategy.granularity,
+      hintTier: hintStrategy.tier,
+      hintCost: hintStrategy.hintCost,
       policyAction: policy.recommendedAction,
     };
   }

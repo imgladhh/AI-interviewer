@@ -89,6 +89,7 @@ export async function POST(request: Request, { params }: RouteContext) {
               hintLevel?: string;
               rescueMode?: string;
               hintGranularity?: string;
+              hintTier?: string;
               hintCost?: number;
               escalationReason?: string;
               signals?: unknown;
@@ -265,6 +266,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintLevel: finalTurn.hintLevel ?? null,
                 rescueMode: finalTurn.rescueMode ?? null,
                 hintGranularity: finalTurn.hintGranularity ?? null,
+                hintTier: finalTurn.hintTier ?? null,
                 hintCost: finalTurn.hintCost ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
                 reason: finalTurn.policyReason ?? null,
@@ -288,6 +290,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintLevel: finalTurn.hintLevel ?? null,
                 rescueMode: finalTurn.rescueMode ?? null,
                 hintGranularity: finalTurn.hintGranularity ?? null,
+                hintTier: finalTurn.hintTier ?? null,
                 hintCost: finalTurn.hintCost ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
                 signals: finalTurn.signals ?? null,

@@ -13,7 +13,7 @@ This repo now has a working MVP-plus skeleton with:
 - `BullMQ`-backed persona ingestion queue with a worker process
 - Persona queue observability in both setup UI and admin dashboard
 - Interview room with transcript persistence, stage-governed assistant turns, Monaco editor, local code execution, and streaming AI replies
-- Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, and actionable improvements
+- Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, actionable improvements, and product-facing candidate profiling
 - Evidence-based report pipeline with candidate-state snapshots, interviewer decisions, and shared replay evidence across report and admin
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
@@ -118,6 +118,7 @@ This repo now has a working MVP-plus skeleton with:
 - Added `hinting_ledger.ts` so the interviewer can classify hint granularity, rescue mode, and hint cost instead of only recording that a hint happened.
 - decision_engine hint actions now carry `rescueMode`, `hintGranularity`, and `hintCost`, so rescue behavior is explicit rather than buried in generic hint metadata.
 - report generation now aggregates hint cost, strongest hint level, rescue-mode mix, and a small hint-penalty signal so feedback reflects not just whether help happened, but how much help the candidate needed.
+- report generation now produces deeper evidence traces, execution-aware evaluation signals, candidate DNA, moments of truth, and rubric summaries so the final report reads more like a real interview debrief than a generic AI recap.
 
 ## What Works Today
 
@@ -214,7 +215,7 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, and pressure selection
 - `src/lib/assistant/hinting_ledger.ts`: hint granularity, rescue-mode classification, and hint-cost aggregation
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
-- `src/lib/evaluation/report.ts`: evidence-based report generation and session feedback scoring
+- `src/lib/evaluation/report.ts`: evidence-based report generation, execution-aware scoring, candidate DNA profiling, and moment-of-truth extraction
 - `src/lib/session/snapshots.ts`: best-effort persistence for candidate-state and interviewer-decision snapshots
 - `src/lib/persona/queue.ts`: BullMQ queue helpers
 - `src/lib/persona/fake-ingestion.ts`: local persona ingestion simulation
@@ -404,6 +405,7 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
 
 
 

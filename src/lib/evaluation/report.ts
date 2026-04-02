@@ -102,6 +102,44 @@ type StageReplayGroup = {
   turns: Array<{ speaker: string; text: string }>;
 };
 
+type EvidenceTraceItem = {
+  claim: string;
+  category: string;
+  evidencePoints: string[];
+  impact?: string;
+  improvement?: string[];
+  confidence?: number;
+  verdict?: "strong" | "mixed" | "weak";
+};
+
+type CandidateDna = {
+  headline: string;
+  traits: string[];
+  strengths: string[];
+  watchouts: string[];
+  growthEdge: string;
+};
+
+type MomentOfTruth = {
+  title: string;
+  detail: string;
+  evidence?: string[];
+  importance: "high" | "medium";
+};
+
+type RubricSummaryItem = {
+  dimension: string;
+  verdict: "strong" | "mixed" | "weak";
+  rationale: string;
+};
+
+type CounterfactualSummary = {
+  autoCapturedEvidence: string[];
+  selfCorrectionWindows: number[];
+  wouldLikelySelfCorrect: boolean;
+  shouldWaitBeforeIntervening: boolean;
+};
+
 export type GeneratedSessionReport = {
   overallScore: number;
   recommendation: Recommendation;
@@ -128,6 +166,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const hintServedCount = input.events.filter((event) => event.eventType === "HINT_SERVED").length;
   const hintLedger = buildHintingLedger(input.events);
   const hintSummary = buildHintSummary(hintLedger, hintRequestedCount, hintServedCount, latestSignal);
+  const counterfactualSummary = buildCounterfactualSummary(input.events);
   const userTurns = input.transcripts.filter((segment) => segment.speaker === "USER");
   const aiTurns = input.transcripts.filter((segment) => segment.speaker === "AI");
   const latestUserText = [...userTurns].reverse().map((segment) => segment.text.toLowerCase()).join(" ");
@@ -139,8 +178,9 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     scoreProblemUnderstanding(stageJourney, latestUserText, latestSignal),
     scoreCommunication(userTurns, latestSignal),
     scoreImplementation(codeRunCount, passedRuns, failedRuns, latestSignal),
-    scoreDebugging(input.executionRuns, latestDecision),
+    scoreDebugging(input.executionRuns, latestDecision, counterfactualSummary, hintSummary),
     scoreTestingAndComplexity(stageJourney, latestUserText, latestSignal),
+    scoreIndependence(hintSummary, counterfactualSummary, latestSignal),
   ];
 
   const scoreSum = dimensions.reduce((total, dimension) => total + dimension.score, 0);
@@ -148,10 +188,34 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const overallScore = Math.round((scoreSum / maxSum) * 100);
   const adjustedOverallScore = Math.max(0, Math.round(overallScore - hintSummary.penaltyApplied));
   const recommendation = toRecommendation(adjustedOverallScore);
-  const strengths = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount, hintSummary);
+  const strengths = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount, hintSummary, counterfactualSummary);
   const weaknesses = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount, hintSummary);
   const missedSignals = collectMissedSignals(stageJourney, latestSignal, latestUserText, passedRuns);
   const improvementPlan = collectImprovementPlan(dimensions, latestSignal, hintServedCount, hintSummary);
+  const evidenceTrace = buildEvidenceTrace({
+    events: input.events,
+    dimensions,
+    latestSignal,
+    stageReplay,
+    hintSummary,
+    counterfactualSummary,
+  });
+  const candidateDna = buildCandidateDna({
+    latestSignal,
+    hintSummary,
+    counterfactualSummary,
+    passedRuns,
+  });
+  const momentsOfTruth = buildMomentsOfTruth({
+    stageReplay,
+    dimensions,
+    latestSignal,
+    hintSummary,
+    counterfactualSummary,
+    passedRuns,
+    failedRuns,
+  });
+  const rubricSummary = buildRubricSummary(dimensions);
   const overallSummary = buildOverallSummary({
     recommendation,
     currentStage,
@@ -202,6 +266,11 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       candidateState: latestSignal,
       latestDecision,
       stageReplay,
+      evidenceTrace,
+      candidateDna,
+      momentsOfTruth,
+      rubricSummary,
+      counterfactualSummary,
       dimensions,
       strengths,
       weaknesses,
@@ -232,7 +301,7 @@ function scoreProblemUnderstanding(
     key: "problem_understanding",
     label: "Problem Understanding",
     issue: clear ? "Problem framing was sufficient." : "Problem framing stayed incomplete or only partially explicit.",
-    score,
+    score: score,
     maxScore: 5,
     evidence:
       clear
@@ -274,7 +343,7 @@ function scoreCommunication(userTurns: TranscriptLike[], latestSignal: Candidate
       score >= 4
         ? "Communication exposed the candidate's thinking clearly."
         : "Communication left parts of the reasoning implicit or compressed.",
-    score,
+    score: score,
     maxScore: 5,
     evidence:
       score >= 4
@@ -315,7 +384,7 @@ function scoreImplementation(
       passedRuns > 0
         ? "Implementation reached a working state."
         : "Implementation evidence remained incomplete or unstable.",
-    score,
+    score: score,
     maxScore: 5,
     evidence:
       passedRuns > 0
@@ -334,35 +403,107 @@ function scoreImplementation(
   };
 }
 
-function scoreDebugging(executionRuns: ExecutionRunLike[], latestDecision: CandidateDecisionSummary | null): DimensionScore {
+function scoreDebugging(
+  executionRuns: ExecutionRunLike[],
+  latestDecision: CandidateDecisionSummary | null,
+  counterfactualSummary: CounterfactualSummary,
+  hintSummary: HintSummary,
+): DimensionScore {
   const passedRuns = executionRuns.filter((run) => run.status === "PASSED").length;
   const failingRuns = executionRuns.filter((run) => run.status !== "PASSED").length;
-  const score = failingRuns === 0 ? 3 : passedRuns > 0 ? 5 : latestDecision?.target === "debugging" ? 3 : 2;
+  const hasSelfCorrectionSignal = counterfactualSummary.selfCorrectionWindows.length > 0;
+  const baseScore =
+    failingRuns === 0
+      ? hasSelfCorrectionSignal
+        ? 4
+        : 3
+      : passedRuns > 0
+        ? 5
+        : hasSelfCorrectionSignal
+          ? 4
+          : latestDecision?.target === "debugging"
+            ? 3
+            : 2;
+  const rescuePenalty = hintSummary.byRescueMode.debug_rescue > 0 ? 1 : 0;
+  const adjustedScore = Math.max(1, baseScore - rescuePenalty);
 
   return {
     key: "debugging",
     label: "Debugging",
     issue:
-      passedRuns > 0
-        ? "The candidate demonstrated at least one successful recovery from failure."
-        : failingRuns > 0
-          ? "The session surfaced failures without a strong recovery signal."
-          : "The session did not produce much explicit debugging evidence.",
-    score,
+      hasSelfCorrectionSignal
+        ? "The session captured a credible self-correction window during debugging."
+        : passedRuns > 0
+          ? "The candidate demonstrated at least one successful recovery from failure."
+          : failingRuns > 0
+            ? "The session surfaced failures without a strong recovery signal."
+            : "The session did not produce much explicit debugging evidence.",
+    score: adjustedScore,
     maxScore: 5,
     evidence:
-      failingRuns === 0
-        ? "The session did not surface much explicit debugging evidence."
-        : passedRuns > 0
-          ? "The candidate recovered from at least one failing run, which is a strong debugging signal."
-          : "The session showed failing runs without later evidence of a successful recovery.",
+      hasSelfCorrectionSignal
+        ? `The critic explicitly allowed a ${counterfactualSummary.selfCorrectionWindows[0]}s self-correction window, which is positive evidence of debugging discipline.`
+        : failingRuns === 0
+          ? "The session did not surface much explicit debugging evidence."
+          : passedRuns > 0
+            ? "The candidate recovered from at least one failing run, which is a strong debugging signal."
+            : "The session showed failing runs without later evidence of a successful recovery.",
     impact:
-      passedRuns > 0
-        ? "Successful debugging is a positive sign for production-style reasoning under pressure."
-        : "Unrecovered execution failures weaken confidence in correctness and momentum.",
+      hasSelfCorrectionSignal
+        ? "Letting the candidate self-correct is a strong proxy for productive debugging discipline under pressure."
+        : passedRuns > 0
+          ? "Successful debugging is a positive sign for production-style reasoning under pressure."
+          : "Unrecovered execution failures weaken confidence in correctness and momentum.",
     improvement: [
       "When a run fails, identify the first incorrect state transition before rewriting larger blocks.",
       "Use one tiny reproducer input to isolate the failing path.",
+      rescuePenalty > 0
+        ? "Try one local debugging hypothesis before asking for code-level debugging rescue."
+        : "Keep narrating the first failing branch so your debugging path stays inspectable.",
+    ],
+  };
+}
+
+function scoreIndependence(
+  hintSummary: HintSummary,
+  counterfactualSummary: CounterfactualSummary,
+  latestSignal: CandidateSignalSummary | null,
+): DimensionScore {
+  const selfCorrectionBoost = counterfactualSummary.selfCorrectionWindows.length > 0 ? 1 : 0;
+  const autoEvidenceBoost = counterfactualSummary.autoCapturedEvidence.length > 0 ? 1 : 0;
+  const baseScore =
+    hintSummary.totalHintCost === 0
+      ? 5
+      : hintSummary.penaltyApplied <= 2
+        ? 4
+        : hintSummary.penaltyApplied <= 5
+          ? 3
+          : 2;
+  const adjustedScore = Math.min(5, Math.max(1, baseScore + selfCorrectionBoost + autoEvidenceBoost - (hintSummary.byRescueMode.implementation_rescue > 0 ? 1 : 0)));
+
+  return {
+    key: "independence",
+    label: "Independence",
+    issue:
+      adjustedScore >= 4
+        ? "The candidate generated enough evidence without heavy interviewer rescue."
+        : "The interviewer needed to supply meaningful rescue to keep momentum moving.",
+    score: adjustedScore,
+    maxScore: 5,
+    evidence:
+      hintSummary.totalHintCost === 0
+        ? "No hint cost was recorded, so the candidate sustained momentum independently."
+        : `Hint cost reached ${hintSummary.totalHintCost.toFixed(2)} with strongest tier ${hintSummary.strongestHintTier ?? "unknown"}.`,
+    impact:
+      adjustedScore >= 4
+        ? "This strengthens confidence that the candidate can move forward without frequent external steering."
+        : "Heavy rescue reduces confidence in independent execution under interview pressure.",
+    improvement: [
+      "Before asking for help, narrate one concrete next step or debugging hypothesis.",
+      "Try to surface complexity, tests, or tradeoffs proactively so the interviewer does not need to pull them out.",
+      latestSignal?.reasoningDepth === "thin"
+        ? "Explain one reason why your approach works before seeking confirmation."
+        : "Keep the interviewer updated on what evidence you are gathering as you code.",
     ],
   };
 }
@@ -391,7 +532,7 @@ function scoreTestingAndComplexity(
         : score >= 3
           ? "Testing or complexity was discussed, but the close-out stayed incomplete."
           : "The session ended without a strong testing and complexity close-out.",
-    score,
+    score: score,
     maxScore: 5,
     evidence:
       score >= 5
@@ -503,6 +644,145 @@ function buildStageReplay(
   return [...groups.values()].filter((group) => group.evidence.length > 0 || group.turns.length > 0);
 }
 
+function buildCandidateDna(input: {
+  latestSignal: CandidateSignalSummary | null,
+  hintSummary: HintSummary,
+  counterfactualSummary: CounterfactualSummary,
+  passedRuns: number,
+}): CandidateDna {
+  const traits: string[] = [];
+  const strengths: string[] = [];
+  const watchouts: string[] = [];
+
+  if (input.latestSignal?.reasoningDepth === "deep") {
+    traits.push("Deep thinker");
+    strengths.push("Explains why the solution works instead of only naming the approach.");
+  } else if (input.latestSignal?.reasoningDepth === "thin") {
+    traits.push("Conclusion-first explainer");
+    watchouts.push("Reasoning sometimes arrives without enough proof or invariant detail.");
+  }
+
+  if (input.latestSignal?.testingDiscipline === "strong") {
+    traits.push("Validation-aware");
+    strengths.push("Surfaces edge cases and expected outputs without heavy prompting.");
+  } else if (input.latestSignal?.testingDiscipline === "missing") {
+    traits.push("Low testing discipline");
+    watchouts.push("Needs to make validation and expected outputs more explicit before wrap-up.");
+  }
+
+  if (input.latestSignal?.complexityRigor === "strong") {
+    traits.push("Tradeoff-conscious");
+    strengths.push("Connects final complexity to an explicit performance tradeoff.");
+  } else if (input.latestSignal?.complexityRigor === "missing") {
+    watchouts.push("Performance discussion still needs a cleaner final complexity close-out.");
+  }
+
+  if (input.passedRuns > 0) {
+    traits.push("Execution-capable");
+    strengths.push("Turns the chosen approach into runnable code and reaches executable evidence.");
+  }
+
+  if (input.counterfactualSummary.selfCorrectionWindows.length > 0) {
+    traits.push("Self-correcting debugger");
+    strengths.push("Shows signs of productive self-correction before needing intervention.");
+  }
+
+  if (input.hintSummary.penaltyApplied >= 6) {
+    traits.push("High rescue overhead");
+    watchouts.push("Needed meaningful interviewer rescue to keep momentum moving.");
+  } else if (input.hintSummary.totalHintCost === 0) {
+    traits.push("Independent operator");
+    strengths.push("Sustains progress without relying on explicit hints.");
+  }
+
+  const uniqueTraits = [...new Set(traits)].slice(0, 4);
+  const uniqueStrengths = [...new Set(strengths)].slice(0, 3);
+  const uniqueWatchouts = [...new Set(watchouts)].slice(0, 3);
+  const growthEdge =
+    uniqueWatchouts[0] ??
+    (input.latestSignal?.behavior === "overthinking"
+      ? "Compress exploration into one concrete next step sooner."
+      : "Keep strengthening explicit validation and proof-style explanation under pressure.");
+  const headline = uniqueTraits.length > 0 ? uniqueTraits.slice(0, 2).join(" with ") : "Balanced candidate profile";
+
+  return {
+    headline,
+    traits: uniqueTraits,
+    strengths: uniqueStrengths,
+    watchouts: uniqueWatchouts,
+    growthEdge,
+  };
+}
+
+function buildMomentsOfTruth(input: {
+  stageReplay: StageReplayGroup[];
+  dimensions: DimensionScore[];
+  latestSignal: CandidateSignalSummary | null;
+  hintSummary: HintSummary;
+  counterfactualSummary: CounterfactualSummary;
+  passedRuns: number;
+  failedRuns: number;
+}): MomentOfTruth[] {
+  const moments: MomentOfTruth[] = [];
+
+  if (input.passedRuns > 0) {
+    moments.push({
+      title: "Reached working code",
+      detail: "The candidate produced at least one passing run, which anchored the session in executable evidence.",
+      evidence: ["A passing execution run was recorded during the session."],
+      importance: "high",
+    });
+  } else if (input.failedRuns > 0) {
+    moments.push({
+      title: "Execution never fully stabilized",
+      detail: "The session surfaced implementation attempts, but no passing run arrived to close the loop.",
+      evidence: ["The execution history contains non-passing runs without a final passing run."],
+      importance: "high",
+    });
+  }
+
+  if (input.counterfactualSummary.selfCorrectionWindows.length > 0) {
+    moments.push({
+      title: "Earned a self-correction window",
+      detail: "The interviewer intentionally waited, which is positive evidence that the candidate was debugging productively.",
+      evidence: input.counterfactualSummary.selfCorrectionWindows.map((seconds) => `A ${seconds}s self-correction window was granted before intervention.`),
+      importance: "high",
+    });
+  }
+
+  if (input.hintSummary.penaltyApplied > 0) {
+    moments.push({
+      title: "Rescue changed the evaluation",
+      detail: "Hint usage materially affected the independence signal and final scoring story.",
+      evidence: [
+        `Total hint cost reached ${input.hintSummary.totalHintCost.toFixed(2)}.`,
+        `A ${input.hintSummary.penaltyApplied}-point penalty was applied in the report.`,
+      ],
+      importance: "medium",
+    });
+  }
+
+  const weakestDimension = [...input.dimensions].sort((left, right) => left.score - right.score)[0];
+  if (weakestDimension) {
+    moments.push({
+      title: `Key weakness: ${weakestDimension.label}`,
+      detail: weakestDimension.issue ?? weakestDimension.evidence,
+      evidence: [weakestDimension.evidence],
+      importance: "medium",
+    });
+  }
+
+  return moments.slice(0, 3);
+}
+
+function buildRubricSummary(dimensions: DimensionScore[]): RubricSummaryItem[] {
+  return dimensions.map((dimension) => ({
+    dimension: dimension.label,
+    verdict: dimension.score >= dimension.maxScore - 1 ? "strong" : dimension.score <= Math.ceil(dimension.maxScore / 2) ? "weak" : "mixed",
+    rationale: dimension.issue ?? dimension.evidence,
+  }));
+}
+
 function buildOverallSummary(input: {
   recommendation: Recommendation;
   currentStage: string;
@@ -533,6 +813,7 @@ function collectStrengths(
   passedRuns: number,
   hintRequestedCount: number,
   hintSummary: HintSummary,
+  counterfactualSummary: CounterfactualSummary,
 ) {
   const strengths = dimensions
     .filter((dimension) => dimension.score >= 4)
@@ -552,6 +833,12 @@ function collectStrengths(
 
   if (passedRuns > 0) {
     strengths.push("Code execution: at least one passing run was achieved.");
+  }
+
+  if (counterfactualSummary.selfCorrectionWindows.length > 0) {
+    strengths.push(
+      `Debugging discipline: the candidate earned a ${counterfactualSummary.selfCorrectionWindows[0]}s self-correction window, which is strong evidence of productive debugging flow.`,
+    );
   }
 
   if (stageReplay.some((group) => group.decisions.some((decision) => decision.action === "ask_for_complexity"))) {
@@ -801,6 +1088,155 @@ function buildHintSummary(
     penaltyApplied,
   };
 }
+
+
+
+
+function buildEvidenceTrace(input: {
+  events: SessionEventLike[];
+  dimensions: DimensionScore[];
+  latestSignal: CandidateSignalSummary | null;
+  stageReplay: StageReplayGroup[];
+  hintSummary: HintSummary;
+  counterfactualSummary: CounterfactualSummary;
+}) {
+  const timelineEvidence = input.events
+    .filter((event) => ["STAGE_ADVANCED", "HINT_SERVED", "CODE_RUN_COMPLETED", "DECISION_RECORDED"].includes(event.eventType))
+    .slice(-8)
+    .map((event) => buildEvidencePoint(event));
+
+  const traces: EvidenceTraceItem[] = input.dimensions.map((dimension) => ({
+    claim: dimension.issue ?? `${dimension.label} was evaluated in this session.`,
+    category: dimension.label,
+    evidencePoints: [dimension.evidence, ...timelineEvidence.slice(0, 2)].filter(Boolean),
+    impact: dimension.impact,
+    improvement: dimension.improvement,
+    confidence: input.latestSignal?.confidence,
+    verdict:
+      dimension.score >= dimension.maxScore - 1 ? "strong" : dimension.score <= Math.ceil(dimension.maxScore / 2) ? "weak" : "mixed",
+  }));
+
+  if (input.latestSignal?.structuredEvidence?.length) {
+    for (const item of input.latestSignal.structuredEvidence.slice(0, 3)) {
+      traces.push({
+        claim: item.issue ?? "Observed candidate issue",
+        category: prettifyArea(item.area ?? "issue"),
+        evidencePoints: [item.evidence ?? item.behavior ?? "Observed through candidate state extraction."],
+        impact: item.impact,
+        improvement: item.fix ? [item.fix] : undefined,
+        confidence: input.latestSignal?.confidence,
+      verdict: "mixed",
+      });
+    }
+  }
+
+  if (input.counterfactualSummary.autoCapturedEvidence.length > 0) {
+    traces.push({
+      claim: "Some evaluation evidence was captured without needing an extra interviewer interruption.",
+      category: "Counterfactual",
+      evidencePoints: input.counterfactualSummary.autoCapturedEvidence.map((item) => `Auto-captured evidence: ${item}.`),
+      impact: "This improved naturalness by letting the candidate surface evidence unprompted.",
+      improvement: ["Keep narrating complexity, tests, and local debugging observations as you work."],
+      confidence: input.latestSignal?.confidence,
+      verdict: "mixed",
+    });
+  }
+
+  if (input.counterfactualSummary.selfCorrectionWindows.length > 0) {
+    traces.push({
+      claim: "The candidate showed evidence of self-correction instead of needing immediate debugging intervention.",
+      category: "Debugging",
+      evidencePoints: input.counterfactualSummary.selfCorrectionWindows.map((seconds) => `A ${seconds}s self-correction window was granted before intervention.`),
+      impact: "This is positive evidence for debugging discipline and productive debugging flow.",
+      improvement: ["When you notice a bug, narrate the first hypothesis and check one tiny reproducer before asking for rescue."],
+      confidence: input.latestSignal?.confidence,
+      verdict: "mixed",
+    });
+  }
+
+  if (input.hintSummary.penaltyApplied > 0) {
+    traces.push({
+      claim: "Interviewer rescue affected the independence signal.",
+      category: "Hinting",
+      evidencePoints: [
+        `Hints served: ${input.hintSummary.served}.`,
+        `Total hint cost: ${input.hintSummary.totalHintCost.toFixed(2)}.`,
+        `Strongest hint level: ${input.hintSummary.strongestHintLevel ?? "none"}.`,
+      ],
+      impact: `Applied a ${input.hintSummary.penaltyApplied}-point report penalty to reflect how much rescue was needed.`,
+      improvement: ["Try one concrete example or local debugging hypothesis before asking for another hint."],
+      confidence: input.latestSignal?.confidence,
+      verdict: "mixed",
+    });
+  }
+
+  return traces.slice(0, 10);
+}
+
+function buildEvidencePoint(event: SessionEventLike) {
+  const payload = asRecord(event.payloadJson);
+  const time = event.eventTime ? formatEvidenceTime(event.eventTime) : null;
+  const prefix = time ? `[${time}] ` : "";
+
+  if (event.eventType === "STAGE_ADVANCED") {
+    return `${prefix}Stage advanced to ${describeCodingStageSafe(stringValue(payload.stage) ?? "unknown")}.`;
+  }
+  if (event.eventType === "CODE_RUN_COMPLETED") {
+    return `${prefix}Code run finished with ${stringValue(payload.status) ?? "unknown"}.`;
+  }
+  if (event.eventType === "HINT_SERVED") {
+    return `${prefix}Hint served: ${(stringValue(payload.hintLevel) ?? "LIGHT").toLowerCase()} ${stringValue(payload.hintStyle)?.replaceAll("_", " ").toLowerCase() ?? "hint"}.`;
+  }
+  if (event.eventType === "DECISION_RECORDED") {
+    const decision = asRecord(payload.decision);
+    return `${prefix}Interviewer targeted ${stringValue(decision.target) ?? "unknown"} with ${stringValue(decision.action) ?? "unknown action"}.`;
+  }
+
+  return `${prefix}${event.eventType.toLowerCase().replaceAll("_", " ")}.`;
+}
+
+function formatEvidenceTime(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(11, 19);
+}
+
+
+function buildCounterfactualSummary(events: SessionEventLike[]): CounterfactualSummary {
+  const criticEvents = events
+    .filter((event) => event.eventType === "CRITIC_VERDICT_RECORDED")
+    .map((event) => asRecord(asRecord(event.payloadJson).criticVerdict));
+
+  const autoCapturedEvidence = [...new Set(
+    criticEvents.flatMap((verdict) =>
+      Array.isArray(verdict.autoCapturedEvidence)
+        ? verdict.autoCapturedEvidence.filter((item): item is string => typeof item === "string")
+        : [],
+    ),
+  )];
+
+  const selfCorrectionWindows = criticEvents.flatMap((verdict) =>
+    typeof verdict.selfCorrectionWindowSeconds === "number" ? [verdict.selfCorrectionWindowSeconds] : [],
+  );
+
+  return {
+    autoCapturedEvidence,
+    selfCorrectionWindows,
+    wouldLikelySelfCorrect: criticEvents.some((verdict) => verdict.wouldLikelySelfCorrect === true),
+    shouldWaitBeforeIntervening: criticEvents.some((verdict) => verdict.shouldWaitBeforeIntervening === true),
+  };
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

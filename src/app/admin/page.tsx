@@ -176,6 +176,66 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                       : "unknown"
                                   }
                                 />
+                                <MetricCard
+                                  label="Candidate Ceiling"
+                                  value={String(detail.sessionSummary.latentCalibration?.candidateCeiling ?? "unknown")}
+                                />
+                                <MetricCard
+                                  label="Ease Of Execution"
+                                  value={String(detail.sessionSummary.latentCalibration?.easeOfExecution ?? "unknown")}
+                                />
+                                <MetricCard
+                                  label="Level Up Ready"
+                                  value={
+                                    typeof detail.sessionSummary.latentCalibration?.levelUpReady === "boolean"
+                                      ? detail.sessionSummary.latentCalibration.levelUpReady
+                                        ? "Yes"
+                                        : "No"
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Verdict Confidence"
+                                  value={
+                                    typeof detail.sessionSummary.latentCalibration?.confidenceInVerdict === "number"
+                                      ? `${Math.round(detail.sessionSummary.latentCalibration.confidenceInVerdict * 100)}%`
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Coding Burst"
+                                  value={
+                                    typeof detail.sessionSummary.flowState?.codingBurst === "boolean"
+                                      ? detail.sessionSummary.flowState.codingBurst
+                                        ? "Yes"
+                                        : "No"
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Thinking Burst"
+                                  value={
+                                    typeof detail.sessionSummary.flowState?.thinkingBurst === "boolean"
+                                      ? detail.sessionSummary.flowState.thinkingBurst
+                                        ? "Yes"
+                                        : "No"
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Mute Until Pause"
+                                  value={
+                                    typeof detail.sessionSummary.flowState?.muteUntilPause === "boolean"
+                                      ? detail.sessionSummary.flowState.muteUntilPause
+                                        ? "Yes"
+                                        : "No"
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Context Reset Cost"
+                                  value={String(detail.sessionSummary.flowState?.contextReestablishmentCost ?? "unknown")}
+                                />
                               </div>
                               <dl style={definitionListStyle}>
                                 {Object.entries(detail.sessionSummary.latestSignals).map(([key, value]) => (
@@ -340,6 +400,21 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                   <div style={panelStyle}>{String(detail.sessionSummary.latestCritic.worthReason)}</div>
                                 </div>
                               ) : null}
+                              {Array.isArray(detail.sessionSummary.latestCritic?.autoCapturedEvidence) && detail.sessionSummary.latestCritic.autoCapturedEvidence.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Auto-captured Evidence</strong>
+                                  <div style={panelStyle}>{detail.sessionSummary.latestCritic.autoCapturedEvidence.join(", ")}</div>
+                                </div>
+                              ) : null}
+                              {typeof detail.sessionSummary.latestCritic?.selfCorrectionWindowSeconds === "number" ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Self-correction Window</strong>
+                                  <div style={panelStyle}>
+                                    {detail.sessionSummary.latestCritic.selfCorrectionWindowSeconds}s
+                                    {detail.sessionSummary.latestCritic.wouldLikelySelfCorrect ? " / likely self-correct" : ""}
+                                  </div>
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No decision snapshot recorded yet.</p>
@@ -439,6 +514,42 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                         missing: {evidence}
                                       </Badge>
                                     ))}
+                                  </div>
+                                ) : null}
+                                {item.autoCapturedEvidence && item.autoCapturedEvidence.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.autoCapturedEvidence.slice(0, 3).map((evidence) => (
+                                      <Badge key={`${item.id}-auto-${evidence}`} tone="info">
+                                        auto-captured: {evidence}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {item.candidateCeiling || item.easeOfExecution || item.levelUpReady !== undefined || item.muteUntilPause !== undefined ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.candidateCeiling ? (
+                                      <Badge tone="info">ceiling: {item.candidateCeiling}</Badge>
+                                    ) : null}
+                                    {item.easeOfExecution ? (
+                                      <Badge tone="neutral">ease: {item.easeOfExecution}</Badge>
+                                    ) : null}
+                                    {typeof item.levelUpReady === "boolean" ? (
+                                      <Badge tone="info">level-up: {item.levelUpReady ? "ready" : "not yet"}</Badge>
+                                    ) : null}
+                                    {typeof item.muteUntilPause === "boolean" ? (
+                                      <Badge tone={item.muteUntilPause ? "info" : "neutral"}>
+                                        flow: {item.muteUntilPause ? "mute until pause" : "open"}
+                                      </Badge>
+                                    ) : null}
+                                    {item.contextReestablishmentCost ? (
+                                      <Badge tone="neutral">context reset: {item.contextReestablishmentCost}</Badge>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                {item.selfCorrectionWindowSeconds ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    <Badge tone="info">self-correct: {item.selfCorrectionWindowSeconds}s</Badge>
+                                    {item.wouldLikelySelfCorrect ? <Badge tone="info">likely self-correct</Badge> : null}
                                   </div>
                                 ) : null}
                                 <details>
@@ -705,6 +816,7 @@ function evidenceAreaLabel(area?: string) {
 function formatLabel(value: string) {
   return value.replace(/([A-Z])/g, " $1").replaceAll("_", " ").trim();
 }
+
 
 
 

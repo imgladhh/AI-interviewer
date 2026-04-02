@@ -1,4 +1,5 @@
 import type { CandidateDecision } from "@/lib/assistant/decision_engine";
+import { assessFlowState, type ContextReestablishmentCost } from "@/lib/assistant/flow_state";
 import type { MemoryLedger } from "@/lib/assistant/memory_ledger";
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
@@ -31,6 +32,10 @@ export type PacingAssessment = {
   batchGroup?: string;
   timingVerdict: TimingVerdict;
   evidenceFocus?: string;
+  codingBurst: boolean;
+  thinkingBurst: boolean;
+  muteUntilPause: boolean;
+  contextReestablishmentCost: ContextReestablishmentCost;
 };
 
 export function assessInterviewPacing(input: {
@@ -39,6 +44,7 @@ export function assessInterviewPacing(input: {
   ledger: MemoryLedger;
   latestExecutionRun?: ExecutionRunLike | null;
   decision?: CandidateDecision;
+  recentTranscripts?: Array<{ speaker: "USER" | "AI" | "SYSTEM"; text: string }>;
 }): PacingAssessment {
   const { currentStage, signals, ledger, latestExecutionRun, decision } = input;
   const complexityEnough =
@@ -75,6 +81,11 @@ export function assessInterviewPacing(input: {
     signals,
     latestExecutionRun,
   });
+  const flowState = assessFlowState({
+    currentStage,
+    signals,
+    recentTranscripts: input.recentTranscripts,
+  });
   const urgency = decision ? classifyUrgency(decision) : "medium";
   const evidenceImportance = decision ? classifyEvidenceImportance(decision) : "important";
   const canDefer = urgency !== "high";
@@ -97,6 +108,10 @@ export function assessInterviewPacing(input: {
       batchGroup,
       timingVerdict: "ask_now",
       evidenceFocus: undefined,
+      codingBurst: flowState.codingBurst,
+      thinkingBurst: flowState.thinkingBurst,
+      muteUntilPause: flowState.muteUntilPause,
+      contextReestablishmentCost: flowState.contextReestablishmentCost,
     };
   }
 
@@ -122,6 +137,10 @@ export function assessInterviewPacing(input: {
       batchGroup,
       timingVerdict: "move_to_implementation",
       evidenceFocus: "implementation_momentum",
+      codingBurst: flowState.codingBurst,
+      thinkingBurst: flowState.thinkingBurst,
+      muteUntilPause: flowState.muteUntilPause,
+      contextReestablishmentCost: flowState.contextReestablishmentCost,
     };
   }
 
@@ -145,6 +164,10 @@ export function assessInterviewPacing(input: {
       batchGroup,
       timingVerdict: "skip",
       evidenceFocus: "complexity_tradeoff",
+      codingBurst: flowState.codingBurst,
+      thinkingBurst: flowState.thinkingBurst,
+      muteUntilPause: flowState.muteUntilPause,
+      contextReestablishmentCost: flowState.contextReestablishmentCost,
     };
   }
 
@@ -168,10 +191,14 @@ export function assessInterviewPacing(input: {
       batchGroup,
       timingVerdict: "skip",
       evidenceFocus: "test_cases",
+      codingBurst: flowState.codingBurst,
+      thinkingBurst: flowState.thinkingBurst,
+      muteUntilPause: flowState.muteUntilPause,
+      contextReestablishmentCost: flowState.contextReestablishmentCost,
     };
   }
 
-  if (compareUrgency(urgency, interruptionCost) < 0 && canDefer) {
+  if ((flowState.muteUntilPause || compareUrgency(urgency, interruptionCost) < 0) && canDefer) {
     return {
       mustMoveToImplementation,
       complexityEnough,
@@ -189,6 +216,10 @@ export function assessInterviewPacing(input: {
       batchGroup,
       timingVerdict: "defer",
       evidenceFocus: batchGroup ?? decision.target,
+      codingBurst: flowState.codingBurst,
+      thinkingBurst: flowState.thinkingBurst,
+      muteUntilPause: flowState.muteUntilPause,
+      contextReestablishmentCost: flowState.contextReestablishmentCost,
     };
   }
 
@@ -208,6 +239,10 @@ export function assessInterviewPacing(input: {
     batchGroup,
     timingVerdict: "ask_now",
     evidenceFocus: decision.target,
+    codingBurst: flowState.codingBurst,
+    thinkingBurst: flowState.thinkingBurst,
+    muteUntilPause: flowState.muteUntilPause,
+    contextReestablishmentCost: flowState.contextReestablishmentCost,
   };
 }
 

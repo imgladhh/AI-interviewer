@@ -28,14 +28,21 @@ export type CriticVerdict = {
   batchGroup?: string;
   interruptsGoodFlow: boolean;
   canDefer: boolean;
+  wouldLikelySelfCorrect: boolean;
+  autoCapturedEvidence: string[];
+  shouldWaitBeforeIntervening: boolean;
+  selfCorrectionWindowSeconds?: number;
   reason:
     | "reply_ok"
     | "generic_reply"
     | "not_specific_enough"
     | "not_tough_enough"
+    | "false_positive_risk"
     | "repeated_answered_target"
     | "should_move_to_implementation"
-    | "poor_timing";
+    | "poor_timing"
+    | "auto_captured_evidence"
+    | "self_correction_window";
   specificity: "low" | "medium" | "high";
   intensity: "soft" | "balanced" | "sharp";
   explanation: string;
@@ -64,6 +71,9 @@ export function reviewInterviewerReply(input: {
       evidenceImportance: "important",
       interruptsGoodFlow: false,
       canDefer: false,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "generic_reply",
       specificity: "low",
       intensity: "soft",
@@ -99,6 +109,89 @@ export function reviewInterviewerReply(input: {
     ["reasoning", "correctness", "testing", "edge_case", "complexity", "tradeoff"].includes(
       input.decision.target,
     );
+  const autoCapturedEvidence = inferAutoCapturedEvidence(input.decision.target, ledger.collectedEvidence, input.signals);
+  const selfCorrectionWindow = resolveSelfCorrectionWindow(input, pacing);
+  const grounding = assessIssueGrounding(input);
+
+  if (!grounding.issueGroundedInEvidence) {
+    return {
+      approved: false,
+      verdict: "move_on",
+      timingVerdict: pacing.canDefer ? "defer" : "skip",
+      revisedReply:
+        input.decision.target === "implementation"
+          ? "Keep going for a moment and show me one more concrete state change or branch before I step in."
+          : "Keep going for a moment. I want a little more concrete evidence before I press on that point.",
+      questionWorthAsking: false,
+      worthReason: grounding.reason,
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: pacing.interruptionCost === "high",
+      canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
+      reason: "false_positive_risk",
+      specificity,
+      intensity,
+      explanation:
+        "The current interviewer hypothesis is not grounded strongly enough in actual code-run, structured-evidence, or transcript evidence, so the turn should not press a potentially hallucinated issue.",
+      focus,
+    } satisfies CriticVerdict;
+  }
+
+  if (autoCapturedEvidence.length > 0 && input.decision.target !== "implementation") {
+    return {
+      approved: false,
+      verdict: "move_on",
+      timingVerdict: "skip",
+      revisedReply: buildAutoCaptureReply(input.decision.target),
+      questionWorthAsking: false,
+      worthReason: "The candidate has already surfaced the relevant evidence without needing an extra prompt.",
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: pacing.interruptionCost === "high",
+      canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence,
+      shouldWaitBeforeIntervening: false,
+      reason: "auto_captured_evidence",
+      specificity,
+      intensity,
+      explanation: "The evidence the interviewer wanted has already been auto-captured from the candidate's own explanation, so asking now would be redundant.",
+      focus,
+    } satisfies CriticVerdict;
+  }
+
+  if (selfCorrectionWindow.shouldWait) {
+    return {
+      approved: false,
+      verdict: "move_on",
+      timingVerdict: "defer",
+      revisedReply: selfCorrectionWindow.reply,
+      questionWorthAsking: false,
+      worthReason: selfCorrectionWindow.reason,
+      urgency: pacing.urgency,
+      interruptionCost: pacing.interruptionCost,
+      evidenceImportance: pacing.evidenceImportance,
+      batchGroup: pacing.batchGroup,
+      interruptsGoodFlow: true,
+      canDefer: true,
+      wouldLikelySelfCorrect: true,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: true,
+      selfCorrectionWindowSeconds: selfCorrectionWindow.windowSeconds,
+      reason: "self_correction_window",
+      specificity,
+      intensity,
+      explanation: "The candidate is still in a productive debugging or implementation flow, so the interviewer should wait for a short self-correction window before intervening.",
+      focus,
+    } satisfies CriticVerdict;
+  }
 
   if (shouldMoveToImplementation) {
     return {
@@ -115,6 +208,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: pacing.interruptionCost === "high",
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "should_move_to_implementation",
       specificity: "medium",
       intensity: "balanced",
@@ -140,6 +236,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: true,
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "poor_timing",
       specificity,
       intensity,
@@ -176,6 +275,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: pacing.interruptionCost === "high",
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: targetAlreadyAnswered ? "repeated_answered_target" : "should_move_to_implementation",
       specificity,
       intensity,
@@ -198,6 +300,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: false,
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "generic_reply",
       specificity: "low",
       intensity,
@@ -220,6 +325,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: false,
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "not_specific_enough",
       specificity,
       intensity,
@@ -242,6 +350,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: false,
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "not_tough_enough",
       specificity,
       intensity,
@@ -270,6 +381,9 @@ export function reviewInterviewerReply(input: {
       batchGroup: pacing.batchGroup,
       interruptsGoodFlow: pacing.interruptionCost === "high",
       canDefer: pacing.canDefer,
+      wouldLikelySelfCorrect: false,
+      autoCapturedEvidence: [],
+      shouldWaitBeforeIntervening: false,
       reason: "should_move_to_implementation",
       specificity,
       intensity,
@@ -290,6 +404,9 @@ export function reviewInterviewerReply(input: {
     batchGroup: pacing.batchGroup,
     interruptsGoodFlow: pacing.interruptionCost === "high" && pacing.canDefer,
     canDefer: pacing.canDefer,
+    wouldLikelySelfCorrect: false,
+    autoCapturedEvidence: [],
+    shouldWaitBeforeIntervening: false,
     reason: "reply_ok",
     specificity,
     intensity,
@@ -344,4 +461,137 @@ function requiresSharperPressure(decision: CandidateDecision) {
   return ["probe_tradeoff", "probe_correctness", "ask_for_test_case", "ask_for_complexity", "ask_for_debug_plan"].includes(
     decision.action,
   );
+}
+
+function inferAutoCapturedEvidence(
+  target: CandidateDecision["target"],
+  collectedEvidence: string[],
+  signals: CandidateSignalSnapshot,
+) {
+  const hits = new Set<string>();
+  const has = (name: string) => collectedEvidence.includes(name);
+
+  if ((target === "reasoning" || target === "correctness") && has("correctness_proof")) {
+    hits.add("correctness_proof");
+  }
+  if ((target === "testing" || target === "edge_case") && (has("test_cases") || has("exact_test_outputs") || has("boundary_coverage"))) {
+    if (has("test_cases")) hits.add("test_cases");
+    if (has("exact_test_outputs")) hits.add("exact_test_outputs");
+    if (has("boundary_coverage")) hits.add("boundary_coverage");
+  }
+  if ((target === "complexity" || target === "tradeoff") && has("complexity_tradeoff")) {
+    hits.add("complexity_tradeoff");
+  }
+  if ((target === "implementation" || target === "approach") && (has("implementation_plan") || signals.readyToCode)) {
+    hits.add("implementation_plan");
+  }
+  if (target === "summary" && (has("implementation_plan") || has("test_cases") || has("complexity_tradeoff"))) {
+    hits.add("summary_ready");
+  }
+
+  return [...hits];
+}
+
+function resolveSelfCorrectionWindow(
+  input: {
+    reply: string;
+    decision: CandidateDecision;
+    signals: CandidateSignalSnapshot;
+    currentStage: CodingInterviewStage;
+    recentEvents?: SessionEventLike[];
+    latestExecutionRun?: ExecutionRunLike | null;
+  },
+  pacing: {
+    interruptionCost: "low" | "medium" | "high";
+    canDefer: boolean;
+  },
+) {
+  const failureLike =
+    input.latestExecutionRun?.status === "FAILED" ||
+    input.latestExecutionRun?.status === "ERROR" ||
+    input.latestExecutionRun?.status === "TIMEOUT" ||
+    input.signals.codeQuality === "buggy";
+  const productiveFlow =
+    input.signals.progress === "progressing" &&
+    input.signals.communication === "clear" &&
+    input.signals.behavior === "structured" &&
+    input.signals.confidence >= 0.65;
+  const stageAllowsWaiting = input.currentStage === "IMPLEMENTATION" || input.currentStage === "DEBUGGING";
+
+  if (failureLike && productiveFlow && stageAllowsWaiting && pacing.canDefer && pacing.interruptionCost !== "low") {
+    return {
+      shouldWait: true,
+      windowSeconds: 45,
+      reason: "The candidate is still making progress on a likely fix, so it is better to give them a short self-correction window before intervening.",
+      reply:
+        "Keep going for another moment. I want to see whether you localize and fix this path yourself before I step in.",
+    };
+  }
+
+  return {
+    shouldWait: false,
+    windowSeconds: undefined,
+    reason: "",
+    reply: "",
+  };
+}
+
+function buildAutoCaptureReply(target: CandidateDecision["target"]) {
+  switch (target) {
+    case "complexity":
+    case "tradeoff":
+      return "You already surfaced the complexity and tradeoff clearly enough. Keep moving, and we can use that evidence in the final wrap-up.";
+    case "testing":
+    case "edge_case":
+      return "You have already named the key validation cases well enough for now. Keep going, and we can revisit testing if a concrete gap appears in the code.";
+    case "reasoning":
+    case "correctness":
+      return "You already gave enough correctness signal for this point. Keep moving, and we can sharpen the proof story after we see more code or validation evidence.";
+    default:
+      return "You have already supplied enough evidence on that point for now. Keep going.";
+  }
+}
+
+function assessIssueGrounding(input: {
+  decision: CandidateDecision;
+  signals: CandidateSignalSnapshot;
+  latestExecutionRun?: ExecutionRunLike | null;
+}) {
+  const latestRun = input.latestExecutionRun;
+  const hasFailureSignal =
+    latestRun?.status === "FAILED" ||
+    latestRun?.status === "ERROR" ||
+    latestRun?.status === "TIMEOUT" ||
+    Boolean(latestRun?.stderr?.trim());
+  const hasStructuredEvidence = input.signals.structuredEvidence.some((item) => {
+    if (input.decision.specificIssue) {
+      return item.issue === input.decision.specificIssue;
+    }
+    return item.area === input.decision.target || item.area === "debugging";
+  });
+  const hasReasoningEvidence = input.signals.reasoningDepth !== "thin" && input.signals.evidence.length > 0;
+
+  if (input.decision.target === "debugging" && !hasFailureSignal && !hasStructuredEvidence) {
+    return {
+      issueGroundedInEvidence: false,
+      reason: "There is no concrete failure signal yet, so pushing a bug hypothesis now risks a false positive.",
+    };
+  }
+
+  if (
+    ["correctness", "reasoning", "tradeoff", "complexity", "testing", "edge_case"].includes(input.decision.target) &&
+    !hasStructuredEvidence &&
+    !hasReasoningEvidence &&
+    !input.decision.specificIssue
+  ) {
+    return {
+      issueGroundedInEvidence: false,
+      reason: "The interviewer does not yet have enough grounded evidence for this issue, so it should wait for a stronger signal.",
+    };
+  }
+
+  return {
+    issueGroundedInEvidence: true,
+    reason: "The issue is grounded in evidence.",
+  };
 }

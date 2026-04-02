@@ -46,8 +46,10 @@ describe("hinting_ledger", () => {
     expect(ledger.totalHintCost).toBe(5.25);
     expect(ledger.averageHintCost).toBe(2.63);
     expect(ledger.strongestHintLevel).toBe("STRONG");
+    expect(ledger.strongestHintTier).toBe("L3_SOLUTION");
     expect(ledger.byGranularity.near_solution).toBe(1);
     expect(ledger.byRescueMode.implementation_rescue).toBe(1);
+    expect(ledger.byTier.L3_SOLUTION).toBe(1);
   });
 
   it("maps stuck implementation turns into implementation rescue", () => {

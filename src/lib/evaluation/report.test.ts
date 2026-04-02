@@ -69,6 +69,10 @@ describe("generateSessionReport", () => {
     const reportJson = report.reportJson as Record<string, unknown>;
     const dimensions = report.dimensions;
     const stageReplay = reportJson.stageReplay as Array<Record<string, unknown>>;
+    const evidenceTrace = reportJson.evidenceTrace as Array<Record<string, unknown>>;
+    const candidateDna = reportJson.candidateDna as Record<string, unknown>;
+    const momentsOfTruth = reportJson.momentsOfTruth as Array<Record<string, unknown>>;
+    const rubricSummary = reportJson.rubricSummary as Array<Record<string, unknown>>;
 
     expect(reportJson.candidateState).toBeTruthy();
     expect(reportJson.latestDecision).toBeTruthy();
@@ -80,9 +84,18 @@ describe("generateSessionReport", () => {
     expect(dimensions.some((dimension) => Boolean(dimension.impact))).toBe(true);
     expect(dimensions.some((dimension) => Array.isArray(dimension.improvement) && dimension.improvement.length > 0)).toBe(true);
     expect((reportJson.candidateState as Record<string, unknown>).reasoningDepth).toBe("deep");
-    expect(
-      Array.isArray((reportJson.candidateState as Record<string, unknown>).structuredEvidence),
-    ).toBe(true);
+    expect(Array.isArray((reportJson.candidateState as Record<string, unknown>).structuredEvidence)).toBe(true);
+    expect(Array.isArray(evidenceTrace)).toBe(true);
+    expect(evidenceTrace.length).toBeGreaterThan(0);
+    expect(candidateDna.headline).toBeTruthy();
+    expect(Array.isArray(candidateDna.traits)).toBe(true);
+    expect(Array.isArray(candidateDna.strengths)).toBe(true);
+    expect(Array.isArray(candidateDna.watchouts)).toBe(true);
+    expect(Array.isArray(momentsOfTruth)).toBe(true);
+    expect(momentsOfTruth.length).toBeGreaterThan(0);
+    expect(Array.isArray(rubricSummary)).toBe(true);
+    expect(rubricSummary.length).toBe(dimensions.length);
+    expect(dimensions.some((dimension) => dimension.key === "independence")).toBe(true);
   });
 
   it("groups replay evidence around stage, signals, decisions, and code runs", () => {
@@ -173,6 +186,17 @@ describe("generateSessionReport", () => {
           },
         },
         {
+          eventType: "CRITIC_VERDICT_RECORDED",
+          payloadJson: {
+            criticVerdict: {
+              autoCapturedEvidence: ["complexity"],
+              selfCorrectionWindowSeconds: 45,
+              wouldLikelySelfCorrect: true,
+              shouldWaitBeforeIntervening: true,
+            },
+          },
+        },
+        {
           eventType: "HINT_SERVED",
           payloadJson: {
             stage: "IMPLEMENTATION",
@@ -189,6 +213,8 @@ describe("generateSessionReport", () => {
 
     const reportJson = report.reportJson as Record<string, unknown>;
     const hintSummary = reportJson.hintSummary as Record<string, unknown>;
+    const evidenceTrace = reportJson.evidenceTrace as Array<Record<string, unknown>>;
+    const momentsOfTruth = reportJson.momentsOfTruth as Array<Record<string, unknown>>;
 
     expect(hintSummary.totalHintCost).toBe(4.05);
     expect(hintSummary.strongestHintLevel).toBe("STRONG");
@@ -197,5 +223,8 @@ describe("generateSessionReport", () => {
     expect(report.overallScore).toBeLessThan(100);
     expect(report.weaknesses.some((item) => item.includes("Hint reliance"))).toBe(true);
     expect(report.improvementPlan.some((item) => item.includes("code-level rescue"))).toBe(true);
+    expect(evidenceTrace.some((item) => item.category === "Hinting")).toBe(true);
+    expect(evidenceTrace.some((item) => item.category === "Counterfactual")).toBe(true);
+    expect(momentsOfTruth.some((item) => item.title === "Earned a self-correction window")).toBe(true);
   });
 });

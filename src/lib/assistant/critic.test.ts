@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { reviewInterviewerReply } from "@/lib/assistant/critic";
 import type { CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
@@ -120,6 +120,84 @@ describe("reviewInterviewerReply", () => {
     expect(result.verdict).toBe("move_on");
     expect(result.timingVerdict).toBe("defer");
     expect(result.reason).toBe("poor_timing");
+    expect(result.questionWorthAsking).toBe(false);
+  });
+
+  it("skips a question when the evidence was auto-captured already", () => {
+    const result = reviewInterviewerReply({
+      reply: "Now tell me the final complexity and tradeoff.",
+      decision: {
+        ...baseDecision,
+        action: "probe_tradeoff",
+        target: "tradeoff",
+      },
+      signals: {
+        ...baseSignals,
+        complexityRigor: "strong",
+      },
+      currentStage: "TESTING_AND_COMPLEXITY",
+      latestExecutionRun: { status: "PASSED" },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "tradeoff", action: "probe_tradeoff" } },
+        },
+      ],
+    });
+
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe("auto_captured_evidence");
+    expect(result.autoCapturedEvidence).toContain("complexity_tradeoff");
+    expect(result.questionWorthAsking).toBe(false);
+    expect(result.timingVerdict).toBe("skip");
+  });
+
+  it("opens a self-correction window during productive debugging flow", () => {
+    const result = reviewInterviewerReply({
+      reply: "Where do you think the implementation first diverges from your intended logic?",
+      decision: {
+        ...baseDecision,
+        action: "ask_for_debug_plan",
+        target: "debugging",
+        question: "Where do you think the implementation first diverges from your intended logic?",
+      },
+      signals: {
+        ...baseSignals,
+        codeQuality: "buggy",
+        progress: "progressing",
+      },
+      currentStage: "DEBUGGING",
+      latestExecutionRun: { status: "FAILED", stderr: "wrong answer" },
+      recentEvents: [],
+    });
+
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe("self_correction_window");
+    expect(result.shouldWaitBeforeIntervening).toBe(true);
+    expect(result.wouldLikelySelfCorrect).toBe(true);
+    expect(result.selfCorrectionWindowSeconds).toBe(45);
+  });
+
+  it("blocks weakly grounded debugging probes that risk false positives", () => {
+    const result = reviewInterviewerReply({
+      reply: "It looks like your bug is probably in the branch update. Walk me through that exact bug.",
+      decision: {
+        ...baseDecision,
+        action: "ask_for_debug_plan",
+        target: "debugging",
+        question: "Where do you think the bug is?",
+      },
+      signals: {
+        ...baseSignals,
+        codeQuality: "partial",
+      },
+      currentStage: "IMPLEMENTATION",
+      latestExecutionRun: null,
+      recentEvents: [],
+    });
+
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe("false_positive_risk");
     expect(result.questionWorthAsking).toBe(false);
   });
 });

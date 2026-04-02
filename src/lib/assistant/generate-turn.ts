@@ -2,6 +2,7 @@ import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/i
 import { reviewInterviewerReply, type CriticVerdict } from "@/lib/assistant/critic";
 import { makeCandidateDecision, type CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { HintGranularity, RescueMode } from "@/lib/assistant/hinting_ledger";
+import type { HintTier } from "@/lib/assistant/hint_strategy";
 import {
   formatCodingInterviewPolicy,
   resolveCodingInterviewPolicy,
@@ -12,7 +13,9 @@ import {
 import { buildFallbackReplyFromDecision, describeReplyStrategy } from "@/lib/assistant/reply_strategy";
 import { extractCandidateSignalsSmart, type CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
+import { assessLatentCalibration } from "@/lib/assistant/latent_calibration";
 import { applyDecisionPressure, assessInterviewPacing } from "@/lib/assistant/pacing";
+import { assessFlowState } from "@/lib/assistant/flow_state";
 import {
   describeCodingStage,
   inferSuggestedCodingStage,
@@ -64,6 +67,7 @@ type GenerateAssistantTurnResult = {
   hintLevel?: CodingInterviewHintLevel;
   rescueMode?: RescueMode;
   hintGranularity?: HintGranularity;
+  hintTier?: HintTier;
   hintCost?: number;
   escalationReason?: string;
   usage?: {
@@ -360,6 +364,7 @@ async function generateWithOpenAI(
     hintLevel: decision.hintLevel,
     rescueMode: decision.rescueMode,
     hintGranularity: decision.hintGranularity,
+    hintTier: decision.hintTier,
     hintCost: decision.hintCost,
     usage: {
       inputTokens,
@@ -467,6 +472,7 @@ async function* streamWithOpenAI(
         hintLevel: decision.hintLevel,
         rescueMode: decision.rescueMode,
         hintGranularity: decision.hintGranularity,
+        hintTier: decision.hintTier,
         hintCost: decision.hintCost,
         usage: {
         inputTokens,
@@ -552,6 +558,7 @@ async function generateWithGemini(
     hintLevel: decision.hintLevel,
     rescueMode: decision.rescueMode,
     hintGranularity: decision.hintGranularity,
+    hintTier: decision.hintTier,
     hintCost: decision.hintCost,
     usage: {
       inputTokens,
@@ -665,6 +672,7 @@ async function* streamWithGemini(
         hintLevel: decision.hintLevel,
         rescueMode: decision.rescueMode,
         hintGranularity: decision.hintGranularity,
+        hintTier: decision.hintTier,
         hintCost: decision.hintCost,
         usage: {
         inputTokens,
@@ -719,6 +727,22 @@ function buildInterviewerPrompt(
     input.currentStage,
     input.latestExecutionRun,
   );
+  const ledger = buildMemoryLedger({
+    currentStage: stage,
+    recentEvents: input.recentEvents,
+    signals,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const calibration = assessLatentCalibration({
+    signals,
+    ledger,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const flowState = assessFlowState({
+    currentStage: stage,
+    signals,
+    recentTranscripts: input.recentTranscripts,
+  });
 
   return [
     `Mode: ${input.mode}`,
@@ -732,6 +756,8 @@ function buildInterviewerPrompt(
     `Candidate state snapshot: ${signals.summary}`,
     `Candidate state trend: ${signals.trendSummary ?? "No clear state trend yet."}`,
     `Session memory: ${sessionMemory}`,
+    `Latent calibration: candidate_ceiling=${calibration.candidateCeiling}, ease_of_execution=${calibration.easeOfExecution}, level_up_ready=${calibration.levelUpReady}, confidence_in_verdict=${calibration.confidenceInVerdict}.`,
+    `Flow state: coding_burst=${flowState.codingBurst}, thinking_burst=${flowState.thinkingBurst}, mute_until_pause=${flowState.muteUntilPause}, context_reestablishment_cost=${flowState.contextReestablishmentCost}.`,
     `Candidate state confidence: ${signals.confidence}`,
     `Candidate evidence:\n- ${signals.evidence.join("\n- ")}`,
     signals.structuredEvidence.length > 0
@@ -766,6 +792,7 @@ function buildInterviewerPrompt(
     decision.hintLevel ? `Required hint level: ${decision.hintLevel}` : null,
     decision.rescueMode ? `Hint rescue mode: ${decision.rescueMode}` : null,
     decision.hintGranularity ? `Hint granularity: ${decision.hintGranularity}` : null,
+    decision.hintTier ? `Hint tier: ${decision.hintTier}` : null,
     typeof decision.hintCost === "number" ? `Hint cost score: ${decision.hintCost}` : null,
     decision.suggestedStage ? `Suggested next stage after this turn: ${decision.suggestedStage}` : null,
     `Prompt strategy: ${policy.promptStrategy}. OPEN_ENDED means broader probing; GUIDED means narrower coaching; CONSTRAINED means ask the candidate to focus on one specific next step.`,
@@ -785,6 +812,8 @@ function buildInterviewerPrompt(
     "If the decision action is ask_for_clarification, do not pretend certainty. Ask a tiny-example or expectation-check question first.",
     "If can_defer is true and interruption_cost is higher than urgency, prefer preserving the candidate's flow over collecting optional evidence immediately.",
     "If batchable is true, avoid interrupting for a single optional point when that evidence can be collected later as part of the same batch group.",
+    "If flow state says mute_until_pause=true, do not interrupt with optional or medium-urgency probes unless the decision is critical.",
+    "If latent calibration says level_up_ready=true and the candidate is already handling the base problem smoothly, it is acceptable to probe the candidate's ceiling rather than repeating foundational checks.",
     "If the recent state trend is worsening, reduce breadth and ask a narrower, more local follow-up.",
     "If the recent state trend is improving, do not over-interrupt. Keep the candidate moving while still protecting the key signal the decision engine wants.",
     "Prefer 1 or 2 sentences. The last sentence should usually be the concrete follow-up or instruction.",
@@ -872,6 +901,7 @@ function generateFallbackTurn(
       hintLevel: decision.hintLevel ?? policy.hintLevel,
       rescueMode: decision.rescueMode,
       hintGranularity: decision.hintGranularity,
+      hintTier: decision.hintTier,
       hintCost: decision.hintCost,
       escalationReason: policy.escalationReason,
     };
@@ -1626,6 +1656,7 @@ function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSign
     ledger,
     latestExecutionRun: input.latestExecutionRun,
     decision: rawDecision,
+    recentTranscripts: input.recentTranscripts,
   });
 
   return applyDecisionPressure({

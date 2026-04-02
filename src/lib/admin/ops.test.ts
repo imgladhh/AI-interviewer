@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { buildSessionEventDescription, buildUnifiedOpsFeed, type AdminProfileDetail } from "@/lib/admin/ops";
 
 describe("buildUnifiedOpsFeed", () => {
@@ -136,6 +136,27 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/invariant/i);
   });
 
+  it("includes calibration and flow hints in signal snapshot descriptions", () => {
+    const description = buildSessionEventDescription("SIGNAL_SNAPSHOT_RECORDED", {
+      stage: "IMPLEMENTATION",
+      signals: {
+        understanding: "clear",
+        progress: "progressing",
+        communication: "clear",
+        behavior: "structured",
+        algorithmChoice: "reasonable",
+        reasoningDepth: "deep",
+        testingDiscipline: "strong",
+        complexityRigor: "strong",
+        confidence: 0.84,
+      },
+    });
+
+    expect(description).toMatch(/ceiling=/i);
+    expect(description).toMatch(/ease=/i);
+    expect(description).toMatch(/flow=/i);
+  });
+
   it("describes interviewer decisions in a readable way", () => {
     const description = buildSessionEventDescription("DECISION_RECORDED", {
       decision: {
@@ -191,4 +212,33 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/interrupt=high/i);
     expect(description).toMatch(/batch=complexity_and_tradeoff/i);
   });
+
+  it("surfaces auto-captured evidence in critic descriptions", () => {
+    const description = buildSessionEventDescription("CRITIC_VERDICT_RECORDED", {
+      criticVerdict: {
+        verdict: "move_on",
+        reason: "auto_captured_evidence",
+        autoCapturedEvidence: ["complexity_tradeoff"],
+      },
+    });
+
+    expect(description).toMatch(/auto-captured evidence/i);
+    expect(description).toMatch(/complexity_tradeoff/i);
+  });
+
+  it("surfaces self-correction windows in critic descriptions", () => {
+    const description = buildSessionEventDescription("CRITIC_VERDICT_RECORDED", {
+      criticVerdict: {
+        verdict: "move_on",
+        reason: "self_correction_window",
+        shouldWaitBeforeIntervening: true,
+        wouldLikelySelfCorrect: true,
+        selfCorrectionWindowSeconds: 45,
+      },
+    });
+
+    expect(description).toMatch(/wait 45s/i);
+    expect(description).toMatch(/self-correction/i);
+  });
 });
+

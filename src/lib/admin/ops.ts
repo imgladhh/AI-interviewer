@@ -1,5 +1,7 @@
 ﻿import { prisma } from "@/lib/db";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
+import { assessLatentCalibration, type LatentCalibration } from "@/lib/assistant/latent_calibration";
+import { assessFlowState, type FlowState } from "@/lib/assistant/flow_state";
 import { describeCodingStage, isCodingInterviewStage } from "@/lib/assistant/stages";
 import { getPersonaJobSnapshot, type PersonaJobSnapshot } from "@/lib/persona/queue";
 
@@ -46,6 +48,8 @@ export type SessionSummary = {
   latestSignals: Record<string, unknown> | null;
   latestDecision: Record<string, unknown> | null;
   latestCritic: Record<string, unknown> | null;
+  latentCalibration: LatentCalibration | null;
+  flowState: FlowState | null;
   answeredTargets: string[];
   collectedEvidence: string[];
   unresolvedIssues: string[];
@@ -72,6 +76,18 @@ export type SessionTimelineItem = {
   unresolvedIssues?: string[];
   missingEvidence?: string[];
   evidenceFocus?: string | null;
+  autoCapturedEvidence?: string[];
+  candidateCeiling?: string | null;
+  easeOfExecution?: string | null;
+  levelUpReady?: boolean | null;
+  confidenceInVerdict?: number | null;
+  codingBurst?: boolean | null;
+  thinkingBurst?: boolean | null;
+  muteUntilPause?: boolean | null;
+  contextReestablishmentCost?: string | null;
+  wouldLikelySelfCorrect?: boolean | null;
+  shouldWaitBeforeIntervening?: boolean | null;
+  selfCorrectionWindowSeconds?: number | null;
   payload: Record<string, unknown>;
 };
 
@@ -271,6 +287,30 @@ function summarizeSession(
             : null,
         })
       : null;
+  const latentCalibration =
+    latestSignals && ledger
+      ? assessLatentCalibration({
+          signals: latestSignals as never,
+          ledger,
+          latestExecutionRun: latestCodeRunEvent
+            ? ({
+                status: stringValue(asRecord(latestCodeRunEvent.payloadJson).status) as
+                  | "PASSED"
+                  | "FAILED"
+                  | "ERROR"
+                  | "TIMEOUT",
+              } as const)
+            : null,
+        })
+      : null;
+  const flowState =
+    latestSignals
+      ? assessFlowState({
+          currentStage: isCodingInterviewStage(currentStage) ? currentStage : "PROBLEM_UNDERSTANDING",
+          signals: latestSignals as never,
+          recentTranscripts: [],
+        })
+      : null;
 
   return {
     sessionId,
@@ -280,6 +320,8 @@ function summarizeSession(
     latestSignals,
     latestDecision,
     latestCritic,
+    latentCalibration,
+    flowState,
     answeredTargets: ledger?.answeredTargets ?? [],
     collectedEvidence: ledger?.collectedEvidence ?? [],
     unresolvedIssues: ledger?.unresolvedIssues ?? [],
@@ -326,8 +368,10 @@ function buildSessionTimeline(
         const signals = asRecord(payload.signals);
         const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
         const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
+        const signalStageRaw = stringValue(payload.stage);
+        const signalStage = isCodingInterviewStage(signalStageRaw) ? signalStageRaw : "PROBLEM_UNDERSTANDING";
         const signalLedger = buildMemoryLedger({
-          currentStage: "PROBLEM_UNDERSTANDING",
+          currentStage: signalStage,
           recentEvents: events
             .filter((candidate) => candidate.eventTime.getTime() <= event.eventTime.getTime())
             .map((candidate) => ({
@@ -336,6 +380,16 @@ function buildSessionTimeline(
             })),
           signals: signals as never,
           latestExecutionRun: null,
+        });
+        const calibration = assessLatentCalibration({
+          signals: signals as never,
+          ledger: signalLedger,
+          latestExecutionRun: null,
+        });
+        const flowState = assessFlowState({
+          currentStage: signalStage,
+          signals: signals as never,
+          recentTranscripts: [],
         });
         return {
           id: `${event.eventType}-${event.eventTime.toISOString()}`,
@@ -349,6 +403,14 @@ function buildSessionTimeline(
           missingEvidence: signalLedger.missingEvidence,
           answeredTargets: signalLedger.answeredTargets,
           collectedEvidence: signalLedger.collectedEvidence,
+          candidateCeiling: calibration.candidateCeiling,
+          easeOfExecution: calibration.easeOfExecution,
+          levelUpReady: calibration.levelUpReady,
+          confidenceInVerdict: calibration.confidenceInVerdict,
+          codingBurst: flowState.codingBurst,
+          thinkingBurst: flowState.thinkingBurst,
+          muteUntilPause: flowState.muteUntilPause,
+          contextReestablishmentCost: flowState.contextReestablishmentCost,
           payload,
         };
       }
@@ -374,17 +436,46 @@ function buildSessionTimeline(
 
         if (event.eventType === "CRITIC_VERDICT_RECORDED") {
           const criticVerdict = asRecord(payload.criticVerdict);
+          const autoCapturedEvidence = Array.isArray(criticVerdict.autoCapturedEvidence)
+            ? criticVerdict.autoCapturedEvidence.filter((item): item is string => typeof item === "string")
+            : [];
+          const selfCorrectionWindowSeconds =
+            typeof criticVerdict.selfCorrectionWindowSeconds === "number"
+              ? criticVerdict.selfCorrectionWindowSeconds
+              : null;
+          const summaryBits = [
+            `${stringOrFallback(criticVerdict.verdict, "verdict")} / ${stringOrFallback(criticVerdict.reason, "unknown reason")}`,
+            typeof criticVerdict.questionWorthAsking === "boolean"
+              ? `worth=${criticVerdict.questionWorthAsking ? "yes" : "no"}`
+              : null,
+            autoCapturedEvidence.length > 0
+              ? `auto-captured=${autoCapturedEvidence.join(", ")}`
+              : null,
+            selfCorrectionWindowSeconds
+              ? `self-correct=${selfCorrectionWindowSeconds}s`
+              : null,
+          ].filter(Boolean);
           return {
             id: `${event.eventType}-${event.eventTime.toISOString()}`,
             kind: "critic" as const,
             at: event.eventTime.toISOString(),
             title: "Critic verdict",
-            summary: `${stringOrFallback(criticVerdict.verdict, "verdict")} / ${stringOrFallback(criticVerdict.reason, "unknown reason")}${typeof criticVerdict.questionWorthAsking === "boolean" ? ` / worth=${criticVerdict.questionWorthAsking ? "yes" : "no"}` : ""}`,
+            summary: summaryBits.join(" / "),
             timingVerdict: stringValue(criticVerdict.timingVerdict),
             urgency: stringValue(criticVerdict.urgency),
             interruptionCost: stringValue(criticVerdict.interruptionCost),
             batchGroup: stringValue(criticVerdict.batchGroup),
             evidenceFocus: stringValue(criticVerdict.focus) ?? stringValue(criticVerdict.reason),
+            autoCapturedEvidence,
+            wouldLikelySelfCorrect:
+              typeof criticVerdict.wouldLikelySelfCorrect === "boolean"
+                ? criticVerdict.wouldLikelySelfCorrect
+                : null,
+            shouldWaitBeforeIntervening:
+              typeof criticVerdict.shouldWaitBeforeIntervening === "boolean"
+                ? criticVerdict.shouldWaitBeforeIntervening
+                : null,
+            selfCorrectionWindowSeconds,
             payload,
           };
         }
@@ -474,9 +565,27 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
     const signals = asRecord(payload.signals);
     const structuredEvidence = Array.isArray(signals.structuredEvidence) ? signals.structuredEvidence : [];
     const primaryIssue = structuredEvidence.find((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).issue === "string") as Record<string, unknown> | undefined;
+    const signalStageRaw = stringValue(payload.stage);
+    const signalStage = isCodingInterviewStage(signalStageRaw) ? signalStageRaw : "PROBLEM_UNDERSTANDING";
+    const signalLedger = buildMemoryLedger({
+      currentStage: signalStage,
+      recentEvents: [],
+      signals: signals as never,
+      latestExecutionRun: null,
+    });
+    const calibration = assessLatentCalibration({
+      signals: signals as never,
+      ledger: signalLedger,
+      latestExecutionRun: null,
+    });
+    const flowState = assessFlowState({
+      currentStage: signalStage,
+      signals: signals as never,
+      recentTranscripts: [],
+    });
     return primaryIssue?.issue
-      ? `Candidate state updated. Primary observed issue: ${String(primaryIssue.issue)}`
-      : `Candidate state updated: understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, edge cases=${stringOrFallback(signals.edgeCaseAwareness, "unknown")}.`;
+      ? `Candidate state updated. Primary observed issue: ${String(primaryIssue.issue)}. Ceiling=${calibration.candidateCeiling}, ease=${calibration.easeOfExecution}, flow=${flowState.muteUntilPause ? "mute" : "open"}.`
+      : `Candidate state updated: understanding=${stringOrFallback(signals.understanding, "unknown")}, progress=${stringOrFallback(signals.progress, "unknown")}, edge cases=${stringOrFallback(signals.edgeCaseAwareness, "unknown")}, ceiling=${calibration.candidateCeiling}, ease=${calibration.easeOfExecution}.`;
   }
 
   if (eventType === "DECISION_RECORDED") {
@@ -505,7 +614,25 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
     ]
       .filter(Boolean)
       .join(", ");
-    return `Critic verdict: ${stringOrFallback(criticVerdict.verdict, "unknown verdict")} because ${stringOrFallback(criticVerdict.reason, "unknown reason")}${timing ? ` (${timing})` : ""}${stringValue(criticVerdict.worthReason) ? `. ${stringValue(criticVerdict.worthReason)}` : ""}.`;
+    const autoCapturedEvidence = Array.isArray(criticVerdict.autoCapturedEvidence)
+      ? criticVerdict.autoCapturedEvidence.filter((item): item is string => typeof item === "string")
+      : [];
+    const selfCorrectionWindowSeconds =
+      typeof criticVerdict.selfCorrectionWindowSeconds === "number"
+        ? criticVerdict.selfCorrectionWindowSeconds
+        : null;
+    const extras = [
+      stringValue(criticVerdict.worthReason) ? String(stringValue(criticVerdict.worthReason)) : null,
+      autoCapturedEvidence.length > 0 ? `Auto-captured evidence: ${autoCapturedEvidence.join(", ")}.` : null,
+      criticVerdict.shouldWaitBeforeIntervening && selfCorrectionWindowSeconds
+        ? `Wait ${selfCorrectionWindowSeconds}s for self-correction before intervening.`
+        : criticVerdict.wouldLikelySelfCorrect
+          ? `The candidate likely would have self-corrected without interruption.`
+          : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return `Critic verdict: ${stringOrFallback(criticVerdict.verdict, "unknown verdict")} because ${stringOrFallback(criticVerdict.reason, "unknown reason")}${timing ? ` (${timing})` : ""}${extras ? ` ${extras}` : ""}`;
   }
 
   if (eventType === "LLM_USAGE_RECORDED") {
@@ -600,6 +727,7 @@ function describeStage(value: unknown) {
 
   return describeCodingStage(value);
 }
+
 
 
 
