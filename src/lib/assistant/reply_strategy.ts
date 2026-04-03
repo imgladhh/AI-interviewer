@@ -1,4 +1,4 @@
-import type { CandidateDecision } from "@/lib/assistant/decision_engine";
+﻿import type { CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
 
@@ -233,3 +233,4 @@ function describeIssueStyle(issue?: string) {
       return "Keep the follow-up concrete and avoid generic praise.";
   }
 }
+

@@ -17,10 +17,12 @@ type ExecutionRunLike = {
 
 export type CriticVerdict = {
   approved: boolean;
-  verdict: "accept" | "rewrite" | "move_on" | "move_to_implementation";
+  verdict: "accept" | "rewrite" | "move_on" | "move_to_implementation" | "move_to_wrap_up" | "close_topic" | "end_interview";
   timingVerdict: "ask_now" | "defer" | "skip" | "move_to_implementation";
   revisedReply?: string;
   questionWorthAsking: boolean;
+  evidenceAlreadySaturated: boolean;
+  recommendedClosure?: "move_to_wrap_up" | "close_topic" | "end_interview";
   worthReason: string;
   urgency?: "low" | "medium" | "high";
   interruptionCost?: "low" | "medium" | "high";
@@ -42,7 +44,8 @@ export type CriticVerdict = {
     | "should_move_to_implementation"
     | "poor_timing"
     | "auto_captured_evidence"
-    | "self_correction_window";
+    | "self_correction_window"
+    | "evidence_saturated";
   specificity: "low" | "medium" | "high";
   intensity: "soft" | "balanced" | "sharp";
   explanation: string;
@@ -64,6 +67,7 @@ export function reviewInterviewerReply(input: {
       verdict: "rewrite",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
+      evidenceAlreadySaturated: false,
       worthReason: "The interviewer move itself is still useful, but the generated reply was empty.",
       timingVerdict: "ask_now",
       urgency: "medium",
@@ -98,6 +102,7 @@ export function reviewInterviewerReply(input: {
   const lower = normalized.toLowerCase();
   const focus = input.decision.specificIssue ?? input.decision.target;
   const targetAlreadyAnswered = ledger.answeredTargets.includes(input.decision.target);
+  const evidenceAlreadySaturated = isEvidenceSaturated(input, ledger, pacing, targetAlreadyAnswered);
   const isGeneric = /\b(keep going|good start|solid start|general idea|walk me through your approach|what algorithmic strategy would you choose first|to be clear on the task)\b/i.test(
     normalized,
   );
@@ -123,6 +128,7 @@ export function reviewInterviewerReply(input: {
           ? "Keep going for a moment and show me one more concrete state change or branch before I step in."
           : "Keep going for a moment. I want a little more concrete evidence before I press on that point.",
       questionWorthAsking: false,
+      evidenceAlreadySaturated: false,
       worthReason: grounding.reason,
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -143,12 +149,15 @@ export function reviewInterviewerReply(input: {
   }
 
   if (autoCapturedEvidence.length > 0 && input.decision.target !== "implementation") {
+    const closure = recommendClosure(input, targetAlreadyAnswered, autoCapturedEvidence, evidenceAlreadySaturated);
     return {
       approved: false,
-      verdict: "move_on",
-      timingVerdict: "skip",
-      revisedReply: buildAutoCaptureReply(input.decision.target),
+      verdict: closure.verdict,
+      timingVerdict: closure.timingVerdict,
+      revisedReply: buildAutoCaptureReply(input.decision.target, input.currentStage, closure.closure),
       questionWorthAsking: false,
+      evidenceAlreadySaturated,
+      recommendedClosure: closure.closure,
       worthReason: "The candidate has already surfaced the relevant evidence without needing an extra prompt.",
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -159,7 +168,7 @@ export function reviewInterviewerReply(input: {
       wouldLikelySelfCorrect: false,
       autoCapturedEvidence,
       shouldWaitBeforeIntervening: false,
-      reason: "auto_captured_evidence",
+      reason: evidenceAlreadySaturated ? "evidence_saturated" : "auto_captured_evidence",
       specificity,
       intensity,
       explanation: "The evidence the interviewer wanted has already been auto-captured from the candidate's own explanation, so asking now would be redundant.",
@@ -174,6 +183,7 @@ export function reviewInterviewerReply(input: {
       timingVerdict: "defer",
       revisedReply: selfCorrectionWindow.reply,
       questionWorthAsking: false,
+      evidenceAlreadySaturated: false,
       worthReason: selfCorrectionWindow.reason,
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -201,6 +211,7 @@ export function reviewInterviewerReply(input: {
       revisedReply:
         "Your approach is concrete enough now. Go ahead and implement it, and we can come back to correctness, testing, and tradeoffs after the code is written.",
       questionWorthAsking: false,
+      evidenceAlreadySaturated: false,
       worthReason: pacing.worthReason,
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -229,6 +240,7 @@ export function reviewInterviewerReply(input: {
           ? "Keep coding for a moment. I want to see one more concrete branch, update, or result before I interrupt you."
           : "Keep going for a moment. I want one more concrete step or example before I press on that point.",
       questionWorthAsking: false,
+      evidenceAlreadySaturated: false,
       worthReason: pacing.worthReason,
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -251,23 +263,19 @@ export function reviewInterviewerReply(input: {
   if (
     !pacing.questionWorthAsking ||
     (targetAlreadyAnswered &&
-      ["testing", "edge_case", "complexity", "tradeoff", "reasoning", "correctness"].includes(
+      ["testing", "edge_case", "complexity", "tradeoff", "reasoning", "correctness", "summary"].includes(
         input.decision.target,
       ))
   ) {
+    const closure = recommendClosure(input, targetAlreadyAnswered, autoCapturedEvidence, evidenceAlreadySaturated);
     return {
       approved: false,
-      verdict: input.decision.target === "implementation" ? "move_to_implementation" : "move_on",
-      timingVerdict: pacing.timingVerdict,
-      revisedReply:
-        input.decision.target === "complexity" || input.decision.target === "tradeoff"
-          ? "You have already covered the performance story clearly enough. Give me a concise final summary of the approach and one implementation detail you would still watch carefully."
-          : input.decision.target === "testing" || input.decision.target === "edge_case"
-            ? "You have already named the key validation cases. Summarize the final solution and tell me one boundary condition you would still keep in mind during review."
-            : input.decision.target === "implementation"
-              ? "The path is concrete enough now. Go ahead and implement it, and we can revisit any remaining gaps after the code is on the page."
-              : "You have already addressed that point enough for now. Keep moving, and we can return to any remaining gaps after the implementation evidence is stronger.",
+      verdict: input.decision.target === "implementation" ? "move_to_implementation" : closure.verdict,
+      timingVerdict: input.decision.target === "implementation" ? pacing.timingVerdict : closure.timingVerdict,
+      revisedReply: buildCoveredPointReply(input, closure.closure),
       questionWorthAsking: false,
+      evidenceAlreadySaturated,
+      recommendedClosure: closure.closure,
       worthReason: pacing.worthReason,
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -278,7 +286,7 @@ export function reviewInterviewerReply(input: {
       wouldLikelySelfCorrect: false,
       autoCapturedEvidence: [],
       shouldWaitBeforeIntervening: false,
-      reason: targetAlreadyAnswered ? "repeated_answered_target" : "should_move_to_implementation",
+      reason: evidenceAlreadySaturated ? "evidence_saturated" : (targetAlreadyAnswered ? "repeated_answered_target" : "should_move_to_implementation"),
       specificity,
       intensity,
       explanation: "The candidate has already supplied the relevant evidence, so this question would not improve the interview signal enough to be worth asking again right now.",
@@ -293,6 +301,7 @@ export function reviewInterviewerReply(input: {
       timingVerdict: "ask_now",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
+      evidenceAlreadySaturated: false,
       worthReason: "The target is still worth asking, but this wording is too generic.",
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -318,6 +327,7 @@ export function reviewInterviewerReply(input: {
       timingVerdict: "ask_now",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
+      evidenceAlreadySaturated: false,
       worthReason: "The interviewer is pressing on the right issue, but the question needs to be more specific.",
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -343,6 +353,7 @@ export function reviewInterviewerReply(input: {
       timingVerdict: "ask_now",
       revisedReply: input.decision.question,
       questionWorthAsking: true,
+      evidenceAlreadySaturated: false,
       worthReason: "The issue is worth probing, but the question needs more interviewing pressure.",
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -374,6 +385,7 @@ export function reviewInterviewerReply(input: {
       revisedReply:
         "That is enough pre-code discussion. Go ahead and implement it now, and then we can review correctness and tradeoffs against the actual code.",
       questionWorthAsking: false,
+      evidenceAlreadySaturated: false,
       worthReason: pacing.worthReason,
       urgency: pacing.urgency,
       interruptionCost: pacing.interruptionCost,
@@ -397,6 +409,7 @@ export function reviewInterviewerReply(input: {
     verdict: "accept",
     timingVerdict: pacing.timingVerdict,
     questionWorthAsking: pacing.questionWorthAsking,
+    evidenceAlreadySaturated: false,
     worthReason: pacing.worthReason,
     urgency: pacing.urgency,
     interruptionCost: pacing.interruptionCost,
@@ -536,19 +549,19 @@ function resolveSelfCorrectionWindow(
   };
 }
 
-function buildAutoCaptureReply(target: CandidateDecision["target"]) {
+function buildAutoCaptureReply(target: CandidateDecision["target"], currentStage: CodingInterviewStage, closure?: "move_to_wrap_up" | "close_topic" | "end_interview") {
   switch (target) {
     case "complexity":
     case "tradeoff":
-      return "You already surfaced the complexity and tradeoff clearly enough. Keep moving, and we can use that evidence in the final wrap-up.";
+      return closure === "end_interview" ? "That covers the performance story well enough. We are done with this question." : closure === "move_to_wrap_up" ? "You already surfaced the complexity and tradeoff clearly enough. Give me one concise final summary, then we will close this question." : "You already surfaced the complexity and tradeoff clearly enough. Keep moving, and we can use that evidence in the final wrap-up.";
     case "testing":
     case "edge_case":
-      return "You have already named the key validation cases well enough for now. Keep going, and we can revisit testing if a concrete gap appears in the code.";
+      return closure === "end_interview" ? "You have already covered the validation story well enough. We are done with this question." : closure === "move_to_wrap_up" ? "You have already named the key validation cases well enough. Give me one concise final wrap-up, then we will close this question." : "You have already named the key validation cases well enough for now. Keep moving, and we can revisit testing only if a concrete gap appears in the code.";
     case "reasoning":
     case "correctness":
-      return "You already gave enough correctness signal for this point. Keep moving, and we can sharpen the proof story after we see more code or validation evidence.";
+      return closure === "move_to_wrap_up" ? "You already gave enough correctness signal for this point. Give me one concise final wrap-up, then we will close this question." : "You already gave enough correctness signal for this point. Keep moving, and we can sharpen the proof story only if a concrete gap appears later.";
     default:
-      return "You have already supplied enough evidence on that point for now. Keep going.";
+      return closure === "end_interview" ? "That covers this question well. We are done here." : closure === "close_topic" ? "That point is already covered well enough. Let us move on." : closure === "move_to_wrap_up" ? "You have already supplied enough evidence on that point. Give me one concise final wrap-up, then we will close this question." : currentStage === "WRAP_UP" ? "You have already supplied enough evidence on that point. Let us close this question cleanly." : "You have already supplied enough evidence on that point for now. Keep moving.";
   }
 }
 
@@ -595,3 +608,100 @@ function assessIssueGrounding(input: {
     reason: "The issue is grounded in evidence.",
   };
 }
+
+function isEvidenceSaturated(
+  input: {
+    decision: CandidateDecision;
+    currentStage: CodingInterviewStage;
+    signals: CandidateSignalSnapshot;
+    latestExecutionRun?: ExecutionRunLike | null;
+  },
+  ledger: ReturnType<typeof buildMemoryLedger>,
+  pacing: ReturnType<typeof assessInterviewPacing>,
+  targetAlreadyAnswered: boolean,
+) {
+  if (input.decision.target === "summary" && (targetAlreadyAnswered || ledger.answeredTargets.includes("summary"))) {
+    return true;
+  }
+
+  if (
+    input.currentStage === "WRAP_UP" &&
+    (ledger.answeredTargets.includes("summary") || pacing.shouldStopComplexity || pacing.shouldStopTesting) &&
+    (input.signals.progress === "done" || ledger.collectedEvidence.includes("implementation_plan"))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function recommendClosure(
+  input: { decision: CandidateDecision; currentStage: CodingInterviewStage; latestExecutionRun?: ExecutionRunLike | null },
+  targetAlreadyAnswered: boolean,
+  autoCapturedEvidence: string[],
+  evidenceAlreadySaturated: boolean,
+) {
+  if (evidenceAlreadySaturated || (input.currentStage === "WRAP_UP" && (targetAlreadyAnswered || autoCapturedEvidence.includes("summary_ready")))) {
+    return {
+      closure: "end_interview" as const,
+      verdict: "end_interview" as const,
+      timingVerdict: "skip" as const,
+    };
+  }
+
+  if (
+    input.decision.target === "summary" ||
+    input.decision.target === "complexity" ||
+    input.decision.target === "tradeoff" ||
+    input.decision.target === "testing" ||
+    input.decision.target === "edge_case"
+  ) {
+    return {
+      closure: "move_to_wrap_up" as const,
+      verdict: "move_to_wrap_up" as const,
+      timingVerdict: "skip" as const,
+    };
+  }
+
+  return {
+    closure: "close_topic" as const,
+    verdict: "close_topic" as const,
+    timingVerdict: "skip" as const,
+  };
+}
+
+function buildCoveredPointReply(
+  input: {
+    decision: CandidateDecision;
+    currentStage: CodingInterviewStage;
+  },
+  closure?: "move_to_wrap_up" | "close_topic" | "end_interview",
+) {
+  if (input.decision.target === "implementation") {
+    return "The path is concrete enough now. Go ahead and implement it, and we can revisit any remaining gaps after the code is on the page.";
+  }
+
+  if (closure === "end_interview") {
+    return "That covers this question well. We are done here.";
+  }
+
+  if (closure === "move_to_wrap_up") {
+    if (input.decision.target === "complexity" || input.decision.target === "tradeoff") {
+      return "You have already covered the performance story clearly enough. Give me one concise final summary of the approach and one implementation detail you would still watch carefully, then we will close this question.";
+    }
+    if (input.decision.target === "testing" || input.decision.target === "edge_case") {
+      return "You have already named the key validation cases. Give me one concise final summary of the solution and one boundary condition you would still keep in mind during review, then we will close this question.";
+    }
+    if (input.decision.target === "summary") {
+      return "That already covers the final summary well enough. We are done with this question.";
+    }
+
+    return "That point is already covered well enough. Give me one concise final wrap-up, then we will close this question.";
+  }
+
+  return "That point is already covered well enough. Let us move on.";
+}
+
+
+
+

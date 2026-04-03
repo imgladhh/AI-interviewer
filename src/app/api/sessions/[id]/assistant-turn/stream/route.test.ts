@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const streamAssistantTurn = vi.fn();
 
@@ -121,7 +121,7 @@ describe("assistant turn stream route", () => {
     await response.text();
 
     expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(1);
-    expect(prisma.sessionEvent.create).toHaveBeenCalledWith({
+    expect(prisma.sessionEvent.create.mock.calls[0]?.[0]).toMatchObject({
       data: {
         sessionId: "session-1",
         eventType: "AI_SPOKE",
@@ -133,3 +133,5 @@ describe("assistant turn stream route", () => {
     });
   });
 });
+
+

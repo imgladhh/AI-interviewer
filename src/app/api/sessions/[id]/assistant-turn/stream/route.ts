@@ -91,6 +91,9 @@ export async function POST(request: Request, { params }: RouteContext) {
               hintGranularity?: string;
               hintTier?: string;
               hintCost?: number;
+              hintInitiator?: string;
+              hintRequestTiming?: string;
+              momentumAtHint?: string;
               escalationReason?: string;
               signals?: unknown;
               decision?: unknown;
@@ -268,6 +271,9 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintGranularity: finalTurn.hintGranularity ?? null,
                 hintTier: finalTurn.hintTier ?? null,
                 hintCost: finalTurn.hintCost ?? null,
+                hintInitiator: finalTurn.hintInitiator ?? null,
+                hintRequestTiming: finalTurn.hintRequestTiming ?? null,
+                momentumAtHint: finalTurn.momentumAtHint ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
                 reason: finalTurn.policyReason ?? null,
               },
@@ -292,6 +298,9 @@ export async function POST(request: Request, { params }: RouteContext) {
                 hintGranularity: finalTurn.hintGranularity ?? null,
                 hintTier: finalTurn.hintTier ?? null,
                 hintCost: finalTurn.hintCost ?? null,
+                hintInitiator: finalTurn.hintInitiator ?? null,
+                hintRequestTiming: finalTurn.hintRequestTiming ?? null,
+                momentumAtHint: finalTurn.momentumAtHint ?? null,
                 escalationReason: finalTurn.escalationReason ?? null,
                 signals: finalTurn.signals ?? null,
                 decision: finalTurn.decision ?? null,
@@ -323,5 +332,10 @@ export async function POST(request: Request, { params }: RouteContext) {
     },
   });
 }
+
+
+
+
+
 
 

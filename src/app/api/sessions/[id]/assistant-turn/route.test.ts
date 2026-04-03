@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateAssistantTurn = vi.fn();
 
@@ -83,7 +83,7 @@ describe("assistant turn route", () => {
       },
     });
     expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(2);
-    expect(prisma.sessionEvent.create).toHaveBeenLastCalledWith({
+    expect(prisma.sessionEvent.create.mock.lastCall?.[0]).toMatchObject({
       data: {
         sessionId: "session-1",
         eventType: "STAGE_ADVANCED",
@@ -96,3 +96,5 @@ describe("assistant turn route", () => {
     });
   });
 });
+
+

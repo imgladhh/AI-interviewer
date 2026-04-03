@@ -12,13 +12,27 @@ describe("hinting_ledger", () => {
     expect(classifyHintGranularity("CLARIFYING_NUDGE", "LIGHT")).toBe("conceptual");
   });
 
-  it("estimates higher cost for stronger implementation-heavy hints", () => {
-    expect(estimateHintCost({ hintStyle: "IMPLEMENTATION_NUDGE", hintLevel: "STRONG" })).toBeGreaterThan(
-      estimateHintCost({ hintStyle: "CLARIFYING_NUDGE", hintLevel: "LIGHT" }),
+  it("estimates higher cost for candidate-requested early implementation hints", () => {
+    expect(
+      estimateHintCost({
+        hintStyle: "IMPLEMENTATION_NUDGE",
+        hintLevel: "STRONG",
+        hintInitiator: "candidate_request",
+        hintRequestTiming: "early",
+        momentumAtHint: "productive",
+      }),
+    ).toBeGreaterThan(
+      estimateHintCost({
+        hintStyle: "CLARIFYING_NUDGE",
+        hintLevel: "LIGHT",
+        hintInitiator: "system_rescue",
+        hintRequestTiming: "mid",
+        momentumAtHint: "stalled",
+      }),
     );
   });
 
-  it("builds aggregated hint ledgers from served hint events", () => {
+  it("builds aggregated hint ledgers from served hint events with initiator and timing", () => {
     const ledger = buildHintingLedger([
       {
         eventType: "HINT_SERVED",
@@ -28,6 +42,9 @@ describe("hinting_ledger", () => {
           rescueMode: "conceptual_rescue",
           hintGranularity: "conceptual",
           hintCost: 1.2,
+          hintInitiator: "candidate_request",
+          hintRequestTiming: "early",
+          momentumAtHint: "fragile",
         },
       },
       {
@@ -38,6 +55,9 @@ describe("hinting_ledger", () => {
           rescueMode: "implementation_rescue",
           hintGranularity: "near_solution",
           hintCost: 4.05,
+          hintInitiator: "system_rescue",
+          hintRequestTiming: "mid",
+          momentumAtHint: "stalled",
         },
       },
     ]);
@@ -50,6 +70,9 @@ describe("hinting_ledger", () => {
     expect(ledger.byGranularity.near_solution).toBe(1);
     expect(ledger.byRescueMode.implementation_rescue).toBe(1);
     expect(ledger.byTier.L3_SOLUTION).toBe(1);
+    expect(ledger.byInitiator.candidate_request).toBe(1);
+    expect(ledger.byRequestTiming.early).toBe(1);
+    expect(ledger.byMomentumAtHint.stalled).toBe(1);
   });
 
   it("maps stuck implementation turns into implementation rescue", () => {

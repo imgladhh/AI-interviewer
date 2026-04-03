@@ -91,6 +91,12 @@ type HintSummary = HintLedger & {
   requested: number;
   served: number;
   penaltyApplied: number;
+  efficiencyScore: number;
+  coachability: {
+    score: number;
+    label: "high" | "moderate" | "low";
+    rationale: string;
+  };
 };
 
 type StageReplayGroup = {
@@ -255,9 +261,15 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
         totalHintCost: hintSummary.totalHintCost,
         averageHintCost: hintSummary.averageHintCost,
         strongestHintLevel: hintSummary.strongestHintLevel,
+        strongestHintTier: hintSummary.strongestHintTier,
         byGranularity: hintSummary.byGranularity,
         byRescueMode: hintSummary.byRescueMode,
+        byInitiator: hintSummary.byInitiator,
+        byRequestTiming: hintSummary.byRequestTiming,
+        byMomentumAtHint: hintSummary.byMomentumAtHint,
         penaltyApplied: hintSummary.penaltyApplied,
+        efficiencyScore: hintSummary.efficiencyScore,
+        coachability: hintSummary.coachability,
       },
       transcriptSummary: {
         userTurns: userTurns.length,
@@ -1081,16 +1093,47 @@ function buildHintSummary(
     Math.round(Math.min(10, ledger.totalHintCost * reasoningMultiplier + rescueWeight)),
   );
 
+  const efficiencyBase =
+    100 -
+    Math.round(ledger.totalHintCost * 8) -
+    served * 4 -
+    ledger.byInitiator.candidate_request * 8 -
+    ledger.byRequestTiming.early * 7 -
+    ledger.byMomentumAtHint.productive * 6 +
+    ledger.byRescueMode.debug_rescue * 2;
+  const efficiencyScore = Math.max(0, Math.min(100, efficiencyBase));
+
+  const coachabilityRaw =
+    70 +
+    ledger.byTier.L0_NUDGE * 8 +
+    ledger.byTier.L1_AREA * 5 -
+    ledger.byTier.L2_SPECIFIC * 4 -
+    ledger.byTier.L3_SOLUTION * 10 -
+    ledger.byInitiator.candidate_request * 6 +
+    ledger.byRescueMode.implementation_rescue * 2;
+  const coachabilityScore = Math.max(0, Math.min(100, coachabilityRaw));
+  const coachabilityLabel =
+    coachabilityScore >= 75 ? "high" : coachabilityScore >= 50 ? "moderate" : "low";
+  const coachabilityRationale =
+    coachabilityLabel === "high"
+      ? "The candidate tended to respond well to light-touch guidance instead of needing hand-held rescue."
+      : coachabilityLabel === "moderate"
+        ? "The candidate responded to guidance, but needed more than one layer of scaffolding to regain momentum."
+        : "The candidate often needed specific or near-solution rescue before progress resumed.";
+
   return {
     ...ledger,
     requested,
     served,
     penaltyApplied,
+    efficiencyScore,
+    coachability: {
+      score: coachabilityScore,
+      label: coachabilityLabel,
+      rationale: coachabilityRationale,
+    },
   };
 }
-
-
-
 
 function buildEvidenceTrace(input: {
   events: SessionEventLike[];
@@ -1159,7 +1202,7 @@ function buildEvidenceTrace(input: {
       claim: "Interviewer rescue affected the independence signal.",
       category: "Hinting",
       evidencePoints: [
-        `Hints served: ${input.hintSummary.served}.`,
+        `Hints served: ${input.hintSummary.served}.`, `Efficiency score: ${input.hintSummary.efficiencyScore}.`, `Coachability: ${input.hintSummary.coachability.label}.`,
         `Total hint cost: ${input.hintSummary.totalHintCost.toFixed(2)}.`,
         `Strongest hint level: ${input.hintSummary.strongestHintLevel ?? "none"}.`,
       ],
@@ -1225,6 +1268,10 @@ function buildCounterfactualSummary(events: SessionEventLike[]): CounterfactualS
     shouldWaitBeforeIntervening: criticEvents.some((verdict) => verdict.shouldWaitBeforeIntervening === true),
   };
 }
+
+
+
+
 
 
 

@@ -20,6 +20,7 @@ This repo now has a working MVP-plus skeleton with:
 - Dedicated STT handoff for spoken candidate turns, with provider selection and browser transcript fallback
 - Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, low-cost mode controls, and switchable STT providers
 - `Vitest` unit/route tests and `Playwright` end-to-end tests
+- Full `Vitest` coverage is now green locally again (`173 passed / 31 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
 
 ## Recent Progress
 
@@ -74,6 +75,7 @@ This repo now has a working MVP-plus skeleton with:
   - readable stage transition descriptions
   - persona and session activity rendered in one timeline
 - Expanded tests around:
+  - full-route and assistant-turn regressions now run cleanly in local Vitest again
   - assistant stage inference
   - assistant-turn generation and stage transitions
   - streaming routes
@@ -109,6 +111,8 @@ This repo now has a working MVP-plus skeleton with:
 - Critic verdicts are now written into session events and surfaced in `/admin` and `/report` replay so reviewer pressure, specificity, and repetition handling are inspectable.
 - Gemini/OpenAI now have a low-cost rewrite pass for weak turns before falling back to rule-based rewrites, which reduces generic follow-ups and repeated answered targets.
 - decision_engine now avoids immediately repeating `testing`, `edge_case`, `complexity`, and `tradeoff` targets once the candidate has already supplied the relevant evidence, and instead moves the interview forward.
+- interviewer closure logic now explicitly models `move_to_wrap_up`, `close_topic`, and `end_interview`, so once evidence is saturated the system stops saying `Keep going` and closes the topic cleanly.
+- critic verdicts now track `evidenceAlreadySaturated` and `recommendedClosure`, so repeated wrap-up, summary, testing, and complexity loops can be converted into explicit closure turns instead of more probing.
 - Candidate-state and interviewer-decision snapshots now have dedicated persistence tables in addition to the existing session-event trail, so state tracking can migrate away from event-only replay over time.
 - Added tests for signal extraction, decision logic, evidence-based reporting, reply strategy shaping, provider compliance handling, and provider fallback ordering.
 - signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
@@ -211,8 +215,8 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/reply_strategy.ts`: action-specific interviewer wording and fallback turn shaping
 - `src/lib/assistant/policy.ts`: explicit stage policy, exit criteria, hint escalation, and prompt strategy selection
 - `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation, provider sequencing, critic-aware rewrite passes, and decision-compliance enforcement
-- `src/lib/assistant/critic.ts`: structured interviewer-turn review for specificity, intensity, repetition, code-readiness gating, and “worth asking now” timing checks
-- `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, and pressure selection
+- `src/lib/assistant/critic.ts`: structured interviewer-turn review for specificity, intensity, repetition, code-readiness gating, evidence saturation, and “worth asking now” timing checks
+- `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, pressure selection, and closure timing
 - `src/lib/assistant/hinting_ledger.ts`: hint granularity, rescue-mode classification, and hint-cost aggregation
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
 - `src/lib/evaluation/report.ts`: evidence-based report generation, execution-aware scoring, candidate DNA profiling, and moment-of-truth extraction
@@ -405,6 +409,7 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
 
 
 

@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   CandidateSignalSnapshot,
 } from "@/lib/assistant/signal_extractor";
 import type {
@@ -11,7 +11,13 @@ import {
   type HintGranularity,
   type RescueMode,
 } from "@/lib/assistant/hinting_ledger";
-import { resolveHintStrategy, type HintTier } from "@/lib/assistant/hint_strategy";
+import {
+  resolveHintStrategy,
+  type HintTier,
+  type HintInitiator,
+  type HintRequestTiming,
+  type MomentumAtHint,
+} from "@/lib/assistant/hint_strategy";
 import type {
   DecisionPressure,
   DecisionUrgency,
@@ -32,6 +38,9 @@ export type CandidateDecisionAction =
   | "ask_for_clarification"
   | "give_hint"
   | "move_stage"
+  | "move_to_wrap_up"
+  | "close_topic"
+  | "end_interview"
   | "ask_for_test_case"
   | "ask_for_complexity"
   | "ask_for_debug_plan"
@@ -77,6 +86,9 @@ export type CandidateDecision = {
   hintGranularity?: HintGranularity;
   hintTier?: HintTier;
   hintCost?: number;
+  hintInitiator?: HintInitiator;
+  hintRequestTiming?: HintRequestTiming;
+  momentumAtHint?: MomentumAtHint;
   policyAction: CodingInterviewPolicyAction;
 };
 
@@ -196,6 +208,7 @@ export function makeCandidateDecision(input: {
       recentFailedRuns: repeatedFailures,
       hintStyle: policy.hintStyle,
       hintLevel: policy.hintLevel,
+      recentEvents: input.recentEvents,
     });
     return {
       action: "give_hint",
@@ -213,6 +226,9 @@ export function makeCandidateDecision(input: {
       hintGranularity: hintStrategy.granularity,
       hintTier: hintStrategy.tier,
       hintCost: hintStrategy.hintCost,
+      hintInitiator: hintStrategy.hintInitiator,
+      hintRequestTiming: hintStrategy.hintRequestTiming,
+      momentumAtHint: hintStrategy.momentumAtHint,
       policyAction: policy.recommendedAction,
     };
   }
@@ -314,9 +330,9 @@ export function makeCandidateDecision(input: {
     }
 
     return {
-      action: "move_stage",
+      action: "move_to_wrap_up",
       target: "summary",
-      question: "Good. You have already covered the implementation, validation, and performance story well enough. Give me a concise final wrap-up of the approach and one thing you would double-check in production.",
+      question: "Good. You have already covered the implementation, validation, and performance story well enough. Give me one concise final wrap-up of the approach and one thing you would double-check in production, then we will close this question.",
       reason: "The candidate already answered the complexity and tradeoff target, so the interviewer should not immediately repeat it after a passing run.",
       confidence: 0.88,
       targetCodeLine: "the final solution summary and one production-risk check",
@@ -884,9 +900,9 @@ export function makeCandidateDecision(input: {
       !ledger.missingEvidence.includes("correctness_proof")
     ) {
       return {
-        action: "move_stage",
+        action: "move_to_wrap_up",
         target: "summary",
-        question: "Good. You have covered the tests and performance story. Summarize the final solution and one implementation detail you would still watch carefully.",
+        question: "Good. You have covered the tests and performance story. Give me one concise final summary of the solution and one implementation detail you would still watch carefully, then we will close this question.",
         reason: "The candidate has already answered the active testing and complexity targets, so the interviewer should stop repeating them and move toward wrap-up.",
         confidence: 0.87,
         targetCodeLine: "the final solution summary and one implementation detail worth watching",
@@ -896,6 +912,25 @@ export function makeCandidateDecision(input: {
         policyAction: "WRAP_UP",
       };
     }
+  }
+
+  if (
+    currentStage === "WRAP_UP" &&
+    targetAlreadyAnswered("summary") &&
+    (signals.progress === "done" || hasCollectedEvidence("implementation_plan", "test_cases", "complexity_tradeoff"))
+  ) {
+    return {
+      action: "end_interview",
+      target: "summary",
+      question: "That covers this question well. We are done here.",
+      reason: "The candidate has already provided the final summary and the core evidence is saturated, so the interviewer should explicitly close instead of asking for more.",
+      confidence: 0.93,
+      targetCodeLine: "the final wrapped solution story that is already on record",
+      specificIssue: "The active topic is already covered well enough and additional prompting would only create repetition.",
+      expectedAnswer: "No further answer is required beyond a brief acknowledgment.",
+      suggestedStage: "WRAP_UP",
+      policyAction: "WRAP_UP",
+    };
   }
 
   if (currentStage === "WRAP_UP") {
@@ -974,10 +1009,10 @@ export function makeCandidateDecision(input: {
   }
 
   return {
-    action: "ask_followup",
+    action: "move_to_wrap_up",
     target: "summary",
-    question: "Wrap this up for me: what is the final approach, what are the main tradeoffs, and what would you improve if you had more time?",
-    reason: "The interview is in wrap-up, so the interviewer should close with a concise summary request.",
+    question: "Wrap this up for me once: what is the final approach, what are the main tradeoffs, and what would you improve if you had more time?",
+    reason: "The interview is in wrap-up, so the interviewer should collect one final summary and then close rather than keep the topic open.",
     confidence: 0.78,
     targetCodeLine: "the final summary of approach, tradeoffs, and next improvement",
     specificIssue: "The interview is ending and needs a concise final summary.",
@@ -1183,3 +1218,8 @@ function detectRecentImplementationReadiness(
       );
     });
 }
+
+
+
+
+

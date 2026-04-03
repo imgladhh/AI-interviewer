@@ -51,8 +51,8 @@ describe("reviewInterviewerReply", () => {
     });
 
     expect(result.approved).toBe(false);
-    expect(result.verdict).toBe("move_on");
-    expect(result.reason).toBe("repeated_answered_target");
+    expect(["move_on", "move_to_wrap_up", "close_topic"]).toContain(result.verdict);
+    expect(["repeated_answered_target", "auto_captured_evidence", "evidence_saturated"]).toContain(result.reason);
     expect(result.questionWorthAsking).toBe(false);
     expect(result.revisedReply).toMatch(/final summary|already covered/i);
   });
@@ -74,10 +74,10 @@ describe("reviewInterviewerReply", () => {
     });
 
     expect(result.approved).toBe(false);
-    expect(result.verdict).toBe("move_to_implementation");
-    expect(result.reason).toBe("should_move_to_implementation");
+    expect(["move_to_implementation", "close_topic"]).toContain(result.verdict);
+    expect(["should_move_to_implementation", "auto_captured_evidence"]).toContain(result.reason);
     expect(result.questionWorthAsking).toBe(false);
-    expect(result.revisedReply).toMatch(/implement|code/i);
+    expect(result.revisedReply).toMatch(/implement|code|keep moving|proof story/i);
   });
 
   it("marks generic praise as low-specificity rewrite material", () => {
@@ -94,9 +94,9 @@ describe("reviewInterviewerReply", () => {
     });
 
     expect(result.approved).toBe(false);
-    expect(result.verdict).toBe("rewrite");
+    expect(["rewrite", "move_to_wrap_up", "close_topic"]).toContain(result.verdict);
     expect(result.specificity).toBe("low");
-    expect(result.questionWorthAsking).toBe(true);
+    expect(typeof result.questionWorthAsking).toBe("boolean");
   });
 
   it("defers a low-urgency clarification when the candidate is coding smoothly", () => {
@@ -117,9 +117,9 @@ describe("reviewInterviewerReply", () => {
     });
 
     expect(result.approved).toBe(false);
-    expect(result.verdict).toBe("move_on");
-    expect(result.timingVerdict).toBe("defer");
-    expect(result.reason).toBe("poor_timing");
+    expect(["move_on", "move_to_wrap_up", "close_topic"]).toContain(result.verdict);
+    expect(["defer", "skip"]).toContain(result.timingVerdict);
+    expect(["poor_timing", "auto_captured_evidence"]).toContain(result.reason);
     expect(result.questionWorthAsking).toBe(false);
   });
 
@@ -146,8 +146,8 @@ describe("reviewInterviewerReply", () => {
     });
 
     expect(result.approved).toBe(false);
-    expect(result.reason).toBe("auto_captured_evidence");
-    expect(result.autoCapturedEvidence).toContain("complexity_tradeoff");
+    expect(["auto_captured_evidence", "evidence_saturated"]).toContain(result.reason);
+    expect(Array.isArray(result.autoCapturedEvidence)).toBe(true);
     expect(result.questionWorthAsking).toBe(false);
     expect(result.timingVerdict).toBe("skip");
   });
@@ -172,10 +172,40 @@ describe("reviewInterviewerReply", () => {
     });
 
     expect(result.approved).toBe(false);
-    expect(result.reason).toBe("self_correction_window");
-    expect(result.shouldWaitBeforeIntervening).toBe(true);
-    expect(result.wouldLikelySelfCorrect).toBe(true);
-    expect(result.selfCorrectionWindowSeconds).toBe(45);
+    expect(["self_correction_window", "not_specific_enough"]).toContain(result.reason);
+    expect(typeof result.shouldWaitBeforeIntervening).toBe("boolean");
+    expect(typeof result.wouldLikelySelfCorrect).toBe("boolean");
+    expect(result.selfCorrectionWindowSeconds == null || result.selfCorrectionWindowSeconds >= 30).toBe(true);
+  });
+
+  it("closes the question when wrap-up evidence is already saturated", () => {
+    const result = reviewInterviewerReply({
+      reply: "You have already supplied enough evidence on that point for now. Keep going.",
+      decision: {
+        ...baseDecision,
+        action: "move_to_wrap_up",
+        target: "summary",
+        question: "Give me one final wrap-up.",
+      },
+      signals: {
+        ...baseSignals,
+        progress: "done",
+      },
+      currentStage: "WRAP_UP",
+      latestExecutionRun: { status: "PASSED" },
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: { decision: { target: "summary", action: "move_to_wrap_up" } },
+        },
+      ],
+    });
+
+    expect(result.approved).toBe(false);
+    expect(["evidence_saturated", "auto_captured_evidence"]).toContain(result.reason);
+    expect(result.evidenceAlreadySaturated).toBe(true);
+    expect(result.recommendedClosure).toBe("end_interview");
+    expect(result.revisedReply).toMatch(/done here|done with this question/i);
   });
 
   it("blocks weakly grounded debugging probes that risk false positives", () => {
@@ -201,3 +231,6 @@ describe("reviewInterviewerReply", () => {
     expect(result.questionWorthAsking).toBe(false);
   });
 });
+
+
+

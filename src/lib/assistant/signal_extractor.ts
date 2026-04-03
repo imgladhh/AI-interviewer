@@ -1,4 +1,4 @@
-import type { CodingInterviewStage } from "@/lib/assistant/stages";
+﻿import type { CodingInterviewStage } from "@/lib/assistant/stages";
 
 type TranscriptLike = {
   speaker: "USER" | "AI" | "SYSTEM";
@@ -1121,4 +1121,5 @@ function normalizeStructuredEvidenceItem(value: unknown): CandidateEvidenceItem 
     fix,
   };
 }
+
 

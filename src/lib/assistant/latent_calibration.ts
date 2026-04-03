@@ -1,4 +1,4 @@
-import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
+﻿import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { MemoryLedger } from "@/lib/assistant/memory_ledger";
 
 type ExecutionRunLike = {
@@ -40,7 +40,7 @@ export function assessLatentCalibration(input: {
   }
 
   let candidateCeiling: CandidateCeiling = "foundational";
-  if (signals.algorithmChoice === "reasonable" && signals.understanding === "clear") {
+  if ((signals.algorithmChoice === "reasonable" || signals.algorithmChoice === "strong") && signals.understanding === "clear") {
     candidateCeiling = "solid";
   }
   if (
@@ -84,3 +84,4 @@ export function assessLatentCalibration(input: {
 function clampNumber(value: number) {
   return Math.max(0.2, Math.min(0.98, Number(value.toFixed(2))));
 }
+

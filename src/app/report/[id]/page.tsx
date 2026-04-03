@@ -90,9 +90,19 @@ type ReportJson = {
     totalHintCost?: number;
     averageHintCost?: number;
     strongestHintLevel?: string | null;
+    strongestHintTier?: string | null;
     byGranularity?: Record<string, number>;
     byRescueMode?: Record<string, number>;
+    byInitiator?: Record<string, number>;
+    byRequestTiming?: Record<string, number>;
+    byMomentumAtHint?: Record<string, number>;
     penaltyApplied?: number;
+    efficiencyScore?: number;
+    coachability?: {
+      score?: number;
+      label?: string;
+      rationale?: string;
+    };
   };
   transcriptSummary?: {
     userTurns?: number;
@@ -1322,6 +1332,7 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
 
 
 

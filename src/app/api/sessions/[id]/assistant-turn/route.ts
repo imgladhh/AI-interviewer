@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+﻿import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { generateAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
@@ -207,6 +207,9 @@ export async function POST(_: Request, { params }: RouteContext) {
           hintGranularity: turn.hintGranularity ?? null,
           hintTier: turn.hintTier ?? null,
           hintCost: turn.hintCost ?? null,
+          hintInitiator: turn.hintInitiator ?? null,
+          hintRequestTiming: turn.hintRequestTiming ?? null,
+          momentumAtHint: turn.momentumAtHint ?? null,
           escalationReason: turn.escalationReason ?? null,
           reason: turn.policyReason ?? null,
         },
@@ -229,6 +232,9 @@ export async function POST(_: Request, { params }: RouteContext) {
       hintGranularity: turn.hintGranularity ?? null,
       hintTier: turn.hintTier ?? null,
       hintCost: turn.hintCost ?? null,
+      hintInitiator: turn.hintInitiator ?? null,
+      hintRequestTiming: turn.hintRequestTiming ?? null,
+      momentumAtHint: turn.momentumAtHint ?? null,
       escalationReason: turn.escalationReason ?? null,
       signals: turn.signals ?? null,
       decision: turn.decision ?? null,
@@ -237,3 +243,6 @@ export async function POST(_: Request, { params }: RouteContext) {
     },
   });
 }
+
+
+

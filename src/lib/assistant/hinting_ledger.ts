@@ -1,7 +1,17 @@
-import type { CodingInterviewHintLevel, CodingInterviewHintStyle } from "@/lib/assistant/policy";
+﻿import type { CodingInterviewHintLevel, CodingInterviewHintStyle } from "@/lib/assistant/policy";
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
-import { estimateNonLinearHintCost, resolveHintTier, type HintTier } from "@/lib/assistant/hint_strategy";
+import {
+  estimateNonLinearHintCost,
+  resolveHintInitiator,
+  resolveHintRequestTiming,
+  resolveHintTier,
+  resolveMomentumAtHint,
+  type HintInitiator,
+  type HintRequestTiming,
+  type HintTier,
+  type MomentumAtHint,
+} from "@/lib/assistant/hint_strategy";
 
 type SessionEventLike = {
   eventType: string;
@@ -20,6 +30,9 @@ export type HintLedger = {
   byGranularity: Record<HintGranularity, number>;
   byRescueMode: Record<RescueMode, number>;
   byTier: Record<HintTier, number>;
+  byInitiator: Record<HintInitiator, number>;
+  byRequestTiming: Record<HintRequestTiming, number>;
+  byMomentumAtHint: Record<MomentumAtHint, number>;
 };
 
 export function classifyHintGranularity(
@@ -48,6 +61,9 @@ export function classifyHintGranularity(
 export function estimateHintCost(input: {
   hintStyle?: CodingInterviewHintStyle;
   hintLevel?: CodingInterviewHintLevel;
+  hintInitiator?: HintInitiator;
+  hintRequestTiming?: HintRequestTiming;
+  momentumAtHint?: MomentumAtHint;
 }) {
   const granularity = classifyHintGranularity(input.hintStyle, input.hintLevel);
   const tier = resolveHintTier({
@@ -58,6 +74,9 @@ export function estimateHintCost(input: {
   return estimateNonLinearHintCost({
     tier,
     rescueMode: "none",
+    hintInitiator: input.hintInitiator,
+    hintRequestTiming: input.hintRequestTiming,
+    momentumAtHint: input.momentumAtHint,
   });
 }
 
@@ -112,16 +131,31 @@ export function buildHintingLedger(events: SessionEventLike[]) {
         typeof payload.rescueMode === "string"
           ? (payload.rescueMode as RescueMode)
           : "none";
+      const hintInitiator =
+        typeof payload.hintInitiator === "string"
+          ? (payload.hintInitiator as HintInitiator)
+          : "system_rescue";
+      const hintRequestTiming =
+        typeof payload.hintRequestTiming === "string"
+          ? (payload.hintRequestTiming as HintRequestTiming)
+          : "mid";
+      const momentumAtHint =
+        typeof payload.momentumAtHint === "string"
+          ? (payload.momentumAtHint as MomentumAtHint)
+          : "fragile";
       const cost =
         typeof payload.hintCost === "number"
           ? payload.hintCost
-          : estimateNonLinearHintCost({ tier, rescueMode });
+          : estimateNonLinearHintCost({ tier, rescueMode, hintInitiator, hintRequestTiming, momentumAtHint });
 
       return {
         hintLevel: hintLevel ?? null,
         tier,
         granularity,
         rescueMode,
+        hintInitiator,
+        hintRequestTiming,
+        momentumAtHint,
         cost,
       };
     });
@@ -144,6 +178,20 @@ export function buildHintingLedger(events: SessionEventLike[]) {
     L2_SPECIFIC: 0,
     L3_SOLUTION: 0,
   };
+  const byInitiator: Record<HintInitiator, number> = {
+    candidate_request: 0,
+    system_rescue: 0,
+  };
+  const byRequestTiming: Record<HintRequestTiming, number> = {
+    early: 0,
+    mid: 0,
+    late: 0,
+  };
+  const byMomentumAtHint: Record<MomentumAtHint, number> = {
+    productive: 0,
+    fragile: 0,
+    stalled: 0,
+  };
 
   let strongestHintLevel: CodingInterviewHintLevel | null = null;
   let strongestHintTier: HintTier | null = null;
@@ -153,6 +201,9 @@ export function buildHintingLedger(events: SessionEventLike[]) {
     byGranularity[hint.granularity] += 1;
     byRescueMode[hint.rescueMode] += 1;
     byTier[hint.tier] += 1;
+    byInitiator[hint.hintInitiator] += 1;
+    byRequestTiming[hint.hintRequestTiming] += 1;
+    byMomentumAtHint[hint.momentumAtHint] += 1;
     totalHintCost += hint.cost;
     strongestHintLevel = strongerHintLevel(strongestHintLevel, hint.hintLevel);
     strongestHintTier = strongerHintTier(strongestHintTier, hint.tier);
@@ -169,7 +220,22 @@ export function buildHintingLedger(events: SessionEventLike[]) {
     byGranularity,
     byRescueMode,
     byTier,
+    byInitiator,
+    byRequestTiming,
+    byMomentumAtHint,
   } satisfies HintLedger;
+}
+
+export function inferHintContext(input: {
+  currentStage: CodingInterviewStage;
+  signals: CandidateSignalSnapshot;
+  recentEvents?: SessionEventLike[];
+}) {
+  return {
+    hintInitiator: resolveHintInitiator(input.recentEvents ?? []),
+    hintRequestTiming: resolveHintRequestTiming(input.currentStage),
+    momentumAtHint: resolveMomentumAtHint(input.signals),
+  };
 }
 
 function strongerHintLevel(

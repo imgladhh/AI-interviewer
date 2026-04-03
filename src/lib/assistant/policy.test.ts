@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { resolveCodingInterviewPolicy } from "@/lib/assistant/policy";
 import { generateSessionReport } from "@/lib/evaluation/report";
 
@@ -67,7 +67,7 @@ describe("coding interview policy", () => {
     });
 
     expect(report.overallScore).toBeGreaterThan(0);
-    expect(report.dimensions).toHaveLength(5);
+    expect(report.dimensions).toHaveLength(6);
     expect(report.reportJson).toHaveProperty("stageJourney");
   });
 
@@ -87,3 +87,4 @@ describe("coding interview policy", () => {
     expect(policy.escalationReason).toBe("multiple_recent_failures");
   });
 });
+

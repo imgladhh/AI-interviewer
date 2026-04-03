@@ -1,8 +1,8 @@
-import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/interviewer-skills";
+﻿import { buildSkillsPrompt, DEFAULT_INTERVIEWER_SKILLS } from "@/lib/assistant/interviewer-skills";
 import { reviewInterviewerReply, type CriticVerdict } from "@/lib/assistant/critic";
 import { makeCandidateDecision, type CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { HintGranularity, RescueMode } from "@/lib/assistant/hinting_ledger";
-import type { HintTier } from "@/lib/assistant/hint_strategy";
+import type { HintTier, HintInitiator, HintRequestTiming, MomentumAtHint } from "@/lib/assistant/hint_strategy";
 import {
   formatCodingInterviewPolicy,
   resolveCodingInterviewPolicy,
@@ -69,6 +69,9 @@ type GenerateAssistantTurnResult = {
   hintGranularity?: HintGranularity;
   hintTier?: HintTier;
   hintCost?: number;
+  hintInitiator?: HintInitiator;
+  hintRequestTiming?: HintRequestTiming;
+  momentumAtHint?: MomentumAtHint;
   escalationReason?: string;
   usage?: {
     inputTokens: number;
@@ -366,6 +369,9 @@ async function generateWithOpenAI(
     hintGranularity: decision.hintGranularity,
     hintTier: decision.hintTier,
     hintCost: decision.hintCost,
+    hintInitiator: decision.hintInitiator,
+    hintRequestTiming: decision.hintRequestTiming,
+    momentumAtHint: decision.momentumAtHint,
     usage: {
       inputTokens,
       outputTokens: estimateTokens(enforcedReply),
@@ -474,6 +480,9 @@ async function* streamWithOpenAI(
         hintGranularity: decision.hintGranularity,
         hintTier: decision.hintTier,
         hintCost: decision.hintCost,
+        hintInitiator: decision.hintInitiator,
+        hintRequestTiming: decision.hintRequestTiming,
+        momentumAtHint: decision.momentumAtHint,
         usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
@@ -560,6 +569,9 @@ async function generateWithGemini(
     hintGranularity: decision.hintGranularity,
     hintTier: decision.hintTier,
     hintCost: decision.hintCost,
+    hintInitiator: decision.hintInitiator,
+    hintRequestTiming: decision.hintRequestTiming,
+    momentumAtHint: decision.momentumAtHint,
     usage: {
       inputTokens,
       outputTokens: estimateTokens(enforcedReply),
@@ -674,6 +686,9 @@ async function* streamWithGemini(
         hintGranularity: decision.hintGranularity,
         hintTier: decision.hintTier,
         hintCost: decision.hintCost,
+        hintInitiator: decision.hintInitiator,
+        hintRequestTiming: decision.hintRequestTiming,
+        momentumAtHint: decision.momentumAtHint,
         usage: {
         inputTokens,
         outputTokens: estimateTokens(final),
@@ -903,6 +918,9 @@ function generateFallbackTurn(
       hintGranularity: decision.hintGranularity,
       hintTier: decision.hintTier,
       hintCost: decision.hintCost,
+      hintInitiator: decision.hintInitiator,
+      hintRequestTiming: decision.hintRequestTiming,
+      momentumAtHint: decision.momentumAtHint,
       escalationReason: policy.escalationReason,
     };
   }
@@ -1772,4 +1790,11 @@ function collapseReply(reply: string) {
   const sentences = normalized.match(/[^.!?]+[.!?]?/g)?.map((part) => part.trim()).filter(Boolean) ?? [];
   return sentences.slice(0, 2).join(" ").trim();
 }
+
+
+
+
+
+
+
 
