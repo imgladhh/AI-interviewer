@@ -1,8 +1,8 @@
-import { Worker } from "bullmq";
+﻿import { Worker } from "bullmq";
 import { prisma } from "@/lib/db";
 import { logPersonaJobEvent } from "@/lib/persona/job-events";
 import { redis } from "@/lib/redis";
-import { runFakePersonaIngestion } from "@/lib/persona/fake-ingestion";
+import { runPersonaIngestion } from "@/lib/persona/ingest-public-profile";
 import { PERSONA_QUEUE_NAME, personaQueueEvents, type PersonaIngestionJobData } from "@/lib/persona/queue";
 
 const worker = new Worker<PersonaIngestionJobData>(
@@ -34,7 +34,7 @@ const worker = new Worker<PersonaIngestionJobData>(
     });
 
     await job.updateProgress(45);
-    await runFakePersonaIngestion(job.data.interviewerProfileId, job.attemptsMade + 1);
+    await runPersonaIngestion(job.data.interviewerProfileId, job.attemptsMade + 1);
     await job.updateProgress(100);
   },
   {
@@ -147,3 +147,4 @@ async function shutdown(signal: string) {
 
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
+

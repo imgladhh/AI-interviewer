@@ -279,5 +279,68 @@ describe("generateSessionReport", () => {
     expect(evidenceTrace.some((item) => item.category === "Counterfactual")).toBe(true);
     expect(momentsOfTruth.some((item) => item.title === "Earned a self-correction window")).toBe(true);
   });
+  it("prefers persisted snapshots when building the latest state and stage replay", () => {
+    const report = generateSessionReport({
+      sessionId: "session-5",
+      questionTitle: "Two Sum",
+      transcripts: [
+        { speaker: "USER", text: "I would use a hash map." },
+      ],
+      events: [
+        { eventType: "STAGE_ADVANCED", payloadJson: { stage: "IMPLEMENTATION" } },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            stage: "IMPLEMENTATION",
+            signals: {
+              understanding: "partial",
+              progress: "stuck",
+              summary: "Old event-backed signal.",
+            },
+          },
+        },
+      ],
+      executionRuns: [{ status: "PASSED", stdout: "ok" }],
+      candidateStateSnapshots: [
+        {
+          id: "snap-1",
+          stage: "WRAP_UP",
+          snapshotJson: {
+            understanding: "clear",
+            progress: "done",
+            communication: "clear",
+            codeQuality: "correct",
+            algorithmChoice: "strong",
+            edgeCaseAwareness: "present",
+            behavior: "structured",
+            reasoningDepth: "deep",
+            testingDiscipline: "strong",
+            complexityRigor: "strong",
+            confidence: 0.93,
+            summary: "Persisted snapshot should win.",
+          },
+          createdAt: new Date("2026-04-02T20:00:00.000Z"),
+        },
+      ],
+      interviewerDecisionSnapshots: [
+        {
+          id: "dec-1",
+          stage: "WRAP_UP",
+          decisionJson: {
+            action: "move_to_wrap_up",
+            target: "summary",
+            question: "Give me a concise final wrap-up.",
+            confidence: 0.88,
+          },
+          createdAt: new Date("2026-04-02T20:00:01.000Z"),
+        },
+      ],
+    });
+
+    const reportJson = report.reportJson as Record<string, unknown>;
+    expect((reportJson.candidateState as Record<string, unknown>).summary).toBe("Persisted snapshot should win.");
+    expect((reportJson.latestDecision as Record<string, unknown>).action).toBe("move_to_wrap_up");
+    expect(JSON.stringify(reportJson.stageReplay)).toMatch(/Persisted snapshot should win|move_to_wrap_up/);
+  });
 });
 

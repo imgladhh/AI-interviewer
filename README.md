@@ -14,13 +14,13 @@ This repo now has a working MVP-plus skeleton with:
 - Persona queue observability in both setup UI and admin dashboard
 - Interview room with transcript persistence, stage-governed assistant turns, Monaco editor, local code execution, and streaming AI replies
 - Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, actionable improvements, and product-facing candidate profiling
-- Evidence-based report pipeline with candidate-state snapshots, interviewer decisions, and shared replay evidence across report and admin
+- Snapshot-first report/admin pipeline with canonical candidate-state and interviewer-decision snapshots, plus shared replay evidence across report and admin
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
 - Dedicated STT handoff for spoken candidate turns, with provider selection and browser transcript fallback
 - Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, low-cost mode controls, and switchable STT providers
 - `Vitest` unit/route tests and `Playwright` end-to-end tests
-- Full `Vitest` coverage is now green locally again (`173 passed / 31 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
+- Full `Vitest` coverage is now green locally again (`176 passed / 33 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
 
 ## Recent Progress
 
@@ -113,15 +113,15 @@ This repo now has a working MVP-plus skeleton with:
 - decision_engine now avoids immediately repeating `testing`, `edge_case`, `complexity`, and `tradeoff` targets once the candidate has already supplied the relevant evidence, and instead moves the interview forward.
 - interviewer closure logic now explicitly models `move_to_wrap_up`, `close_topic`, and `end_interview`, so once evidence is saturated the system stops saying `Keep going` and closes the topic cleanly.
 - critic verdicts now track `evidenceAlreadySaturated` and `recommendedClosure`, so repeated wrap-up, summary, testing, and complexity loops can be converted into explicit closure turns instead of more probing.
-- Candidate-state and interviewer-decision snapshots now have dedicated persistence tables in addition to the existing session-event trail, so state tracking can migrate away from event-only replay over time.
+- Candidate-state and interviewer-decision snapshots now have dedicated persistence tables plus snapshot-first read helpers, so `/admin` and `/report` can load canonical state without replaying the full event stream at runtime.
 - Added tests for signal extraction, decision logic, evidence-based reporting, reply strategy shaping, provider compliance handling, and provider fallback ordering.
 - signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
 - /admin and /report now group observed candidate issues by Correctness, Testing, Complexity, and Debugging so interviewer quality is easier to inspect at a glance.
 - /admin and /report replay now surface unresolved issues, missing evidence, answered targets, collected evidence, and the current evidence focus so interviewer pacing is easier to debug visually.
-- `/admin` and `/report` now also surface the latest interviewer `pressure`, critic `Worth Asking`, and critic `Worth Reason` as top-level summary cards instead of hiding them only in replay payloads.
+- `/admin` and `/report` now also surface the latest interviewer `pressure`, critic `Worth Asking`, and critic `Worth Reason` as top-level summary cards instead of hiding them only in replay payloads.`r`n- `/report/[id]` stage replay is now grouped by stage from canonical snapshots plus event evidence, which makes product-facing replay much closer to a real interview debrief.
 - Added `hinting_ledger.ts` so the interviewer can classify hint granularity, rescue mode, and hint cost instead of only recording that a hint happened.
 - decision_engine hint actions now carry `rescueMode`, `hintGranularity`, and `hintCost`, so rescue behavior is explicit rather than buried in generic hint metadata.
-- report generation now aggregates hint cost, strongest hint level, rescue-mode mix, and a small hint-penalty signal so feedback reflects not just whether help happened, but how much help the candidate needed.
+- report generation now aggregates hint cost, strongest hint level, rescue-mode mix, efficiency score, and coachability so feedback reflects not just whether help happened, but how much help the candidate needed and how efficiently the candidate converted signals into evidence.
 - report generation now produces deeper evidence traces, execution-aware evaluation signals, candidate DNA, moments of truth, and rubric summaries so the final report reads more like a real interview debrief than a generic AI recap.
 
 ## What Works Today
@@ -219,10 +219,10 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, pressure selection, and closure timing
 - `src/lib/assistant/hinting_ledger.ts`: hint granularity, rescue-mode classification, and hint-cost aggregation
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
-- `src/lib/evaluation/report.ts`: evidence-based report generation, execution-aware scoring, candidate DNA profiling, and moment-of-truth extraction
-- `src/lib/session/snapshots.ts`: best-effort persistence for candidate-state and interviewer-decision snapshots
+- `src/lib/evaluation/report.ts`: snapshot-aware, rubric-driven report generation with evidence trace, execution-aware scoring, candidate DNA profiling, and moment-of-truth extraction
+- `src/lib/session/snapshots.ts`: best-effort persistence plus snapshot-first read helpers for candidate-state and interviewer-decision snapshots`r`n- `src/lib/session/state.ts`: canonical snapshot-state aggregation for report/admin consumers
 - `src/lib/persona/queue.ts`: BullMQ queue helpers
-- `src/lib/persona/fake-ingestion.ts`: local persona ingestion simulation
+- `src/lib/persona/ingest-public-profile.ts`: public-profile fetching, heuristic extraction, and persona synthesis with graceful fallback
 - `src/lib/persona/job-events.ts`: persona event persistence
 - `src/lib/voice/browser-voice-adapter.ts`: browser speech recognition and synthesis adapter
 - `src/lib/voice/turn-taking.ts`: interruption-aware silence and commit timing policy
@@ -343,7 +343,7 @@ npm run build
 
 ## Known Limitations
 
-- Persona ingestion is still simulated; it does not yet fetch and summarize real public web pages
+- Public persona ingestion now attempts real public-page fetching and heuristic extraction, but still falls back when sources are blocked, sparse, or hostile to scraping
 - Realtime AI conversation is still browser speech recognition plus `SSE` streaming rather than a full duplex low-latency voice stack
 - Browser speech recognition depends on Web Speech API availability and varies by browser
 - Dedicated STT and provider-first voice mode now support a switchable provider layer, with OpenAI and AssemblyAI options
@@ -353,7 +353,7 @@ npm run build
 - Code execution is local-process based and currently supports Python and JavaScript only
 - Authentication is still stubbed around a demo user
 - Evaluation/report is still lightweight compared with a full rubric system, but it now includes evidence-backed state, replay, timing metadata, and hint-cost accounting
-- Replay is currently heuristic and event-driven, not yet a full stage-grouped interview playback view
+- Snapshot-first state is in place for `/admin` and `/report`, but the replay view still mixes canonical snapshots with event evidence rather than a full transcript-native playback model
 - Prisma generation on Windows can fail if `dev` or `worker` processes are locking the Prisma engine file.
 - After applying the 20260328020000_session_state_snapshots migration to the local Docker Postgres, session snapshot persistence now requires the app process to be restarted once if it had previously auto-disabled snapshot writes due to missing tables.
 
@@ -363,9 +363,9 @@ npm run build
 
 - Group report replay by stage and add richer per-stage evidence
 - Push LLM-backed signal extraction deeper and persist candidate-state snapshots outside the event stream
-- Move `/admin` and `/report` read paths gradually from event-derived state to snapshot-first state loading
+- Keep hardening snapshot-first state loading and reduce the remaining event-derived fallback paths
 - Continue strengthening typed interviewer quality through richer decision actions and action-specific reply shaping
-- Replace fake persona ingestion with real public-page fetching, extraction, and summarization
+- Harden real persona ingestion with better extraction quality, retry behavior, and source-specific heuristics
 - Expand code execution from local process execution to a stronger sandbox model
 - Evolve report generation from v0 into a more rubric-driven evaluation pipeline
 - Push provider-first voice mode from periodic preview to true streaming STT/VAD
@@ -409,6 +409,8 @@ npm run build
 
 - System design mode
 - Personalized study history and analytics
+
+
 
 
 

@@ -3,6 +3,7 @@ import { generateSessionReport } from "@/lib/evaluation/report";
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
+import { readCandidateStateSnapshots, readInterviewerDecisionSnapshots } from "@/lib/session/snapshots";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -57,6 +58,11 @@ export async function POST(_: Request, { params }: RouteContext) {
     return fail("Interview session not found", 404);
   }
 
+  const [candidateStateSnapshots, interviewerDecisionSnapshots] = await Promise.all([
+    readCandidateStateSnapshots(id),
+    readInterviewerDecisionSnapshots(id),
+  ]);
+
   await prisma.sessionEvent.create({
     data: {
       sessionId: id,
@@ -84,6 +90,20 @@ export async function POST(_: Request, { params }: RouteContext) {
       stderr: run.stderr,
       runtimeMs: run.runtimeMs,
       createdAt: run.createdAt,
+    })),
+    candidateStateSnapshots: candidateStateSnapshots.map((row) => ({
+      id: row.id,
+      stage: row.stage,
+      source: row.source,
+      snapshotJson: row.snapshotJson,
+      createdAt: row.createdAt,
+    })),
+    interviewerDecisionSnapshots: interviewerDecisionSnapshots.map((row) => ({
+      id: row.id,
+      stage: row.stage,
+      source: row.source,
+      decisionJson: row.decisionJson,
+      createdAt: row.createdAt,
     })),
   });
 
@@ -182,3 +202,7 @@ export async function POST(_: Request, { params }: RouteContext) {
     { status: 201 },
   );
 }
+
+
+
+

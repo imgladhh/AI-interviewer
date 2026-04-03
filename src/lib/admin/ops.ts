@@ -2,6 +2,8 @@
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import { assessLatentCalibration, type LatentCalibration } from "@/lib/assistant/latent_calibration";
 import { assessFlowState, type FlowState } from "@/lib/assistant/flow_state";
+import { buildSessionSnapshotState } from "@/lib/session/state";
+import { readCandidateStateSnapshots, readInterviewerDecisionSnapshots } from "@/lib/session/snapshots";
 import { describeCodingStage, isCodingInterviewStage } from "@/lib/assistant/stages";
 import { getPersonaJobSnapshot, type PersonaJobSnapshot } from "@/lib/persona/queue";
 
@@ -125,7 +127,7 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
         include: {
           events: {
             orderBy: { eventTime: "desc" },
-            take: 20,
+            take: 40,
           },
         },
       },
@@ -163,6 +165,17 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
     })),
   );
   const latestSession = profile.sessions[0] ?? null;
+  const latestSessionSnapshotData = latestSession
+    ? await Promise.all([
+        readCandidateStateSnapshots(latestSession.id),
+        readInterviewerDecisionSnapshots(latestSession.id),
+        prisma.executionRun.findMany({
+          where: { sessionId: latestSession.id },
+          orderBy: { createdAt: "asc" },
+          take: 10,
+        }),
+      ])
+    : null;
 
   return {
     profile: {
@@ -180,7 +193,15 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
     job,
     personaEvents,
     sessionEvents,
-    sessionSummary: latestSession ? summarizeSession(latestSession.id, latestSession.events) : null,
+    sessionSummary:
+      latestSession && latestSessionSnapshotData
+        ? summarizeSession({
+            ...latestSession,
+            candidateStateSnapshots: latestSessionSnapshotData[0],
+            interviewerDecisionSnapshots: latestSessionSnapshotData[1],
+            executionRuns: latestSessionSnapshotData[2],
+          })
+        : null,
   };
 }
 
@@ -238,22 +259,21 @@ function buildPersonaEventDescription(eventType: string, payloadJson: unknown) {
   return "Persona pipeline event recorded.";
 }
 
-function summarizeSession(
-  sessionId: string,
-  events: Array<{ eventType: string; eventTime: Date; payloadJson: unknown }>,
-): SessionSummary {
-  const ordered = [...events].sort((left, right) => left.eventTime.getTime() - right.eventTime.getTime());
+function summarizeSession(session: {
+  id: string;
+  events: Array<{ eventType: string; eventTime: Date; payloadJson: unknown }>;
+  candidateStateSnapshots: Array<{ id: string; stage: string | null; source: string | null; snapshotJson: unknown; createdAt: Date }>;
+  interviewerDecisionSnapshots: Array<{ id: string; stage: string | null; source: string | null; decisionJson: unknown; createdAt: Date }>;
+  executionRuns: Array<{ status: "PASSED" | "FAILED" | "ERROR" | "TIMEOUT"; stdout: string | null; stderr: string | null; createdAt: Date }>;
+}): SessionSummary {
+  const ordered = [...session.events].sort((left, right) => left.eventTime.getTime() - right.eventTime.getTime());
   const stageEvents = ordered.filter((event) => event.eventType === "STAGE_ADVANCED");
   const stageJourneyRaw = stageEvents
     .map((event) => stringValue(asRecord(event.payloadJson).stage))
     .filter((value): value is string => Boolean(value));
   const currentStage = stageJourneyRaw.at(-1) ?? "PROBLEM_UNDERSTANDING";
-  const latestSignalEvent = [...ordered].reverse().find((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED");
-  const latestDecisionEvent = [...ordered].reverse().find((event) => event.eventType === "DECISION_RECORDED");
   const latestCriticEvent = [...ordered].reverse().find((event) => event.eventType === "CRITIC_VERDICT_RECORDED");
   const latestCodeRunEvent = [...ordered].reverse().find((event) => event.eventType === "CODE_RUN_COMPLETED");
-  const latestSignals = latestSignalEvent ? asRecord(asRecord(latestSignalEvent.payloadJson).signals) : null;
-  const latestDecision = latestDecisionEvent ? asRecord(asRecord(latestDecisionEvent.payloadJson).decision) : null;
   const latestCritic = latestCriticEvent ? asRecord(asRecord(latestCriticEvent.payloadJson).criticVerdict) : null;
   const hintCount = ordered.filter((event) => event.eventType === "HINT_SERVED").length;
   const failedRunCount = ordered.filter((event) => {
@@ -265,68 +285,31 @@ function summarizeSession(
     return status === "FAILED" || status === "ERROR" || status === "TIMEOUT";
   }).length;
 
-  const ledger =
-    latestSignals
-      ? buildMemoryLedger({
-          currentStage: isCodingInterviewStage(currentStage) ? currentStage : "PROBLEM_UNDERSTANDING",
-          recentEvents: ordered.map((event) => ({
-            eventType: event.eventType,
-            payloadJson: event.payloadJson,
-          })),
-          signals: latestSignals as never,
-          latestExecutionRun: latestCodeRunEvent
-            ? ({
-                status: stringValue(asRecord(latestCodeRunEvent.payloadJson).status) as
-                  | "PASSED"
-                  | "FAILED"
-                  | "ERROR"
-                  | "TIMEOUT",
-                stdout: stringValue(asRecord(latestCodeRunEvent.payloadJson).stdout) ?? null,
-                stderr: stringValue(asRecord(latestCodeRunEvent.payloadJson).stderr) ?? null,
-              } as const)
-            : null,
-        })
-      : null;
-  const latentCalibration =
-    latestSignals && ledger
-      ? assessLatentCalibration({
-          signals: latestSignals as never,
-          ledger,
-          latestExecutionRun: latestCodeRunEvent
-            ? ({
-                status: stringValue(asRecord(latestCodeRunEvent.payloadJson).status) as
-                  | "PASSED"
-                  | "FAILED"
-                  | "ERROR"
-                  | "TIMEOUT",
-              } as const)
-            : null,
-        })
-      : null;
-  const flowState =
-    latestSignals
-      ? assessFlowState({
-          currentStage: isCodingInterviewStage(currentStage) ? currentStage : "PROBLEM_UNDERSTANDING",
-          signals: latestSignals as never,
-          recentTranscripts: [],
-        })
-      : null;
+  const snapshotState = buildSessionSnapshotState({
+    currentStage,
+    events: ordered,
+    candidateStateSnapshots: session.candidateStateSnapshots,
+    interviewerDecisionSnapshots: session.interviewerDecisionSnapshots,
+    executionRuns: session.executionRuns,
+  });
 
   return {
-    sessionId,
+    sessionId: session.id,
     currentStage,
     currentStageLabel: describeStage(currentStage) ?? currentStage,
     stageJourney: [...new Set(stageJourneyRaw.map((stage) => describeStage(stage) ?? stage))],
-    latestSignals,
-    latestDecision,
+    latestSignals: snapshotState.latestSignals,
+    latestDecision: snapshotState.latestDecision,
     latestCritic,
-    latentCalibration,
-    flowState,
-    answeredTargets: ledger?.answeredTargets ?? [],
-    collectedEvidence: ledger?.collectedEvidence ?? [],
-    unresolvedIssues: ledger?.unresolvedIssues ?? [],
-    missingEvidence: ledger?.missingEvidence ?? [],
-    evidenceFocus: latestDecision ? stringValue(latestDecision.specificIssue) ?? stringValue(latestDecision.target) : null,
+    latentCalibration: snapshotState.latentCalibration,
+    flowState: snapshotState.flowState,
+    answeredTargets: snapshotState.ledger?.answeredTargets ?? [],
+    collectedEvidence: snapshotState.ledger?.collectedEvidence ?? [],
+    unresolvedIssues: snapshotState.ledger?.unresolvedIssues ?? [],
+    missingEvidence: snapshotState.ledger?.missingEvidence ?? [],
+    evidenceFocus: snapshotState.latestDecision
+      ? stringValue(asRecord(snapshotState.latestDecision).specificIssue) ?? stringValue(asRecord(snapshotState.latestDecision).target)
+      : null,
     latestCodeRunStatus: latestCodeRunEvent ? stringValue(asRecord(latestCodeRunEvent.payloadJson).status) : null,
     hintCount,
     failedRunCount,
@@ -727,6 +710,11 @@ function describeStage(value: unknown) {
 
   return describeCodingStage(value);
 }
+
+
+
+
+
 
 
 

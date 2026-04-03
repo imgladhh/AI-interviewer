@@ -26,6 +26,22 @@ type ExecutionRunLike = {
   createdAt?: Date | string;
 };
 
+type CandidateStateSnapshotLike = {
+  id?: string;
+  stage?: string | null;
+  source?: string | null;
+  snapshotJson: unknown;
+  createdAt?: Date | string;
+};
+
+type InterviewerDecisionSnapshotLike = {
+  id?: string;
+  stage?: string | null;
+  source?: string | null;
+  decisionJson: unknown;
+  createdAt?: Date | string;
+};
+
 type SessionReportInput = {
   sessionId: string;
   questionTitle: string;
@@ -35,6 +51,8 @@ type SessionReportInput = {
   transcripts: TranscriptLike[];
   events: SessionEventLike[];
   executionRuns: ExecutionRunLike[];
+  candidateStateSnapshots?: CandidateStateSnapshotLike[];
+  interviewerDecisionSnapshots?: InterviewerDecisionSnapshotLike[];
 };
 
 type DimensionScore = {
@@ -165,9 +183,16 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     latestExecutionRun: input.executionRuns[0] ?? null,
   });
   const stageJourney = buildStageJourney(input.events, currentStage);
-  const stageReplay = buildStageReplay(input.events, input.transcripts, stageJourney, currentStage);
-  const latestSignal = findLatestSignalSnapshot(input.events);
-  const latestDecision = findLatestDecisionSnapshot(input.events);
+  const stageReplay = buildStageReplay(
+    input.events,
+    input.transcripts,
+    stageJourney,
+    currentStage,
+    input.candidateStateSnapshots ?? [],
+    input.interviewerDecisionSnapshots ?? [],
+  );
+  const latestSignal = findLatestSignalSnapshot(input.events, input.candidateStateSnapshots ?? []);
+  const latestDecision = findLatestDecisionSnapshot(input.events, input.interviewerDecisionSnapshots ?? []);
   const hintRequestedCount = input.events.filter((event) => event.eventType === "HINT_REQUESTED").length;
   const hintServedCount = input.events.filter((event) => event.eventType === "HINT_SERVED").length;
   const hintLedger = buildHintingLedger(input.events);
@@ -578,6 +603,8 @@ function buildStageReplay(
   transcripts: TranscriptLike[],
   stageJourney: string[],
   currentStage: string,
+  candidateStateSnapshots: CandidateStateSnapshotLike[] = [],
+  interviewerDecisionSnapshots: InterviewerDecisionSnapshotLike[] = [],
 ): StageReplayGroup[] {
   const orderedStages = [...stageJourney];
   const currentLabel = describeCodingStageSafe(currentStage);
@@ -586,65 +613,91 @@ function buildStageReplay(
   }
 
   const groups = new Map<string, StageReplayGroup>();
+  const ensureGroup = (stageLabel: string) => {
+    if (!groups.has(stageLabel)) {
+      groups.set(stageLabel, {
+        stage: stageLabel,
+        label: stageLabel,
+        evidence: [],
+        signalSnapshots: [],
+        decisions: [],
+        turns: [],
+      });
+      if (!orderedStages.includes(stageLabel)) {
+        orderedStages.push(stageLabel);
+      }
+    }
+    return groups.get(stageLabel)!;
+  };
+
   for (const stage of orderedStages) {
-    groups.set(stage, {
-      stage,
-      label: stage,
-      evidence: [],
-      signalSnapshots: [],
-      decisions: [],
-      turns: [],
-    });
+    ensureGroup(stage);
   }
 
+  const useSnapshotSignals = candidateStateSnapshots.length > 0;
+  const useSnapshotDecisions = interviewerDecisionSnapshots.length > 0;
   let activeStage = orderedStages[0] ?? currentLabel;
   let turnIndex = 0;
 
   for (const event of events) {
     if (event.eventType === "STAGE_ADVANCED") {
       const nextStage = describeCodingStageSafe(stringValue(asRecord(event.payloadJson).stage) ?? activeStage);
-      if (groups.has(nextStage)) {
-        activeStage = nextStage;
-      }
-      groups.get(activeStage)?.evidence.push(`Stage advanced: ${buildStageAdvanceEvidence(asRecord(event.payloadJson))}`);
+      activeStage = nextStage;
+      ensureGroup(activeStage).evidence.push(`Stage advanced: ${buildStageAdvanceEvidence(asRecord(event.payloadJson))}`);
       continue;
     }
 
-    if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+    if (!useSnapshotSignals && event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
       const payload = asRecord(event.payloadJson);
       const stage = describeCodingStageSafe(stringValue(payload.stage) ?? activeStage);
-      const target = groups.get(stage) ?? groups.get(activeStage);
+      const target = ensureGroup(stage);
       const signals = asRecord(payload.signals) as unknown as CandidateSignalSummary;
-      target?.signalSnapshots.push(signals);
-      target?.evidence.push(`Signal snapshot: ${signals.summary ?? "candidate state updated"}.`);
+      target.signalSnapshots.push(signals);
+      target.evidence.push(`Signal snapshot: ${signals.summary ?? "candidate state updated"}.`);
       continue;
     }
 
-    if (event.eventType === "DECISION_RECORDED") {
+    if (!useSnapshotDecisions && event.eventType === "DECISION_RECORDED") {
       const payload = asRecord(event.payloadJson);
       const stage = describeCodingStageSafe(stringValue(payload.stage) ?? activeStage);
-      const target = groups.get(stage) ?? groups.get(activeStage);
+      const target = ensureGroup(stage);
       const decision = asRecord(payload.decision) as unknown as CandidateDecisionSummary;
-      target?.decisions.push(decision);
-      target?.evidence.push(`Decision: ${decision.action ?? "unknown action"} toward ${decision.target ?? "unknown target"}.`);
+      target.decisions.push(decision);
+      target.evidence.push(`Decision: ${decision.action ?? "unknown action"} toward ${decision.target ?? "unknown target"}.`);
       continue;
     }
 
     if (event.eventType === "HINT_SERVED") {
-      groups.get(activeStage)?.evidence.push(`Hint served: ${(stringValue(asRecord(event.payloadJson).hintLevel) ?? "LIGHT").toLowerCase()} ${(stringValue(asRecord(event.payloadJson).hintStyle) ?? "hint").replaceAll("_", " ").toLowerCase()}${stringValue(asRecord(event.payloadJson).rescueMode) ? ` / ${stringValue(asRecord(event.payloadJson).rescueMode)?.replaceAll("_", " ")}` : ""}${typeof asRecord(event.payloadJson).hintCost === "number" ? ` / cost ${Number(asRecord(event.payloadJson).hintCost).toFixed(2)}` : ""}.`);
+      ensureGroup(activeStage).evidence.push(`Hint served: ${(stringValue(asRecord(event.payloadJson).hintLevel) ?? "LIGHT").toLowerCase()} ${(stringValue(asRecord(event.payloadJson).hintStyle) ?? "hint").replaceAll("_", " ").toLowerCase()}${stringValue(asRecord(event.payloadJson).rescueMode) ? ` / ${stringValue(asRecord(event.payloadJson).rescueMode)?.replaceAll("_", " ")}` : ""}${typeof asRecord(event.payloadJson).hintCost === "number" ? ` / cost ${Number(asRecord(event.payloadJson).hintCost).toFixed(2)}` : ""}.`);
       continue;
     }
 
     if (event.eventType === "CODE_RUN_COMPLETED") {
       const payload = asRecord(event.payloadJson);
-      groups.get(activeStage)?.evidence.push(`Code run result: ${stringValue(payload.status) ?? "unknown"}.`);
+      ensureGroup(activeStage).evidence.push(`Code run result: ${stringValue(payload.status) ?? "unknown"}.`);
       continue;
     }
   }
 
+  for (const row of candidateStateSnapshots) {
+    const stage = describeCodingStageSafe(typeof row.stage === "string" ? row.stage : currentStage);
+    const target = ensureGroup(stage);
+    const signals = asRecord(row.snapshotJson) as unknown as CandidateSignalSummary;
+    target.signalSnapshots.push(signals);
+    target.evidence.push(`Signal snapshot: ${signals.summary ?? "candidate state updated"}.`);
+  }
+
+  for (const row of interviewerDecisionSnapshots) {
+    const stage = describeCodingStageSafe(typeof row.stage === "string" ? row.stage : currentStage);
+    const target = ensureGroup(stage);
+    const decision = asRecord(row.decisionJson) as unknown as CandidateDecisionSummary;
+    target.decisions.push(decision);
+    target.evidence.push(`Decision: ${decision.action ?? "unknown action"} toward ${decision.target ?? "unknown target"}.`);
+  }
+
   for (const segment of transcripts.filter((item) => item.speaker !== "SYSTEM")) {
     const stage = orderedStages[Math.min(turnIndex, orderedStages.length - 1)] ?? currentLabel;
-    groups.get(stage)?.turns.push({
+    ensureGroup(stage).turns.push({
       speaker: segment.speaker,
       text: truncate(segment.text, 160),
     });
@@ -995,7 +1048,15 @@ function prettifyArea(value: string) {
     .join(" ");
 }
 
-function findLatestSignalSnapshot(events: SessionEventLike[]) {
+function findLatestSignalSnapshot(
+  events: SessionEventLike[],
+  candidateStateSnapshots: CandidateStateSnapshotLike[] = [],
+) {
+  const latestSnapshot = candidateStateSnapshots.at(-1);
+  if (latestSnapshot) {
+    return asRecord(latestSnapshot.snapshotJson) as unknown as CandidateSignalSummary;
+  }
+
   const latestSignalEvent = [...events]
     .reverse()
     .find((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED");
@@ -1006,7 +1067,15 @@ function findLatestSignalSnapshot(events: SessionEventLike[]) {
   return asRecord(asRecord(latestSignalEvent.payloadJson).signals) as unknown as CandidateSignalSummary;
 }
 
-function findLatestDecisionSnapshot(events: SessionEventLike[]) {
+function findLatestDecisionSnapshot(
+  events: SessionEventLike[],
+  interviewerDecisionSnapshots: InterviewerDecisionSnapshotLike[] = [],
+) {
+  const latestSnapshot = interviewerDecisionSnapshots.at(-1);
+  if (latestSnapshot) {
+    return asRecord(latestSnapshot.decisionJson) as unknown as CandidateDecisionSummary;
+  }
+
   const latestDecisionEvent = [...events]
     .reverse()
     .find((event) => event.eventType === "DECISION_RECORDED");
@@ -1268,6 +1337,13 @@ function buildCounterfactualSummary(events: SessionEventLike[]): CounterfactualS
     shouldWaitBeforeIntervening: criticEvents.some((verdict) => verdict.shouldWaitBeforeIntervening === true),
   };
 }
+
+
+
+
+
+
+
 
 
 

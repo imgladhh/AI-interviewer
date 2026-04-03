@@ -1,6 +1,8 @@
 ﻿import Link from "next/link";
 import { notFound } from "next/navigation";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
+import { buildSessionSnapshotState } from "@/lib/session/state";
+import { readCandidateStateSnapshots, readInterviewerDecisionSnapshots } from "@/lib/session/snapshots";
 import { isCodingInterviewStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
 
@@ -196,6 +198,11 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     notFound();
   }
 
+  const [candidateStateSnapshots, interviewerDecisionSnapshots] = await Promise.all([
+    readCandidateStateSnapshots(session.id),
+    readInterviewerDecisionSnapshots(session.id),
+  ]);
+
   if (!session.feedbackReport) {
     return (
       <main style={pageStyle}>
@@ -218,6 +225,19 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
   }
 
   const reportJson = asReportJson(session.feedbackReport.reportJson);
+  const snapshotState = buildSessionSnapshotState({
+    currentStage: typeof reportJson.currentStage === "string" ? reportJson.currentStage : null,
+    events: session.events,
+    candidateStateSnapshots: candidateStateSnapshots,
+    interviewerDecisionSnapshots: interviewerDecisionSnapshots,
+    executionRuns: session.executionRuns,
+  });
+  if (!reportJson.candidateState && snapshotState.latestSignals) {
+    reportJson.candidateState = snapshotState.latestSignals as CandidateState;
+  }
+  if (!reportJson.latestDecision && snapshotState.latestDecision) {
+    reportJson.latestDecision = snapshotState.latestDecision as LatestDecision;
+  }
   const dimensions = normalizeDimensions(reportJson.dimensions, session.evaluation?.dimensionScores ?? []);
   const replayItems = buildReplayItems({
     events: session.events,
@@ -231,7 +251,8 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     .find((event) => event.eventType === 'CRITIC_VERDICT_RECORDED');
   const latestCritic = latestCriticEvent ? asRecord(asRecord(latestCriticEvent.payloadJson).criticVerdict) : null;
   const reportLedger =
-    reportJson.candidateState
+    snapshotState.ledger ??
+    (reportJson.candidateState
       ? buildMemoryLedger({
           currentStage:
             typeof reportJson.currentStage === "string" && isCodingInterviewStage(reportJson.currentStage)
@@ -247,7 +268,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
               } as const)
             : null,
         })
-      : null;
+      : null);
 
   return (
     <main style={pageStyle}>
@@ -1332,6 +1353,12 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
+
+
+
+
+
 
 
 
