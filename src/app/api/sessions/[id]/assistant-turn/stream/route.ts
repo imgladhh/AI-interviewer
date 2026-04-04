@@ -2,8 +2,10 @@
 import { fail } from "@/lib/http";
 import { streamAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
+import { enforceSessionBudgetLimit } from "@/lib/session/budget-enforcement";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { persistSessionSnapshots } from "@/lib/session/snapshots";
+import { assessSessionBudget, buildBudgetExceededReply } from "@/lib/usage/budget";
 import { resolveLowCostMode } from "@/lib/usage/cost";
 
 type RouteContext = {
@@ -42,6 +44,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     latestExecutionRun: session.executionRuns[0] ?? null,
   });
   const lowCostMode = resolveLowCostMode(session.events);
+  const initialBudget = assessSessionBudget(session.events);
 
   const input = {
     mode: session.mode,
@@ -76,6 +79,37 @@ export async function POST(request: Request, { params }: RouteContext) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
+        if (initialBudget.exceeded && !session.endedAt) {
+          const budgetReply = buildBudgetExceededReply(initialBudget);
+          const result = await enforceSessionBudgetLimit({
+            sessionId: id,
+            currentStage,
+            source: "system",
+            reply: budgetReply,
+            existingTranscriptCount: session.transcripts.length,
+            budget: initialBudget,
+            lowCostMode,
+          });
+
+          controller.enqueue(
+            encoder.encode(
+              `event: done\ndata: ${JSON.stringify({
+                transcript: result.transcript,
+                events: result.events,
+                meta: {
+                  source: "system",
+                  currentStage,
+                  suggestedStage: null,
+                  budgetExceeded: true,
+                  budget: initialBudget,
+                },
+              })}\n\n`,
+            ),
+          );
+          controller.close();
+          return;
+        }
+
         let finalTurn:
           | {
               reply: string;
@@ -126,6 +160,46 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (!finalTurn || request.signal.aborted) {
+          controller.close();
+          return;
+        }
+
+        const projectedBudget = assessSessionBudget(session.events, finalTurn.usage?.estimatedCostUsd ?? 0);
+        if (projectedBudget.exceeded && !session.endedAt) {
+          const budgetReply = buildBudgetExceededReply(projectedBudget);
+          const result = await enforceSessionBudgetLimit({
+            sessionId: id,
+            currentStage,
+            source: finalTurn.source,
+            reply: budgetReply,
+            usage: finalTurn.usage
+              ? {
+                  model: finalTurn.model ?? null,
+                  inputTokens: finalTurn.usage.inputTokens,
+                  outputTokens: finalTurn.usage.outputTokens,
+                  estimatedCostUsd: finalTurn.usage.estimatedCostUsd,
+                }
+              : null,
+            existingTranscriptCount: session.transcripts.length,
+            budget: projectedBudget,
+            lowCostMode,
+          });
+
+          controller.enqueue(
+            encoder.encode(
+              `event: done\ndata: ${JSON.stringify({
+                transcript: result.transcript,
+                events: result.events,
+                meta: {
+                  source: finalTurn.source,
+                  currentStage,
+                  suggestedStage: null,
+                  budgetExceeded: true,
+                  budget: projectedBudget,
+                },
+              })}\n\n`,
+            ),
+          );
           controller.close();
           return;
         }

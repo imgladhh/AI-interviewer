@@ -2,8 +2,10 @@
 import { fail, ok } from "@/lib/http";
 import { generateAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
+import { enforceSessionBudgetLimit } from "@/lib/session/budget-enforcement";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { persistSessionSnapshots } from "@/lib/session/snapshots";
+import { assessSessionBudget, buildBudgetExceededReply } from "@/lib/usage/budget";
 import { resolveLowCostMode } from "@/lib/usage/cost";
 
 type RouteContext = {
@@ -42,6 +44,32 @@ export async function POST(_: Request, { params }: RouteContext) {
     latestExecutionRun: session.executionRuns[0] ?? null,
   });
   const lowCostMode = resolveLowCostMode(session.events);
+  const initialBudget = assessSessionBudget(session.events);
+
+  if (initialBudget.exceeded && !session.endedAt) {
+    const budgetReply = buildBudgetExceededReply(initialBudget);
+    const result = await enforceSessionBudgetLimit({
+      sessionId: id,
+      currentStage,
+      source: "system",
+      reply: budgetReply,
+      existingTranscriptCount: session.transcripts.length,
+      budget: initialBudget,
+      lowCostMode,
+    });
+
+    return ok({
+      transcript: result.transcript,
+      events: result.events,
+      meta: {
+        source: "system",
+        currentStage,
+        suggestedStage: null,
+        budgetExceeded: true,
+        budget: initialBudget,
+      },
+    });
+  }
 
   const turn = await generateAssistantTurn({
     mode: session.mode,
@@ -70,6 +98,40 @@ export async function POST(_: Request, { params }: RouteContext) {
         }
       : null,
   });
+  const projectedBudget = assessSessionBudget(session.events, turn.usage?.estimatedCostUsd ?? 0);
+
+  if (projectedBudget.exceeded && !session.endedAt) {
+    const budgetReply = buildBudgetExceededReply(projectedBudget);
+    const result = await enforceSessionBudgetLimit({
+      sessionId: id,
+      currentStage,
+      source: turn.source,
+      reply: budgetReply,
+      usage: turn.usage
+        ? {
+            model: turn.model ?? null,
+            inputTokens: turn.usage.inputTokens,
+            outputTokens: turn.usage.outputTokens,
+            estimatedCostUsd: turn.usage.estimatedCostUsd,
+          }
+        : null,
+      existingTranscriptCount: session.transcripts.length,
+      budget: projectedBudget,
+      lowCostMode,
+    });
+
+    return ok({
+      transcript: result.transcript,
+      events: result.events,
+      meta: {
+        source: turn.source,
+        currentStage,
+        suggestedStage: null,
+        budgetExceeded: true,
+        budget: projectedBudget,
+      },
+    });
+  }
 
   const lastSegment = session.transcripts.at(-1);
   const segmentIndex = lastSegment ? lastSegment.segmentIndex + 1 : 0;

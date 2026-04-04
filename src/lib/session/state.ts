@@ -33,6 +33,9 @@ type DecisionSnapshotRow = {
 };
 
 export type SessionSnapshotState = {
+  currentStage: CodingInterviewStage;
+  currentStageLabel: string;
+  stageJourney: string[];
   latestSignals: Record<string, unknown> | null;
   latestDecision: Record<string, unknown> | null;
   latentCalibration: LatentCalibration | null;
@@ -62,6 +65,37 @@ function asRecord(value: unknown) {
 
 function normalizeStage(stage: string | null | undefined): CodingInterviewStage {
   return isCodingInterviewStage(stage) ? stage : "PROBLEM_UNDERSTANDING";
+}
+
+function deriveStageJourney(input: {
+  fallbackCurrentStage: CodingInterviewStage;
+  signalSnapshots: Array<{ stage: CodingInterviewStage }>;
+  decisionSnapshots: Array<{ stage: CodingInterviewStage }>;
+  events: SessionEventLike[];
+}) {
+  const snapshotStages = [
+    ...input.signalSnapshots.map((item) => item.stage),
+    ...input.decisionSnapshots.map((item) => item.stage),
+  ];
+
+  const orderedUniqueSnapshotStages = snapshotStages.filter(
+    (stage, index) => snapshotStages.indexOf(stage) === index,
+  );
+
+  if (orderedUniqueSnapshotStages.length > 0) {
+    return orderedUniqueSnapshotStages;
+  }
+
+  const eventStages = input.events
+    .filter((event) => event.eventType === "STAGE_ADVANCED")
+    .map((event) => normalizeStage(asRecord(event.payloadJson).stage as string | null | undefined))
+    .filter((stage, index, stages) => stages.indexOf(stage) === index);
+
+  if (eventStages.length > 0) {
+    return eventStages;
+  }
+
+  return [input.fallbackCurrentStage];
 }
 
 function latestExecutionRunFromEvents(events: SessionEventLike[], executionRuns?: ExecutionRunLike[] | null) {
@@ -101,7 +135,7 @@ export function buildSessionSnapshotState(input: {
   interviewerDecisionSnapshots?: DecisionSnapshotRow[];
   executionRuns?: ExecutionRunLike[] | null;
 }) : SessionSnapshotState {
-  const currentStage = normalizeStage(input.currentStage);
+  const fallbackCurrentStage = normalizeStage(input.currentStage);
   const signalSnapshots = (input.candidateStateSnapshots ?? [])
     .map((row) => ({
       id: row.id,
@@ -123,6 +157,14 @@ export function buildSessionSnapshotState(input: {
       decision: asRecord(row.decisionJson),
     }))
     .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+
+  const stageJourney = deriveStageJourney({
+    fallbackCurrentStage,
+    signalSnapshots,
+    decisionSnapshots,
+    events: input.events,
+  });
+  const currentStage = stageJourney.at(-1) ?? fallbackCurrentStage;
 
   const latestSignals =
     signalSnapshots.at(-1)?.signals ??
@@ -175,6 +217,9 @@ export function buildSessionSnapshotState(input: {
       : null;
 
   return {
+    currentStage,
+    currentStageLabel: describeCodingStage(currentStage),
+    stageJourney: stageJourney.map((stage) => describeCodingStage(stage)),
     latestSignals: latestSignals && Object.keys(latestSignals).length > 0 ? latestSignals : null,
     latestDecision: latestDecision && Object.keys(latestDecision).length > 0 ? latestDecision : null,
     latentCalibration,

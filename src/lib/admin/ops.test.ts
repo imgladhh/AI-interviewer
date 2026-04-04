@@ -196,6 +196,17 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/78/);
   });
 
+  it("describes session budget guardrails in a readable way", () => {
+    const description = buildSessionEventDescription("SESSION_BUDGET_EXCEEDED", {
+      projectedTotalUsd: 2.14,
+      thresholdUsd: 2,
+    });
+
+    expect(description).toMatch(/budget exceeded/i);
+    expect(description).toMatch(/\$2\.14/);
+    expect(description).toMatch(/\$2/);
+  });
+
   it("includes timing metadata in critic verdict descriptions", () => {
     const description = buildSessionEventDescription("CRITIC_VERDICT_RECORDED", {
       criticVerdict: {

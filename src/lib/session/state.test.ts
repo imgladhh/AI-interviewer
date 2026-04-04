@@ -61,4 +61,61 @@ describe("buildSessionSnapshotState", () => {
     expect(state.signalSnapshots).toHaveLength(1);
     expect(state.decisionSnapshots).toHaveLength(1);
   });
+
+  it("derives current stage and stage journey from persisted snapshots first", () => {
+    const state = buildSessionSnapshotState({
+      currentStage: "APPROACH_DISCUSSION",
+      events: [
+        {
+          eventType: "STAGE_ADVANCED",
+          payloadJson: {
+            stage: "IMPLEMENTATION",
+          },
+        },
+      ],
+      candidateStateSnapshots: [
+        {
+          id: "snap-1",
+          stage: "IMPLEMENTATION",
+          source: "gemini",
+          snapshotJson: {
+            progress: "progressing",
+            structuredEvidence: [],
+          },
+          createdAt: new Date("2026-04-02T20:00:00.000Z"),
+        },
+        {
+          id: "snap-2",
+          stage: "TESTING_AND_COMPLEXITY",
+          source: "gemini",
+          snapshotJson: {
+            progress: "done",
+            structuredEvidence: [],
+          },
+          createdAt: new Date("2026-04-02T20:00:05.000Z"),
+        },
+      ],
+      interviewerDecisionSnapshots: [
+        {
+          id: "dec-1",
+          stage: "WRAP_UP",
+          source: "gemini",
+          decisionJson: {
+            action: "move_to_wrap_up",
+            target: "summary",
+          },
+          createdAt: new Date("2026-04-02T20:00:08.000Z"),
+        },
+      ],
+      executionRuns: [{ status: "PASSED", stdout: "ok", stderr: "" }],
+    });
+
+    expect(state.currentStage).toBe("WRAP_UP");
+    expect(state.currentStageLabel).toBe("Wrap Up");
+    expect(state.stageJourney).toEqual([
+      "Implementation",
+      "Testing and Complexity",
+      "Wrap Up",
+    ]);
+  });
 });

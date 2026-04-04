@@ -15,12 +15,13 @@ This repo now has a working MVP-plus skeleton with:
 - Interview room with transcript persistence, stage-governed assistant turns, Monaco editor, local code execution, and streaming AI replies
 - Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, actionable improvements, and product-facing candidate profiling
 - Snapshot-first report/admin pipeline with canonical candidate-state and interviewer-decision snapshots, plus shared replay evidence across report and admin
+- Snapshot-first admin summary plus stage-grouped replay UI in the standalone report page
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
 - Dedicated STT handoff for spoken candidate turns, with provider selection and browser transcript fallback
 - Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, low-cost mode controls, and switchable STT providers
 - `Vitest` unit/route tests and `Playwright` end-to-end tests
-- Full `Vitest` coverage is now green locally again (`176 passed / 33 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
+- Full `Vitest` coverage is now green locally again (`182 passed / 34 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
 
 ## Recent Progress
 
@@ -118,11 +119,15 @@ This repo now has a working MVP-plus skeleton with:
 - signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
 - /admin and /report now group observed candidate issues by Correctness, Testing, Complexity, and Debugging so interviewer quality is easier to inspect at a glance.
 - /admin and /report replay now surface unresolved issues, missing evidence, answered targets, collected evidence, and the current evidence focus so interviewer pacing is easier to debug visually.
-- `/admin` and `/report` now also surface the latest interviewer `pressure`, critic `Worth Asking`, and critic `Worth Reason` as top-level summary cards instead of hiding them only in replay payloads.`r`n- `/report/[id]` stage replay is now grouped by stage from canonical snapshots plus event evidence, which makes product-facing replay much closer to a real interview debrief.
+- `/admin` and `/report` now also surface the latest interviewer `pressure`, critic `Worth Asking`, and critic `Worth Reason` as top-level summary cards instead of hiding them only in replay payloads.
+- `/report/[id]` stage replay is now grouped by stage from canonical snapshots plus event evidence, which makes product-facing replay much closer to a real interview debrief.
 - Added `hinting_ledger.ts` so the interviewer can classify hint granularity, rescue mode, and hint cost instead of only recording that a hint happened.
 - decision_engine hint actions now carry `rescueMode`, `hintGranularity`, and `hintCost`, so rescue behavior is explicit rather than buried in generic hint metadata.
 - report generation now aggregates hint cost, strongest hint level, rescue-mode mix, efficiency score, and coachability so feedback reflects not just whether help happened, but how much help the candidate needed and how efficiently the candidate converted signals into evidence.
 - report generation now produces deeper evidence traces, execution-aware evaluation signals, candidate DNA, moments of truth, and rubric summaries so the final report reads more like a real interview debrief than a generic AI recap.
+- `/admin` latest-session summary now derives current stage and stage journey from canonical snapshots instead of replaying events to rebuild live state.
+- Added a hard session budget guardrail at `$2.00` estimated usage: assistant-turn routes now emit `SESSION_BUDGET_EXCEEDED`, end the interview, and return a clean budget-closure reply instead of continuing indefinitely.
+- Code execution now supports a stronger sandbox path with optional Docker isolation (`CODE_SANDBOX_DRIVER=docker`) plus stricter local timeout cleanup to kill runaway process trees.
 
 ## What Works Today
 
@@ -219,8 +224,11 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, pressure selection, and closure timing
 - `src/lib/assistant/hinting_ledger.ts`: hint granularity, rescue-mode classification, and hint-cost aggregation
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
+- `src/lib/usage/budget.ts`: session budget guardrail and budget-cap closure messaging
 - `src/lib/evaluation/report.ts`: snapshot-aware, rubric-driven report generation with evidence trace, execution-aware scoring, candidate DNA profiling, and moment-of-truth extraction
-- `src/lib/session/snapshots.ts`: best-effort persistence plus snapshot-first read helpers for candidate-state and interviewer-decision snapshots`r`n- `src/lib/session/state.ts`: canonical snapshot-state aggregation for report/admin consumers
+- `src/lib/session/snapshots.ts`: best-effort persistence plus snapshot-first read helpers for candidate-state and interviewer-decision snapshots
+- `src/lib/session/state.ts`: canonical snapshot-state aggregation for report/admin consumers
+- `src/lib/session/budget-enforcement.ts`: budget-cap closure handling for assistant turns
 - `src/lib/persona/queue.ts`: BullMQ queue helpers
 - `src/lib/persona/ingest-public-profile.ts`: public-profile fetching, heuristic extraction, and persona synthesis with graceful fallback
 - `src/lib/persona/job-events.ts`: persona event persistence
@@ -350,7 +358,7 @@ npm run build
 - Gemini and OpenAI interviewer turns can still hit provider rate limits; when that happens the system falls back to local interviewer heuristics
 - LLM-backed signal extraction uses the same provider availability rules, so observer quality may also degrade to heuristics under provider failure or rate limits
 - Live provider drafts are periodic previews rather than true token-level streaming ASR
-- Code execution is local-process based and currently supports Python and JavaScript only
+- Code execution still defaults to a local process unless Docker sandboxing is enabled, but now supports Python, JavaScript, and C++
 - Authentication is still stubbed around a demo user
 - Evaluation/report is still lightweight compared with a full rubric system, but it now includes evidence-backed state, replay, timing metadata, and hint-cost accounting
 - Snapshot-first state is in place for `/admin` and `/report`, but the replay view still mixes canonical snapshots with event evidence rather than a full transcript-native playback model
@@ -361,15 +369,14 @@ npm run build
 
 ### Product and Backend
 
-- Group report replay by stage and add richer per-stage evidence
 - Push LLM-backed signal extraction deeper and persist candidate-state snapshots outside the event stream
-- Keep hardening snapshot-first state loading and reduce the remaining event-derived fallback paths
+- Keep hardening snapshot-first state loading and reduce the remaining event-derived fallback paths in replay and audit views
 - Continue strengthening typed interviewer quality through richer decision actions and action-specific reply shaping
 - Harden real persona ingestion with better extraction quality, retry behavior, and source-specific heuristics
-- Expand code execution from local process execution to a stronger sandbox model
+- Expand the optional Docker sandbox into a more production-grade execution isolation model
 - Evolve report generation from v0 into a more rubric-driven evaluation pipeline
 - Push provider-first voice mode from periodic preview to true streaming STT/VAD
-- Add hard session budget controls on top of rough usage logging
+- Extend the session budget guardrail beyond assistant turns so STT and other usage spikes can terminate sessions immediately
 
 ### Queue and Observability
 
@@ -395,8 +402,8 @@ npm run build
 
 ### Milestone 1
 
-- Stage-grouped replay in reports
-- Persist candidate-state snapshots in dedicated tables, not only events
+- Snapshot-first admin/report state loading
+- Hard session budget guardrail
 - More route and worker tests
 
 ### Milestone 2

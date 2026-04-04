@@ -267,11 +267,6 @@ function summarizeSession(session: {
   executionRuns: Array<{ status: "PASSED" | "FAILED" | "ERROR" | "TIMEOUT"; stdout: string | null; stderr: string | null; createdAt: Date }>;
 }): SessionSummary {
   const ordered = [...session.events].sort((left, right) => left.eventTime.getTime() - right.eventTime.getTime());
-  const stageEvents = ordered.filter((event) => event.eventType === "STAGE_ADVANCED");
-  const stageJourneyRaw = stageEvents
-    .map((event) => stringValue(asRecord(event.payloadJson).stage))
-    .filter((value): value is string => Boolean(value));
-  const currentStage = stageJourneyRaw.at(-1) ?? "PROBLEM_UNDERSTANDING";
   const latestCriticEvent = [...ordered].reverse().find((event) => event.eventType === "CRITIC_VERDICT_RECORDED");
   const latestCodeRunEvent = [...ordered].reverse().find((event) => event.eventType === "CODE_RUN_COMPLETED");
   const latestCritic = latestCriticEvent ? asRecord(asRecord(latestCriticEvent.payloadJson).criticVerdict) : null;
@@ -286,7 +281,10 @@ function summarizeSession(session: {
   }).length;
 
   const snapshotState = buildSessionSnapshotState({
-    currentStage,
+    currentStage:
+      stringValue(asRecord(latestCodeRunEvent?.payloadJson).stage) ??
+      stringValue(asRecord([...ordered].reverse().find((event) => event.eventType === "STAGE_ADVANCED")?.payloadJson).stage) ??
+      "PROBLEM_UNDERSTANDING",
     events: ordered,
     candidateStateSnapshots: session.candidateStateSnapshots,
     interviewerDecisionSnapshots: session.interviewerDecisionSnapshots,
@@ -295,9 +293,9 @@ function summarizeSession(session: {
 
   return {
     sessionId: session.id,
-    currentStage,
-    currentStageLabel: describeStage(currentStage) ?? currentStage,
-    stageJourney: [...new Set(stageJourneyRaw.map((stage) => describeStage(stage) ?? stage))],
+    currentStage: snapshotState.currentStage,
+    currentStageLabel: snapshotState.currentStageLabel,
+    stageJourney: snapshotState.stageJourney,
     latestSignals: snapshotState.latestSignals,
     latestDecision: snapshotState.latestDecision,
     latestCritic,
@@ -624,6 +622,10 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
 
   if (eventType === "STT_USAGE_RECORDED") {
     return `STT call recorded for ${stringOrFallback(payload.model, "unknown model")} at about $${stringOrFallback(payload.estimatedCostUsd, "0")}.`;
+  }
+
+  if (eventType === "SESSION_BUDGET_EXCEEDED") {
+    return `Session budget exceeded at about $${stringOrFallback(payload.projectedTotalUsd, "0")} against a $${stringOrFallback(payload.thresholdUsd, "0")} cap.`;
   }
 
   if (eventType === "AI_SPOKE") {

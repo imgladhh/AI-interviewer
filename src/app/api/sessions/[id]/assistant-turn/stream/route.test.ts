@@ -5,6 +5,7 @@ const streamAssistantTurn = vi.fn();
 const prisma = {
   interviewSession: {
     findUnique: vi.fn(),
+    update: vi.fn(),
   },
   transcriptSegment: {
     create: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("@/lib/assistant/generate-turn", () => ({
 describe("assistant turn stream route", () => {
   beforeEach(() => {
     prisma.interviewSession.findUnique.mockReset();
+    prisma.interviewSession.update.mockReset();
     prisma.transcriptSegment.create.mockReset();
     prisma.sessionEvent.create.mockReset();
     streamAssistantTurn.mockReset();
@@ -131,6 +133,50 @@ describe("assistant turn stream route", () => {
         },
       },
     });
+  });
+
+  it("short-circuits the stream when the session budget has already been exceeded", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      mode: "CODING",
+      targetLevel: "SDE2",
+      selectedLanguage: "PYTHON",
+      endedAt: null,
+      question: { title: "Merge Intervals", prompt: "Merge overlapping intervals." },
+      interviewerContext: null,
+      interviewerProfile: null,
+      transcripts: [{ id: "u1", speaker: "USER", text: "I would use sorting.", segmentIndex: 0 }],
+      executionRuns: [],
+      events: [
+        {
+          id: "usage-1",
+          eventType: "LLM_USAGE_RECORDED",
+          eventTime: new Date("2026-04-03T00:00:00.000Z"),
+          payloadJson: { estimatedCostUsd: 2.02 },
+        },
+      ],
+    });
+    prisma.transcriptSegment.create.mockResolvedValue({
+      id: "seg-budget",
+      text: "budget hit",
+      speaker: "AI",
+      segmentIndex: 1,
+    });
+    prisma.sessionEvent.create.mockResolvedValue({ id: "evt-budget" });
+    prisma.interviewSession.update.mockResolvedValue({ id: "session-1" });
+
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
+    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(text).toContain("event: done");
+    expect(text).toContain("\"budgetExceeded\":true");
+    expect(streamAssistantTurn).not.toHaveBeenCalled();
+    expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(3);
   });
 });
 

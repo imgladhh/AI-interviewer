@@ -5,6 +5,7 @@ const generateAssistantTurn = vi.fn();
 const prisma = {
   interviewSession: {
     findUnique: vi.fn(),
+    update: vi.fn(),
   },
   transcriptSegment: {
     create: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("@/lib/assistant/generate-turn", () => ({
 describe("assistant turn route", () => {
   beforeEach(() => {
     prisma.interviewSession.findUnique.mockReset();
+    prisma.interviewSession.update.mockReset();
     prisma.transcriptSegment.create.mockReset();
     prisma.sessionEvent.create.mockReset();
     generateAssistantTurn.mockReset();
@@ -93,6 +95,61 @@ describe("assistant turn route", () => {
           source: "fallback",
         },
       },
+    });
+  });
+
+  it("ends the interview when the session budget cap has already been exceeded", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      mode: "CODING",
+      targetLevel: "SDE2",
+      selectedLanguage: "PYTHON",
+      endedAt: null,
+      question: {
+        title: "Merge Intervals",
+        prompt: "Merge overlapping intervals.",
+      },
+      interviewerContext: null,
+      interviewerProfile: null,
+      transcripts: [{ segmentIndex: 0, speaker: "USER", text: "I would use sorting." }],
+      executionRuns: [],
+      events: [
+        {
+          eventType: "LLM_USAGE_RECORDED",
+          eventTime: new Date("2026-04-03T00:00:00.000Z"),
+          payloadJson: { estimatedCostUsd: 1.6 },
+        },
+        {
+          eventType: "STT_USAGE_RECORDED",
+          eventTime: new Date("2026-04-03T00:00:02.000Z"),
+          payloadJson: { estimatedCostUsd: 0.5 },
+        },
+      ],
+    });
+    prisma.transcriptSegment.create.mockResolvedValue({
+      id: "seg-budget",
+      text: "budget hit",
+      speaker: "AI",
+      segmentIndex: 1,
+    });
+    prisma.sessionEvent.create.mockResolvedValue({ id: "evt-budget" });
+    prisma.interviewSession.update.mockResolvedValue({ id: "session-1" });
+
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
+    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.data.meta.budgetExceeded).toBe(true);
+    expect(generateAssistantTurn).not.toHaveBeenCalled();
+    expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(3);
+    expect(prisma.interviewSession.update).toHaveBeenCalledWith({
+      where: { id: "session-1" },
+      data: expect.objectContaining({
+        status: "COMPLETED",
+      }),
     });
   });
 });

@@ -238,6 +238,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
   if (!reportJson.latestDecision && snapshotState.latestDecision) {
     reportJson.latestDecision = snapshotState.latestDecision as LatestDecision;
   }
+  const reportCurrentStage = reportJson.currentStage ?? snapshotState.currentStageLabel;
+  const reportStageJourney =
+    Array.isArray(reportJson.stageJourney) && reportJson.stageJourney.length > 0
+      ? reportJson.stageJourney
+      : snapshotState.stageJourney;
+  const stageReplayGroups = reportJson.stageReplay ?? [];
   const dimensions = normalizeDimensions(reportJson.dimensions, session.evaluation?.dimensionScores ?? []);
   const replayItems = buildReplayItems({
     events: session.events,
@@ -387,10 +393,10 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
           <article style={panelStyle}>
             <h2 style={sectionTitleStyle}>Stage Journey</h2>
             <div style={{ display: "grid", gap: 10 }}>
-              {(reportJson.stageJourney ?? []).length === 0 ? (
+              {reportStageJourney.length === 0 ? (
                 <p style={mutedParagraphStyle}>No stage transitions were captured for this session.</p>
               ) : (
-                (reportJson.stageJourney ?? []).map((stage) => (
+                reportStageJourney.map((stage) => (
                   <div key={stage} style={pillRowStyle}>
                     <span style={stagePillStyle}>{stage}</span>
                   </div>
@@ -426,7 +432,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 label="Turns"
                 value={`${reportJson.transcriptSummary?.userTurns ?? 0} user / ${reportJson.transcriptSummary?.aiTurns ?? 0} AI`}
               />
-              <MetricRow label="Current Stage" value={reportJson.currentStage ?? "Unknown"} />
+              <MetricRow label="Current Stage" value={reportCurrentStage ?? "Unknown"} />
             </div>
           </article>
         </section>
@@ -680,48 +686,75 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
         <section style={panelStyle}>
           <h2 style={sectionTitleStyle}>Stage Replay</h2>
           <div style={{ display: "grid", gap: 16 }}>
-            {(reportJson.stageReplay ?? []).length === 0 ? (
+            {stageReplayGroups.length === 0 ? (
               <p style={mutedParagraphStyle}>No stage-grouped replay markers were captured for this session.</p>
             ) : (
-              (reportJson.stageReplay ?? []).map((group) => (
-                <div key={group.stage} style={replayCardStyle("info")}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-                    <strong>{group.label}</strong>
-                    <span style={{ color: "var(--muted)", fontSize: 13 }}>{group.stage}</span>
+              stageReplayGroups.map((group, index) => (
+                <details key={group.stage} style={accordionStyle} open={index === 0}>
+                  <summary style={accordionSummaryStyle}>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <strong>{group.label}</strong>
+                      <span style={{ color: "var(--muted)", fontSize: 13 }}>{group.stage}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <span style={stagePillStyle}>{summarizeStageCount(group.signalSnapshots?.length, "signal")}</span>
+                      <span style={stagePillStyle}>{summarizeStageCount(group.decisions?.length, "decision")}</span>
+                      <span style={stagePillStyle}>{summarizeStageCount(group.turns?.length, "turn")}</span>
+                      <span style={stagePillStyle}>{summarizeStageCount(group.evidence?.length, "evidence")}</span>
+                    </div>
+                  </summary>
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {Array.isArray(group.evidence) && group.evidence.length > 0 ? (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <strong>Evidence trail</strong>
+                        {group.evidence.map((item, evidenceIndex) => (
+                          <div key={`${group.stage}-evidence-${evidenceIndex}`} style={listItemStyle}>
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {Array.isArray(group.signalSnapshots) && group.signalSnapshots.length > 0 ? (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <strong>Candidate state checkpoints</strong>
+                        {group.signalSnapshots.map((signal, signalIndex) => (
+                          <div key={`${group.stage}-signal-${signalIndex}`} style={listItemStyle}>
+                            <strong>
+                              {signal.progress ?? "unknown progress"} / {signal.reasoningDepth ?? "unknown reasoning"}
+                            </strong>
+                            <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                              {signal.summary ?? signal.trendSummary ?? "Candidate snapshot recorded for this stage."}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {Array.isArray(group.decisions) && group.decisions.length > 0 ? (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <strong>Interviewer decisions</strong>
+                        {group.decisions.map((decision, decisionIndex) => (
+                          <div key={`${group.stage}-decision-${decisionIndex}`} style={listItemStyle}>
+                            <strong>{decision.action ?? "decision"}</strong>
+                            <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                              {decision.question ?? decision.reason ?? "No detail captured."}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {Array.isArray(group.turns) && group.turns.length > 0 ? (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <strong>Representative turns</strong>
+                        {group.turns.map((turn, turnIndex) => (
+                          <div key={`${group.stage}-turn-${turnIndex}`} style={listItemStyle}>
+                            <strong>{turn.speaker}</strong>
+                            <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{turn.text}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                  {Array.isArray(group.evidence) && group.evidence.length > 0 ? (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <strong>Evidence trail</strong>
-                      {group.evidence.map((item, index) => (
-                        <div key={`${group.stage}-evidence-${index}`} style={listItemStyle}>
-                          {item}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {Array.isArray(group.decisions) && group.decisions.length > 0 ? (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <strong>Interviewer decisions</strong>
-                      {group.decisions.map((decision, index) => (
-                        <div key={`${group.stage}-decision-${index}`} style={listItemStyle}>
-                          <strong>{decision.action ?? "decision"}</strong>
-                          <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{decision.question ?? decision.reason ?? "No detail captured."}</p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {Array.isArray(group.turns) && group.turns.length > 0 ? (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <strong>Representative turns</strong>
-                      {group.turns.map((turn, index) => (
-                        <div key={`${group.stage}-turn-${index}`} style={listItemStyle}>
-                          <strong>{turn.speaker}</strong>
-                          <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{turn.text}</p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
+                </details>
               ))
             )}
           </div>
@@ -1187,6 +1220,11 @@ function prettifyKey(value: string) {
     .join(" ");
 }
 
+function summarizeStageCount(count: number | undefined, label: string) {
+  const safeCount = count ?? 0;
+  return `${safeCount} ${label}${safeCount === 1 ? "" : "s"}`;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -1236,6 +1274,23 @@ const panelStyle = {
   padding: 20,
   display: "grid",
   gap: 14,
+} as const;
+
+const accordionStyle = {
+  ...replayCardStyle("info"),
+  padding: 0,
+  overflow: "hidden",
+} as const;
+
+const accordionSummaryStyle = {
+  cursor: "pointer",
+  listStyle: "none",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 16,
+  flexWrap: "wrap",
+  alignItems: "center",
+  padding: 18,
 } as const;
 
 const heroMetaRowStyle = {

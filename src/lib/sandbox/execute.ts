@@ -24,10 +24,12 @@ type CommandSpec = {
   compile?: {
     command: string;
     args: string[];
+    env?: Record<string, string | undefined>;
   };
   run: {
     command: string;
     args: string[];
+    env?: Record<string, string | undefined>;
   };
   filename: string;
 };
@@ -56,6 +58,20 @@ export async function executeCode({
   const startedAt = Date.now();
 
   try {
+    if (shouldUseDockerSandbox()) {
+      const dockerResult = await executeCodeWithDocker({
+        language,
+        sandboxDir,
+        stdin,
+        timeoutMs,
+        startedAt,
+      });
+
+      if (dockerResult.status !== "ERROR" || !/docker/i.test(dockerResult.stderr)) {
+        return dockerResult;
+      }
+    }
+
     if (spec.compile) {
       const compileResult = await runProcess({
         command: spec.compile.command,
@@ -64,6 +80,7 @@ export async function executeCode({
         stdin,
         timeoutMs,
         startedAt,
+        env: spec.compile.env,
       });
 
       if (compileResult.status !== "PASSED") {
@@ -71,72 +88,14 @@ export async function executeCode({
       }
     }
 
-    return await new Promise<ExecuteCodeResult>((resolve) => {
-      const child = spawn(spec.run.command, [...spec.run.args], {
-        cwd: sandboxDir,
-        stdio: "pipe",
-      });
-
-      let stdout = "";
-      let stderr = "";
-      let settled = false;
-      let timedOut = false;
-
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill();
-      }, timeoutMs);
-
-      child.stdout.on("data", (chunk: Buffer | string) => {
-        stdout += chunk.toString();
-      });
-
-      child.stderr.on("data", (chunk: Buffer | string) => {
-        stderr += chunk.toString();
-      });
-
-      child.on("error", (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({
-          status: "ERROR",
-          stdout,
-          stderr: error.message,
-          runtimeMs: Date.now() - startedAt,
-          memoryKb: null,
-        });
-      });
-
-      child.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-
-        if (timedOut) {
-          resolve({
-            status: "TIMEOUT",
-            stdout,
-            stderr: stderr || `Execution exceeded ${timeoutMs}ms timeout.`,
-            runtimeMs: Date.now() - startedAt,
-            memoryKb: null,
-          });
-          return;
-        }
-
-        resolve({
-          status: code === 0 ? "PASSED" : "ERROR",
-          stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          runtimeMs: Date.now() - startedAt,
-          memoryKb: null,
-        });
-      });
-
-      if (stdin) {
-        child.stdin.write(stdin);
-      }
-      child.stdin.end();
+    return await runProcess({
+      command: spec.run.command,
+      args: [...spec.run.args],
+      cwd: sandboxDir,
+      stdin,
+      timeoutMs,
+      startedAt,
+      env: spec.run.env,
     });
   } finally {
     await rm(sandboxDir, { recursive: true, force: true });
@@ -149,7 +108,7 @@ function buildCommandSpec(language: string): CommandSpec | null {
       return {
         run: {
           command: process.execPath,
-          args: [join(".", "solution.js")],
+          args: ["--max-old-space-size=128", join(".", "solution.js")],
         },
         filename: "solution.js",
       };
@@ -158,6 +117,9 @@ function buildCommandSpec(language: string): CommandSpec | null {
         run: {
           command: "python",
           args: [join(".", "solution.py")],
+          env: {
+            PYTHONUNBUFFERED: "1",
+          },
         },
         filename: "solution.py",
       };
@@ -178,6 +140,75 @@ function buildCommandSpec(language: string): CommandSpec | null {
   }
 }
 
+function shouldUseDockerSandbox() {
+  return process.env.CODE_SANDBOX_DRIVER?.trim().toLowerCase() === "docker";
+}
+
+async function executeCodeWithDocker(input: {
+  language: string;
+  sandboxDir: string;
+  stdin?: string;
+  timeoutMs: number;
+  startedAt: number;
+}): Promise<ExecuteCodeResult> {
+  const dockerSpec = buildDockerSpec(input.language);
+  if (!dockerSpec) {
+    return {
+      status: "ERROR",
+      stdout: "",
+      stderr: `docker sandbox is not configured for ${input.language}.`,
+      runtimeMs: Date.now() - input.startedAt,
+      memoryKb: null,
+    };
+  }
+
+  return runProcess({
+    command: "docker",
+    args: [
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--memory",
+      process.env.CODE_SANDBOX_MEMORY_LIMIT ?? "256m",
+      "--cpus",
+      process.env.CODE_SANDBOX_CPU_LIMIT ?? "0.5",
+      "-v",
+      `${input.sandboxDir}:/workspace`,
+      "-w",
+      "/workspace",
+      dockerSpec.image,
+      ...dockerSpec.command,
+    ],
+    cwd: input.sandboxDir,
+    stdin: input.stdin,
+    timeoutMs: input.timeoutMs,
+    startedAt: input.startedAt,
+  });
+}
+
+function buildDockerSpec(language: string) {
+  switch (normalizeLanguage(language)) {
+    case "JAVASCRIPT":
+      return {
+        image: process.env.CODE_SANDBOX_NODE_IMAGE ?? "node:20-alpine",
+        command: ["node", "--max-old-space-size=128", "solution.js"],
+      };
+    case "PYTHON":
+      return {
+        image: process.env.CODE_SANDBOX_PYTHON_IMAGE ?? "python:3.11-alpine",
+        command: ["python", "solution.py"],
+      };
+    case "C++":
+      return {
+        image: process.env.CODE_SANDBOX_CPP_IMAGE ?? "gcc:13",
+        command: ["/bin/sh", "-lc", "g++ -std=c++17 -O2 -o solution ./solution.cpp && ./solution"],
+      };
+    default:
+      return null;
+  }
+}
+
 async function runProcess(input: {
   command: string;
   args: string[];
@@ -185,11 +216,18 @@ async function runProcess(input: {
   stdin?: string;
   timeoutMs: number;
   startedAt: number;
+  env?: Record<string, string | undefined>;
 }): Promise<ExecuteCodeResult> {
   return await new Promise<ExecuteCodeResult>((resolve) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: "pipe",
+      env: {
+        ...process.env,
+        ...input.env,
+      },
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
 
     let stdout = "";
@@ -199,7 +237,7 @@ async function runProcess(input: {
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      void terminateProcessTree(child.pid);
     }, input.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -253,4 +291,32 @@ async function runProcess(input: {
     }
     child.stdin.end();
   });
+}
+
+async function terminateProcessTree(pid?: number) {
+  if (!pid) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    await new Promise<void>((resolve) => {
+      const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("close", () => resolve());
+      killer.on("error", () => resolve());
+    });
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // ignore cleanup failure
+    }
+  }
 }
