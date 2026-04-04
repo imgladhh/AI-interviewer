@@ -424,6 +424,101 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     ) : null}
 
                     {detail.sessionSummary ? (
+                      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                        <div style={panelStyle}>
+                          <strong>Latest Intent</strong>
+                          {detail.sessionSummary.latestIntent ? (
+                            <>
+                              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", marginTop: 12, marginBottom: 12 }}>
+                                <MetricCard label="Intent" value={String(detail.sessionSummary.latestIntent.intent ?? "unknown")} />
+                                <MetricCard label="Target Signal" value={String(detail.sessionSummary.latestIntent.targetSignal ?? "unknown")} />
+                                <MetricCard label="Expected Outcome" value={String(detail.sessionSummary.latestIntent.expectedOutcome ?? "unknown")} />
+                                <MetricCard label="Urgency" value={String(detail.sessionSummary.latestIntent.urgency ?? "unknown")} />
+                                <MetricCard
+                                  label="Can Defer"
+                                  value={
+                                    typeof detail.sessionSummary.latestIntent.canDefer === "boolean"
+                                      ? detail.sessionSummary.latestIntent.canDefer
+                                        ? "Yes"
+                                        : "No"
+                                      : "unknown"
+                                  }
+                                />
+                              </div>
+                              <dl style={definitionListStyle}>
+                                {Object.entries(detail.sessionSummary.latestIntent).map(([key, value]) => (
+                                  <div key={key} style={definitionRowStyle}>
+                                    <dt style={definitionTermStyle}>{formatLabel(key)}</dt>
+                                    <dd style={definitionValueStyle}>
+                                      {Array.isArray(value) ? value.join(", ") : String(value)}
+                                    </dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            </>
+                          ) : (
+                            <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No intent snapshot recorded yet.</p>
+                          )}
+                        </div>
+
+                        <div style={panelStyle}>
+                          <strong>Latest Trajectory</strong>
+                          {detail.sessionSummary.latestTrajectory ? (
+                            <>
+                              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", marginTop: 12, marginBottom: 12 }}>
+                                <MetricCard label="Trajectory" value={String(detail.sessionSummary.latestTrajectory.candidateTrajectory ?? "unknown")} />
+                                <MetricCard label="No Intervention" value={String(detail.sessionSummary.latestTrajectory.expectedWithNoIntervention ?? "unknown")} />
+                                <MetricCard label="Best Intervention" value={String(detail.sessionSummary.latestTrajectory.bestIntervention ?? "unknown")} />
+                                <MetricCard label="Intervention Value" value={String(detail.sessionSummary.latestTrajectory.interventionValue ?? "unknown")} />
+                                <MetricCard label="Evidence Gain" value={String(detail.sessionSummary.latestTrajectory.evidenceGainIfAskNow ?? "unknown")} />
+                                <MetricCard label="Interrupt Cost" value={String(detail.sessionSummary.latestTrajectory.interruptionCost ?? "unknown")} />
+                              </div>
+                              <dl style={definitionListStyle}>
+                                {Object.entries(detail.sessionSummary.latestTrajectory).map(([key, value]) => (
+                                  <div key={key} style={definitionRowStyle}>
+                                    <dt style={definitionTermStyle}>{formatLabel(key)}</dt>
+                                    <dd style={definitionValueStyle}>
+                                      {Array.isArray(value) ? value.join(", ") : String(value)}
+                                    </dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            </>
+                          ) : (
+                            <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No trajectory snapshot recorded yet.</p>
+                          )}
+                        </div>
+
+                        <div style={panelStyle}>
+                          <strong>Session Critic</strong>
+                          {detail.sessionSummary.sessionCritic ? (
+                            <>
+                              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", marginTop: 12, marginBottom: 12 }}>
+                                <MetricCard label="Redundancy" value={`${detail.sessionSummary.sessionCritic.redundancyScore}/100`} />
+                                <MetricCard label="Interruptions" value={`${detail.sessionSummary.sessionCritic.interruptionScore}/100`} />
+                                <MetricCard label="Pressure Balance" value={detail.sessionSummary.sessionCritic.pressureBalance} />
+                                <MetricCard label="Flow Preservation" value={detail.sessionSummary.sessionCritic.flowPreservation} />
+                                <MetricCard label="Timing Quality" value={detail.sessionSummary.sessionCritic.timingQuality} />
+                                <MetricCard label="Closure Quality" value={detail.sessionSummary.sessionCritic.closureQuality} />
+                              </div>
+                              {detail.sessionSummary.sessionCritic.notes.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8 }}>
+                                  {detail.sessionSummary.sessionCritic.notes.map((note, index) => (
+                                    <div key={`admin-session-critic-note-${index}`} style={panelStyle}>
+                                      {note}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <p style={{ margin: "10px 0 0", color: "var(--muted)" }}>No session-level critic summary yet.</p>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {detail.sessionSummary ? (
                       <div style={panelStyle}>
                         <strong>Stage Journey</strong>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
@@ -462,6 +557,22 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 {item.evidenceFocus ? (
                                   <div style={{ color: "var(--muted)" }}>
                                     <strong>Evidence focus:</strong> {item.evidenceFocus}
+                                  </div>
+                                ) : null}
+                                {item.intent || item.intentTargetSignal || item.expectedOutcome ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.intent ? <Badge tone="info">intent: {item.intent}</Badge> : null}
+                                    {item.intentTargetSignal ? <Badge tone="neutral">target: {item.intentTargetSignal}</Badge> : null}
+                                    {item.expectedOutcome ? <Badge tone="neutral">outcome: {item.expectedOutcome}</Badge> : null}
+                                  </div>
+                                ) : null}
+                                {item.candidateTrajectory || item.expectedWithNoIntervention || item.bestIntervention ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.candidateTrajectory ? <Badge tone="info">trajectory: {item.candidateTrajectory}</Badge> : null}
+                                    {item.expectedWithNoIntervention ? <Badge tone="neutral">no intervention: {item.expectedWithNoIntervention}</Badge> : null}
+                                    {item.bestIntervention ? <Badge tone="neutral">best move: {item.bestIntervention}</Badge> : null}
+                                    {item.interventionValue ? <Badge tone="neutral">value: {item.interventionValue}</Badge> : null}
+                                    {item.expectedEvidenceGain ? <Badge tone="neutral">gain: {item.expectedEvidenceGain}</Badge> : null}
                                   </div>
                                 ) : null}
                                 {item.timingVerdict || item.urgency || item.interruptionCost ? (

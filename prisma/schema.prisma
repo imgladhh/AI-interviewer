@@ -301,6 +301,8 @@ model InterviewSession {
   interviewerContext  SessionInterviewerContext?
   candidateStateSnapshots CandidateStateSnapshot[]
   interviewerDecisionSnapshots InterviewerDecisionSnapshot[]
+  intentSnapshots       IntentSnapshot[]
+  trajectorySnapshots   TrajectorySnapshot[]
 
   @@index([userId, createdAt])
   @@index([status])
@@ -329,6 +331,32 @@ model InterviewerDecisionSnapshot {
   createdAt    DateTime         @default(now())
 
   session      InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+}
+
+model IntentSnapshot {
+  id         String           @id @default(cuid())
+  sessionId   String
+  stage       String?
+  source      String?
+  intentJson  Json
+  createdAt   DateTime        @default(now())
+
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+}
+
+model TrajectorySnapshot {
+  id             String           @id @default(cuid())
+  sessionId       String
+  stage           String?
+  source          String?
+  trajectoryJson  Json
+  createdAt       DateTime        @default(now())
+
+  session         InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
 }

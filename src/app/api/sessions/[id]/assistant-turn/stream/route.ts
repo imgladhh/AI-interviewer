@@ -131,6 +131,8 @@ export async function POST(request: Request, { params }: RouteContext) {
               escalationReason?: string;
               signals?: unknown;
               decision?: unknown;
+              intent?: unknown;
+              trajectory?: unknown;
               criticVerdict?: unknown;
               providerFailure?: {
                 provider: "gemini" | "openai";
@@ -254,6 +256,36 @@ export async function POST(request: Request, { params }: RouteContext) {
           events.push(decisionEvent);
         }
 
+        if (finalTurn.intent) {
+          const intentEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.INTENT_SNAPSHOT_RECORDED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                intent: finalTurn.intent,
+              },
+            },
+          });
+          events.push(intentEvent);
+        }
+
+        if (finalTurn.trajectory) {
+          const trajectoryEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.TRAJECTORY_SNAPSHOT_RECORDED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                trajectory: finalTurn.trajectory,
+              },
+            },
+          });
+          events.push(trajectoryEvent);
+        }
+
         if (finalTurn.criticVerdict) {
           const criticEvent = await prisma.sessionEvent.create({
             data: {
@@ -275,6 +307,8 @@ export async function POST(request: Request, { params }: RouteContext) {
           source: finalTurn.source,
           signals: finalTurn.signals,
           decision: finalTurn.decision,
+          intent: finalTurn.intent,
+          trajectory: finalTurn.trajectory,
         });
 
         const aiSpokeEvent = await prisma.sessionEvent.create({
@@ -291,6 +325,8 @@ export async function POST(request: Request, { params }: RouteContext) {
                 escalationReason: finalTurn.escalationReason ?? null,
                 signals: finalTurn.signals ?? null,
                 decision: finalTurn.decision ?? null,
+                intent: finalTurn.intent ?? null,
+                trajectory: finalTurn.trajectory ?? null,
                 providerFailure: finalTurn.providerFailure ?? null,
               },
             },
@@ -378,6 +414,8 @@ export async function POST(request: Request, { params }: RouteContext) {
                 escalationReason: finalTurn.escalationReason ?? null,
                 signals: finalTurn.signals ?? null,
                 decision: finalTurn.decision ?? null,
+                intent: finalTurn.intent ?? null,
+                trajectory: finalTurn.trajectory ?? null,
                 criticVerdict: finalTurn.criticVerdict ?? null,
                 providerFailure: finalTurn.providerFailure ?? null,
               },

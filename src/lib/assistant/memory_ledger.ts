@@ -27,6 +27,7 @@ export type MemoryLedger = {
   persistentWeakness: PersistentWeakness;
   recentHints: number;
   recentFailedRuns: number;
+  topicSaturation: Record<string, number>;
   shouldAvoidTarget: (...targets: string[]) => boolean;
   summary: string[];
 };
@@ -112,6 +113,7 @@ export function buildMemoryLedger(input: {
     repeatedFailurePattern,
     persistentWeakness,
   });
+  const topicSaturation = buildTopicSaturation(recentDecisions, answeredTargets);
 
   return {
     recentlyProbedTargets,
@@ -126,6 +128,7 @@ export function buildMemoryLedger(input: {
     persistentWeakness,
     recentHints,
     recentFailedRuns,
+    topicSaturation,
     shouldAvoidTarget: (...targets: string[]) => {
       const hits = recentDecisions.filter((decision) => {
         const normalizedIssue = normalizeIssueKey(decision.specificIssue);
@@ -411,6 +414,25 @@ function buildLedgerSummary(input: {
   }
 
   return summary;
+}
+
+function buildTopicSaturation(
+  recentDecisions: Array<{ target: string; action: string; specificIssue: string }>,
+  answeredTargets: string[],
+) {
+  const counts: Record<string, number> = {};
+
+  for (const decision of recentDecisions) {
+    if (decision.target) {
+      counts[decision.target] = (counts[decision.target] ?? 0) + 1;
+    }
+  }
+
+  for (const target of answeredTargets) {
+    counts[target] = (counts[target] ?? 0) + 1;
+  }
+
+  return counts;
 }
 
 function normalizeIssueKey(issue?: string) {

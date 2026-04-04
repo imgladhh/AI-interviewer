@@ -9,33 +9,40 @@ export function describeReplyStrategy(
   const trend = signals.trendSummary ?? "No clear trend yet.";
   const issueStyle = describeIssueStyle(decision.specificIssue);
   const pressure = decision.pressure ?? "neutral";
+  const intent = decision.intent ?? "guide";
 
   switch (decision.action) {
+    case "move_to_wrap_up":
+      return `Close the topic gracefully. Intent=${intent}. Pressure=${pressure}. Acknowledge that enough evidence has been collected, then ask for one concise wrap-up or final production-minded check. Trend context: ${trend}`;
+    case "close_topic":
+      return `Close the current topic cleanly. Intent=${intent}. Pressure=${pressure}. Do not ask for another deep answer; explicitly signal that this point is covered and the interview is moving on. Trend context: ${trend}`;
+    case "end_interview":
+      return `End the question cleanly. Intent=${intent}. Pressure=${pressure}. Sound like a professional interviewer who is satisfied enough to stop, not like a bot that ran out of prompts. Trend context: ${trend}`;
     case "ask_for_clarification":
-      return `Clarify before you judge. Pressure=${pressure}. Ask the candidate to restate one tiny example, assumption, or expected state so the interviewer can reduce uncertainty. Trend context: ${trend}`;
+      return `Clarify before you judge. Intent=${intent}. Pressure=${pressure}. Ask the candidate to restate one tiny example, assumption, or expected state so the interviewer can reduce uncertainty. Trend context: ${trend}`;
     case "hold_and_listen":
-      return `Be brief and non-intrusive. Pressure=${pressure}. Give the candidate room to continue, while lightly naming the one invariant, branch, or state update worth narrating. Trend context: ${trend}`;
+      return `Be brief and non-intrusive. Intent=${intent}. Pressure=${pressure}. Give the candidate room to continue, while lightly naming the one invariant, branch, or state update worth narrating. Trend context: ${trend}`;
     case "ask_for_reasoning":
-      return `Probe the candidate's reasoning, not just the surface approach. Pressure=${pressure}. ${issueStyle} Ask for one concrete example, invariant, or correctness argument. Trend context: ${trend}`;
+      return `Probe the candidate's reasoning, not just the surface approach. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Ask for one concrete example, invariant, or correctness argument. Trend context: ${trend}`;
     case "probe_tradeoff":
-      return `Press on tradeoffs and algorithm choice. Pressure=${pressure}. ${issueStyle} Compare the current approach against a stronger alternative and ask what efficiency or simplicity tradeoff the candidate is making. Trend context: ${trend}`;
+      return `Press on tradeoffs and algorithm choice. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Compare the current approach against a stronger alternative and ask what efficiency or simplicity tradeoff the candidate is making. Trend context: ${trend}`;
     case "probe_correctness":
-      return `Probe correctness tightly. Pressure=${pressure}. ${issueStyle} Ask how the candidate knows the solution is correct on one example, branch, or invariant before moving on. Trend context: ${trend}`;
+      return `Probe correctness tightly. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Ask how the candidate knows the solution is correct on one example, branch, or invariant before moving on. Trend context: ${trend}`;
     case "ask_for_test_case":
-      return `Ask explicitly for high-risk test cases or edge cases. Pressure=${pressure}. ${issueStyle} Do not drift back into a broad approach discussion. Trend context: ${trend}`;
+      return `Ask explicitly for high-risk test cases or edge cases. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Do not drift back into a broad approach discussion. Trend context: ${trend}`;
     case "ask_for_complexity":
-      return `Ask explicitly for final time complexity, space complexity, and tradeoffs. Pressure=${pressure}. ${issueStyle} Keep the follow-up precise and evaluative. Trend context: ${trend}`;
+      return `Ask explicitly for final time complexity, space complexity, and tradeoffs. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Keep the follow-up precise and evaluative. Trend context: ${trend}`;
     case "ask_for_debug_plan":
-      return `Localize the debugging discussion. Pressure=${pressure}. Force the candidate to identify one failing input, one branch, or one state transition to inspect next. Trend context: ${trend}`;
+      return `Localize the debugging discussion. Intent=${intent}. Pressure=${pressure}. Force the candidate to identify one failing input, one branch, or one state transition to inspect next. Trend context: ${trend}`;
     case "give_hint":
-      return `Provide only the level of hint requested by the decision engine. Pressure=${pressure}. Nudge the candidate without solving the problem outright. Trend context: ${trend}`;
+      return `Provide only the level of hint requested by the decision engine. Intent=${intent}. Pressure=${pressure}. Nudge the candidate without solving the problem outright. Trend context: ${trend}`;
     case "move_stage":
-      return `Use a short transition to move the interview forward, then ask the required next question. Pressure=${pressure}. Trend context: ${trend}`;
+      return `Use a short transition to move the interview forward, then ask the required next question. Intent=${intent}. Pressure=${pressure}. Trend context: ${trend}`;
     case "encourage_and_continue":
-      return `Acknowledge briefly and let the candidate keep momentum. Pressure=${pressure}. Avoid over-talking; one concrete instruction is enough. Trend context: ${trend}`;
+      return `Acknowledge briefly and let the candidate keep momentum. Intent=${intent}. Pressure=${pressure}. Avoid over-talking; one concrete instruction is enough. Trend context: ${trend}`;
     case "ask_followup":
     default:
-      return `Ask one focused follow-up that directly matches the decision target. Pressure=${pressure}. Avoid generic praise or broad prompts. Trend context: ${trend}`;
+      return `Ask one focused follow-up that directly matches the decision target. Intent=${intent}. Pressure=${pressure}. Avoid generic praise or broad prompts. Trend context: ${trend}`;
   }
 }
 
@@ -56,6 +63,30 @@ export function buildFallbackReplyFromDecision(input: {
   const askLead = pressureLead(pressure, decision.action);
 
   switch (decision.action) {
+    case "move_to_wrap_up":
+      return chooseVariation(
+        buildWrapUpReply(decision, pressure, issueType),
+        previousAiTurn,
+        pressure === "soft"
+          ? "We have enough signal on this part. Give me one concise wrap-up and one thing you would still watch in production, then we will close it."
+          : "That gives me enough signal on this part. One concise final wrap-up, then we move on.",
+      );
+    case "close_topic":
+      return chooseVariation(
+        pressure === "surgical"
+          ? "The specific issue is clear now. No need to keep digging on this point. Let us close it and move on."
+          : "That point is covered well enough now. Let us move on.",
+        previousAiTurn,
+        "I have what I need on that point. We can move forward.",
+      );
+    case "end_interview":
+      return chooseVariation(
+        pressure === "soft"
+          ? "We have covered enough ground here. I am satisfied with the current answer, so we can stop on this question."
+          : "That covers this question well. We are done here.",
+        previousAiTurn,
+        "I have enough signal on this question. We can close it here.",
+      );
     case "ask_for_clarification":
       return chooseVariation(
         `${askLead} Walk me through one tiny example and tell me the exact state or output you expect there.`,
@@ -132,7 +163,9 @@ export function buildFallbackReplyFromDecision(input: {
       );
     case "ask_for_complexity":
       return chooseVariation(
-        pressure === "surgical"
+        decision.intent === "close"
+          ? "I have enough of the performance story. Give me one concise final complexity summary and then we will close this out."
+          : pressure === "surgical"
           ? `${askLead} Give me the final time complexity, space complexity, and the exact tradeoff you accepted.`
           : decision.question,
         previousAiTurn,
@@ -177,6 +210,22 @@ function pressureLead(
     default:
       return "Okay.";
   }
+}
+
+function buildWrapUpReply(
+  decision: CandidateDecision,
+  pressure: NonNullable<CandidateDecision["pressure"]>,
+  issueType: string,
+) {
+  if (pressure === "soft") {
+    return "We have covered a lot of ground cleanly. Give me one concise wrap-up and one thing you would still double-check, then we will stop here.";
+  }
+
+  if (pressure === "surgical" || issueType !== "generic") {
+    return `The ${issueType === "generic" ? "core point" : issueType.replaceAll("_", " ")} is clear enough now. Give me one concise final wrap-up and then we will close this question.`;
+  }
+
+  return decision.question;
 }
 
 function chooseVariation(primary: string, previousAiTurn?: string, alternate?: string) {

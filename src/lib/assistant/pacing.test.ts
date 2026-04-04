@@ -86,6 +86,9 @@ describe("pacing", () => {
       signals,
       ledger,
       pacing,
+      currentStage: "APPROACH_DISCUSSION",
+      intent: "probe",
+      trajectory: "plateauing",
       latestExecutionRun: null,
     });
 
@@ -118,6 +121,48 @@ describe("pacing", () => {
     expect(["defer", "move_to_implementation"]).toContain(pacing.timingVerdict);
     expect(pacing.interruptionCost).toBe("high");
     expect(pacing.urgency).toBe("low");
+  });
+
+  it("softens pressure when the intent is to unblock a collapsing candidate", () => {
+    const signals = {
+      ...baseSignals,
+      progress: "stuck" as const,
+      codeQuality: "buggy" as const,
+    };
+    const ledger = buildMemoryLedger({
+      currentStage: "DEBUGGING",
+      signals,
+      recentEvents: [],
+      latestExecutionRun: { status: "FAILED" },
+    });
+    const pacing = assessInterviewPacing({
+      currentStage: "DEBUGGING",
+      signals,
+      ledger,
+      latestExecutionRun: { status: "FAILED" },
+      decision: {
+        ...baseDecision,
+        action: "ask_for_debug_plan",
+        target: "debugging",
+      },
+    });
+
+    const enriched = applyDecisionPressure({
+      decision: {
+        ...baseDecision,
+        action: "ask_for_debug_plan",
+        target: "debugging",
+      },
+      signals,
+      ledger,
+      pacing,
+      currentStage: "DEBUGGING",
+      intent: "unblock",
+      trajectory: "collapsing",
+      latestExecutionRun: { status: "FAILED" },
+    });
+
+    expect(enriched.pressure).toBe("soft");
   });
 });
 

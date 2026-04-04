@@ -118,4 +118,68 @@ describe("buildSessionSnapshotState", () => {
       "Wrap Up",
     ]);
   });
+
+  it("surfaces latest intent and trajectory snapshots alongside signals and decisions", () => {
+    const state = buildSessionSnapshotState({
+      currentStage: "IMPLEMENTATION",
+      events: [],
+      candidateStateSnapshots: [
+        {
+          id: "snap-1",
+          stage: "IMPLEMENTATION",
+          source: "gemini",
+          snapshotJson: {
+            progress: "progressing",
+            understanding: "clear",
+            structuredEvidence: [],
+          },
+          createdAt: new Date("2026-04-02T20:00:00.000Z"),
+        },
+      ],
+      interviewerDecisionSnapshots: [
+        {
+          id: "dec-1",
+          stage: "IMPLEMENTATION",
+          source: "gemini",
+          decisionJson: {
+            action: "encourage_and_continue",
+            target: "implementation",
+          },
+          createdAt: new Date("2026-04-02T20:00:01.000Z"),
+        },
+      ],
+      intentSnapshots: [
+        {
+          id: "intent-1",
+          stage: "IMPLEMENTATION",
+          source: "gemini",
+          intentJson: {
+            intent: "advance",
+            targetSignal: "implementation",
+            expectedOutcome: "advance_stage",
+          },
+          createdAt: new Date("2026-04-02T20:00:02.000Z"),
+        },
+      ],
+      trajectorySnapshots: [
+        {
+          id: "traj-1",
+          stage: "IMPLEMENTATION",
+          source: "gemini",
+          trajectoryJson: {
+            candidateTrajectory: "steady_progress",
+            bestIntervention: "none",
+            interruptionCost: "high",
+          },
+          createdAt: new Date("2026-04-02T20:00:03.000Z"),
+        },
+      ],
+      executionRuns: [{ status: "PASSED", stdout: "ok", stderr: "" }],
+    });
+
+    expect(state.latestIntent?.intent).toBe("advance");
+    expect(state.latestTrajectory?.candidateTrajectory).toBe("steady_progress");
+    expect(state.intentSnapshots).toHaveLength(1);
+    expect(state.trajectorySnapshots).toHaveLength(1);
+  });
 });

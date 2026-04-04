@@ -2,6 +2,8 @@
 
 const readCandidateStateSnapshots = vi.fn();
 const readInterviewerDecisionSnapshots = vi.fn();
+const readIntentSnapshots = vi.fn();
+const readTrajectorySnapshots = vi.fn();
 
 const prisma = {
   interviewSession: {
@@ -31,6 +33,8 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/session/snapshots", () => ({
   readCandidateStateSnapshots,
   readInterviewerDecisionSnapshots,
+  readIntentSnapshots,
+  readTrajectorySnapshots,
 }));
 
 describe("session report route", () => {
@@ -45,6 +49,8 @@ describe("session report route", () => {
     prisma.feedbackReport.upsert.mockReset();
     readCandidateStateSnapshots.mockReset();
     readInterviewerDecisionSnapshots.mockReset();
+    readIntentSnapshots.mockReset();
+    readTrajectorySnapshots.mockReset();
   });
 
   it("generates and persists a v0 report", async () => {
@@ -74,6 +80,8 @@ describe("session report route", () => {
 
     readCandidateStateSnapshots.mockResolvedValue([]);
     readInterviewerDecisionSnapshots.mockResolvedValue([]);
+    readIntentSnapshots.mockResolvedValue([]);
+    readTrajectorySnapshots.mockResolvedValue([]);
     prisma.sessionEvent.create
       .mockResolvedValueOnce({ id: "evt-eval", eventType: "EVALUATION_STARTED", eventTime: new Date() })
       .mockResolvedValueOnce({ id: "evt-report", eventType: "REPORT_GENERATED", eventTime: new Date() });

@@ -73,6 +73,7 @@ describe("generateSessionReport", () => {
     const candidateDna = reportJson.candidateDna as Record<string, unknown>;
     const momentsOfTruth = reportJson.momentsOfTruth as Array<Record<string, unknown>>;
     const rubricSummary = reportJson.rubricSummary as Array<Record<string, unknown>>;
+    const stageSections = reportJson.stageSections as Array<Record<string, unknown>>;
 
     expect(reportJson.candidateState).toBeTruthy();
     expect(reportJson.latestDecision).toBeTruthy();
@@ -94,7 +95,11 @@ describe("generateSessionReport", () => {
     expect(Array.isArray(momentsOfTruth)).toBe(true);
     expect(momentsOfTruth.length).toBeGreaterThan(0);
     expect(Array.isArray(rubricSummary)).toBe(true);
-    expect(rubricSummary.length).toBe(dimensions.length);
+    expect(rubricSummary.length).toBe(3);
+    expect(rubricSummary.map((item) => item.key)).toEqual(["correctness", "complexity", "communication"]);
+    expect(rubricSummary.every((item) => typeof item.score === "number")).toBe(true);
+    expect(Array.isArray(stageSections)).toBe(true);
+    expect(stageSections.some((item) => item.label === "Discussion")).toBe(true);
     expect(dimensions.some((dimension) => dimension.key === "independence")).toBe(true);
   });
 
@@ -149,10 +154,14 @@ describe("generateSessionReport", () => {
     });
 
     const stageReplay = (report.reportJson as Record<string, unknown>).stageReplay as Array<Record<string, unknown>>;
+    const stageSections = (report.reportJson as Record<string, unknown>).stageSections as Array<Record<string, unknown>>;
     const testingGroup = stageReplay.find((group) => /testing/i.test(String(group.stage ?? "")) || /ask_for_complexity|PASSED/i.test(JSON.stringify(group)));
+    const testingSection = stageSections.find((group) => /testing/i.test(String(group.label ?? "")));
 
     expect(testingGroup).toBeTruthy();
     expect(JSON.stringify(testingGroup)).toMatch(/Signal snapshot|Decision: ask_for_complexity|Code run result: PASSED/i);
+    expect(testingSection).toBeTruthy();
+    expect(JSON.stringify(testingSection)).toMatch(/ask_for_complexity|PASSED/i);
   });
 
   it("rewards efficient low-rescue sessions and surfaces coachability in the report", () => {
@@ -335,12 +344,102 @@ describe("generateSessionReport", () => {
           createdAt: new Date("2026-04-02T20:00:01.000Z"),
         },
       ],
+      intentSnapshots: [
+        {
+          id: "intent-1",
+          stage: "WRAP_UP",
+          intentJson: {
+            intent: "close",
+            targetSignal: "summary",
+            expectedOutcome: "close_topic",
+            urgency: "medium",
+          },
+          createdAt: new Date("2026-04-02T20:00:01.500Z"),
+        },
+      ],
+      trajectorySnapshots: [
+        {
+          id: "traj-1",
+          stage: "WRAP_UP",
+          trajectoryJson: {
+            candidateTrajectory: "steady_progress",
+            expectedWithNoIntervention: "will_finish",
+            interventionValue: "low",
+            bestIntervention: "close_topic",
+            interruptionCost: "low",
+            evidenceGainIfAskNow: "low",
+            confidence: 0.77,
+          },
+          createdAt: new Date("2026-04-02T20:00:01.700Z"),
+        },
+      ],
     });
 
     const reportJson = report.reportJson as Record<string, unknown>;
     expect((reportJson.candidateState as Record<string, unknown>).summary).toBe("Persisted snapshot should win.");
     expect((reportJson.latestDecision as Record<string, unknown>).action).toBe("move_to_wrap_up");
+    expect((reportJson.latestIntent as Record<string, unknown>).intent).toBe("close");
+    expect((reportJson.latestTrajectory as Record<string, unknown>).bestIntervention).toBe("close_topic");
+    expect((reportJson.sessionCritic as Record<string, unknown>).closureQuality).toBeTruthy();
+    expect(Array.isArray(reportJson.intentTimeline)).toBe(true);
+    expect(Array.isArray(reportJson.trajectoryTimeline)).toBe(true);
     expect(JSON.stringify(reportJson.stageReplay)).toMatch(/Persisted snapshot should win|move_to_wrap_up/);
+    expect(JSON.stringify(reportJson.stageSections)).toMatch(/Wrap Up|Persisted snapshot should win|move_to_wrap_up/);
+  });
+
+  it("produces explicit 1-5 rubric evidence for correctness, complexity, and communication", () => {
+    const report = generateSessionReport({
+      sessionId: "session-6",
+      questionTitle: "Two Sum",
+      transcripts: [
+        { speaker: "USER", text: "I can explain the tradeoff and complexity clearly." },
+        { speaker: "USER", text: "The hashmap gives O(n) time and O(n) space." },
+      ],
+      events: [
+        { eventType: "STAGE_ADVANCED", payloadJson: { stage: "TESTING_AND_COMPLEXITY" } },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            stage: "WRAP_UP",
+            signals: {
+              understanding: "clear",
+              progress: "done",
+              communication: "clear",
+              codeQuality: "correct",
+              algorithmChoice: "strong",
+              edgeCaseAwareness: "present",
+              behavior: "structured",
+              reasoningDepth: "deep",
+              testingDiscipline: "strong",
+              complexityRigor: "strong",
+              confidence: 0.95,
+              summary: "The candidate closed with strong final evidence.",
+            },
+          },
+        },
+      ],
+      executionRuns: [{ status: "PASSED", stdout: "ok" }],
+    });
+
+    const rubricSummary = (report.reportJson as Record<string, unknown>).rubricSummary as Array<Record<string, unknown>>;
+    const correctness = rubricSummary.find((item) => item.key === "correctness");
+    const complexity = rubricSummary.find((item) => item.key === "complexity");
+    const communication = rubricSummary.find((item) => item.key === "communication");
+
+    expect(correctness?.score).toBeGreaterThanOrEqual(4);
+    expect(correctness?.maxScore).toBe(5);
+    expect(Array.isArray(correctness?.evidence)).toBe(true);
+    expect(typeof correctness?.basis).toBe("string");
+
+    expect(complexity?.score).toBeGreaterThanOrEqual(4);
+    expect(complexity?.maxScore).toBe(5);
+    expect(Array.isArray(complexity?.evidence)).toBe(true);
+    expect(typeof complexity?.basis).toBe("string");
+
+    expect(communication?.score).toBeGreaterThanOrEqual(4);
+    expect(communication?.maxScore).toBe(5);
+    expect(Array.isArray(communication?.evidence)).toBe(true);
+    expect(typeof communication?.basis).toBe("string");
   });
 });
 

@@ -1,8 +1,14 @@
 ﻿import Link from "next/link";
 import { notFound } from "next/navigation";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
+import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
 import { buildSessionSnapshotState } from "@/lib/session/state";
-import { readCandidateStateSnapshots, readInterviewerDecisionSnapshots } from "@/lib/session/snapshots";
+import {
+  readCandidateStateSnapshots,
+  readInterviewerDecisionSnapshots,
+  readIntentSnapshots,
+  readTrajectorySnapshots,
+} from "@/lib/session/snapshots";
 import { isCodingInterviewStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
 
@@ -74,6 +80,16 @@ type StageReplayGroup = {
   turns?: Array<{ speaker: string; text: string }>;
 };
 
+type StageReplaySection = {
+  key?: string;
+  label?: string;
+  stages?: string[];
+  evidence?: string[];
+  signalSnapshots?: CandidateState[];
+  decisions?: LatestDecision[];
+  turns?: Array<{ speaker: string; text: string }>;
+};
+
 type ReportJson = {
   generatedAt?: string;
   questionTitle?: string;
@@ -120,7 +136,12 @@ type ReportJson = {
   overallSummary?: string;
   candidateState?: CandidateState | null;
   latestDecision?: LatestDecision | null;
+  latestIntent?: Record<string, unknown> | null;
+  latestTrajectory?: Record<string, unknown> | null;
+  sessionCritic?: SessionCriticSummary | null;
   stageReplay?: StageReplayGroup[];
+  intentTimeline?: Array<{ createdAt?: string; stage?: string | null; payload?: Record<string, unknown> }>;
+  trajectoryTimeline?: Array<{ createdAt?: string; stage?: string | null; payload?: Record<string, unknown> }>;
   candidateDna?: {
     headline?: string;
     traits?: string[];
@@ -135,10 +156,16 @@ type ReportJson = {
     importance?: string;
   }>;
   rubricSummary?: Array<{
+    key?: string;
     dimension?: string;
+    score?: number;
+    maxScore?: number;
     verdict?: string;
     rationale?: string;
+    basis?: string;
+    evidence?: string[];
   }>;
+  stageSections?: StageReplaySection[];
 };
 
 type ReplayItem = {
@@ -152,7 +179,7 @@ type ReplayItem = {
 
 type CandidateStateTimelineItem = {
   id: string;
-  kind: "stage" | "signal" | "decision" | "hint" | "code_run";
+  kind: "stage" | "signal" | "decision" | "intent" | "trajectory" | "hint" | "code_run";
   time: string;
   sortTime: number;
   title: string;
@@ -166,6 +193,14 @@ type CandidateStateTimelineItem = {
   unresolvedIssues?: string[];
   missingEvidence?: string[];
   evidenceFocus?: string | null;
+  intent?: string | null;
+  intentTargetSignal?: string | null;
+  expectedOutcome?: string | null;
+  candidateTrajectory?: string | null;
+  expectedWithNoIntervention?: string | null;
+  interventionValue?: string | null;
+  bestIntervention?: string | null;
+  expectedEvidenceGain?: string | null;
   payload: Record<string, unknown>;
 };
 
@@ -198,9 +233,11 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     notFound();
   }
 
-  const [candidateStateSnapshots, interviewerDecisionSnapshots] = await Promise.all([
+  const [candidateStateSnapshots, interviewerDecisionSnapshots, intentSnapshots, trajectorySnapshots] = await Promise.all([
     readCandidateStateSnapshots(session.id),
     readInterviewerDecisionSnapshots(session.id),
+    readIntentSnapshots(session.id),
+    readTrajectorySnapshots(session.id),
   ]);
 
   if (!session.feedbackReport) {
@@ -230,6 +267,8 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     events: session.events,
     candidateStateSnapshots: candidateStateSnapshots,
     interviewerDecisionSnapshots: interviewerDecisionSnapshots,
+    intentSnapshots,
+    trajectorySnapshots,
     executionRuns: session.executionRuns,
   });
   if (!reportJson.candidateState && snapshotState.latestSignals) {
@@ -238,12 +277,32 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
   if (!reportJson.latestDecision && snapshotState.latestDecision) {
     reportJson.latestDecision = snapshotState.latestDecision as LatestDecision;
   }
+  if (!reportJson.latestIntent && snapshotState.latestIntent) {
+    reportJson.latestIntent = snapshotState.latestIntent;
+  }
+  if (!reportJson.latestTrajectory && snapshotState.latestTrajectory) {
+    reportJson.latestTrajectory = snapshotState.latestTrajectory;
+  }
+  if (!reportJson.intentTimeline && snapshotState.intentSnapshots.length > 0) {
+    reportJson.intentTimeline = snapshotState.intentSnapshots.map((item) => ({
+      createdAt: item.createdAt,
+      stage: item.stage,
+      payload: item.intent,
+    }));
+  }
+  if (!reportJson.trajectoryTimeline && snapshotState.trajectorySnapshots.length > 0) {
+    reportJson.trajectoryTimeline = snapshotState.trajectorySnapshots.map((item) => ({
+      createdAt: item.createdAt,
+      stage: item.stage,
+      payload: item.trajectory,
+    }));
+  }
   const reportCurrentStage = reportJson.currentStage ?? snapshotState.currentStageLabel;
   const reportStageJourney =
     Array.isArray(reportJson.stageJourney) && reportJson.stageJourney.length > 0
       ? reportJson.stageJourney
       : snapshotState.stageJourney;
-  const stageReplayGroups = reportJson.stageReplay ?? [];
+  const stageReplaySections = reportJson.stageSections ?? [];
   const dimensions = normalizeDimensions(reportJson.dimensions, session.evaluation?.dimensionScores ?? []);
   const replayItems = buildReplayItems({
     events: session.events,
@@ -256,6 +315,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     .reverse()
     .find((event) => event.eventType === 'CRITIC_VERDICT_RECORDED');
   const latestCritic = latestCriticEvent ? asRecord(asRecord(latestCriticEvent.payloadJson).criticVerdict) : null;
+  const sessionCritic =
+    reportJson.sessionCritic ??
+    summarizeSessionCritic({
+      events: session.events.map((event) => ({ eventType: event.eventType, payloadJson: event.payloadJson })),
+      latestSignals: reportJson.candidateState ?? snapshotState.latestSignals,
+    });
   const reportLedger =
     snapshotState.ledger ??
     (reportJson.candidateState
@@ -341,19 +406,38 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
           </article>
 
           <article style={panelStyle}>
-            <h2 style={sectionTitleStyle}>Rubric Summary</h2>
+            <h2 style={sectionTitleStyle}>Rubric Scorecard</h2>
             <div style={{ display: "grid", gap: 10 }}>
               {(reportJson.rubricSummary ?? []).length === 0 ? (
-                <p style={mutedParagraphStyle}>No rubric summary is available yet.</p>
+                <p style={mutedParagraphStyle}>No rubric scorecard is available yet.</p>
               ) : (
                 (reportJson.rubricSummary ?? []).map((item, index) => (
                   <div key={`rubric-summary-${index}`} style={listItemStyle}>
-                    <strong>{item.dimension ?? "Dimension"}</strong>
-                    {item.verdict ? (
-                      <p style={{ ...mutedParagraphStyle, marginTop: 8 }}><strong>Verdict:</strong> {item.verdict}</p>
-                    ) : null}
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <strong>{item.dimension ?? "Dimension"}</strong>
+                      <span style={stagePillStyle}>
+                        {item.score ?? "?"}/{item.maxScore ?? 5}
+                      </span>
+                    </div>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                      <strong>Verdict:</strong> {item.verdict ?? "mixed"}
+                    </p>
                     {item.rationale ? (
                       <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{item.rationale}</p>
+                    ) : null}
+                    {item.basis ? (
+                      <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                        <strong>Basis:</strong> {item.basis}
+                      </p>
+                    ) : null}
+                    {Array.isArray(item.evidence) && item.evidence.length > 0 ? (
+                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                        {item.evidence.map((point, pointIndex) => (
+                          <div key={`rubric-summary-${index}-${pointIndex}`} style={listItemStyle}>
+                            {point}
+                          </div>
+                        ))}
+                      </div>
                     ) : null}
                   </div>
                 ))
@@ -587,6 +671,114 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
           </article>
         </section>
 
+        <section style={gridStyle}>
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Latest Intent</h2>
+            {reportJson.latestIntent ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <MetricRow label="Intent" value={stringValue(reportJson.latestIntent.intent) ?? "unknown"} />
+                <MetricRow
+                  label="Target Signal"
+                  value={stringValue(reportJson.latestIntent.targetSignal) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Expected Outcome"
+                  value={stringValue(reportJson.latestIntent.expectedOutcome) ?? "unknown"}
+                />
+                <MetricRow label="Urgency" value={stringValue(reportJson.latestIntent.urgency) ?? "unknown"} />
+                <MetricRow
+                  label="Can Defer"
+                  value={
+                    typeof reportJson.latestIntent.canDefer === "boolean"
+                      ? reportJson.latestIntent.canDefer
+                        ? "Yes"
+                        : "No"
+                      : "unknown"
+                  }
+                />
+                {stringValue(reportJson.latestIntent.reason) ? (
+                  <div style={listItemStyle}>
+                    <strong>Reason</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                      {stringValue(reportJson.latestIntent.reason)}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p style={mutedParagraphStyle}>No intent snapshot recorded yet.</p>
+            )}
+          </article>
+
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Latest Trajectory</h2>
+            {reportJson.latestTrajectory ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <MetricRow
+                  label="Candidate Trajectory"
+                  value={stringValue(reportJson.latestTrajectory.candidateTrajectory) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Expected Without Intervention"
+                  value={stringValue(reportJson.latestTrajectory.expectedWithNoIntervention) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Intervention Value"
+                  value={stringValue(reportJson.latestTrajectory.interventionValue) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Best Intervention"
+                  value={stringValue(reportJson.latestTrajectory.bestIntervention) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Interruption Cost"
+                  value={stringValue(reportJson.latestTrajectory.interruptionCost) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Evidence Gain If Ask Now"
+                  value={stringValue(reportJson.latestTrajectory.evidenceGainIfAskNow) ?? "unknown"}
+                />
+                <MetricRow
+                  label="Confidence"
+                  value={
+                    typeof reportJson.latestTrajectory.confidence === "number"
+                      ? `${Math.round(reportJson.latestTrajectory.confidence * 100)}%`
+                      : "unknown"
+                  }
+                />
+              </div>
+            ) : (
+              <p style={mutedParagraphStyle}>No trajectory snapshot recorded yet.</p>
+            )}
+          </article>
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>Session Critic</h2>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+              <Metric label="Redundancy" value={`${sessionCritic.redundancyScore}/100`} />
+              <Metric label="Interruptions" value={`${sessionCritic.interruptionScore}/100`} />
+              <Metric label="Pressure Balance" value={sessionCritic.pressureBalance} />
+              <Metric label="Flow Preservation" value={sessionCritic.flowPreservation} />
+              <Metric label="Timing Quality" value={sessionCritic.timingQuality} />
+              <Metric label="Closure Quality" value={sessionCritic.closureQuality} />
+            </div>
+            {sessionCritic.notes.length > 0 ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                <strong>Session Notes</strong>
+                {sessionCritic.notes.map((note, index) => (
+                  <div key={`session-critic-note-${index}`} style={listItemStyle}>
+                    {note}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={mutedParagraphStyle}>No session-level critic notes yet.</p>
+            )}
+          </div>
+        </section>
+
         <section style={panelStyle}>
           <h2 style={sectionTitleStyle}>Memory Ledger</h2>
           <div style={{ display: "grid", gap: 12 }}>
@@ -686,15 +878,17 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
         <section style={panelStyle}>
           <h2 style={sectionTitleStyle}>Stage Replay</h2>
           <div style={{ display: "grid", gap: 16 }}>
-            {stageReplayGroups.length === 0 ? (
+            {stageReplaySections.length === 0 ? (
               <p style={mutedParagraphStyle}>No stage-grouped replay markers were captured for this session.</p>
             ) : (
-              stageReplayGroups.map((group, index) => (
-                <details key={group.stage} style={accordionStyle} open={index === 0}>
+              stageReplaySections.map((group, index) => (
+                <details key={group.key ?? group.label ?? `section-${index}`} style={accordionStyle} open={index === 0}>
                   <summary style={accordionSummaryStyle}>
                     <div style={{ display: "grid", gap: 6 }}>
-                      <strong>{group.label}</strong>
-                      <span style={{ color: "var(--muted)", fontSize: 13 }}>{group.stage}</span>
+                      <strong>{group.label ?? "Stage section"}</strong>
+                      <span style={{ color: "var(--muted)", fontSize: 13 }}>
+                        {(group.stages ?? []).join(" • ")}
+                      </span>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                       <span style={stagePillStyle}>{summarizeStageCount(group.signalSnapshots?.length, "signal")}</span>
@@ -708,7 +902,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       <div style={{ display: "grid", gap: 8 }}>
                         <strong>Evidence trail</strong>
                         {group.evidence.map((item, evidenceIndex) => (
-                          <div key={`${group.stage}-evidence-${evidenceIndex}`} style={listItemStyle}>
+                          <div key={`${group.key ?? group.label}-evidence-${evidenceIndex}`} style={listItemStyle}>
                             {item}
                           </div>
                         ))}
@@ -718,7 +912,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       <div style={{ display: "grid", gap: 8 }}>
                         <strong>Candidate state checkpoints</strong>
                         {group.signalSnapshots.map((signal, signalIndex) => (
-                          <div key={`${group.stage}-signal-${signalIndex}`} style={listItemStyle}>
+                          <div key={`${group.key ?? group.label}-signal-${signalIndex}`} style={listItemStyle}>
                             <strong>
                               {signal.progress ?? "unknown progress"} / {signal.reasoningDepth ?? "unknown reasoning"}
                             </strong>
@@ -733,7 +927,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       <div style={{ display: "grid", gap: 8 }}>
                         <strong>Interviewer decisions</strong>
                         {group.decisions.map((decision, decisionIndex) => (
-                          <div key={`${group.stage}-decision-${decisionIndex}`} style={listItemStyle}>
+                          <div key={`${group.key ?? group.label}-decision-${decisionIndex}`} style={listItemStyle}>
                             <strong>{decision.action ?? "decision"}</strong>
                             <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
                               {decision.question ?? decision.reason ?? "No detail captured."}
@@ -746,7 +940,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       <div style={{ display: "grid", gap: 8 }}>
                         <strong>Representative turns</strong>
                         {group.turns.map((turn, turnIndex) => (
-                          <div key={`${group.stage}-turn-${turnIndex}`} style={listItemStyle}>
+                          <div key={`${group.key ?? group.label}-turn-${turnIndex}`} style={listItemStyle}>
                             <strong>{turn.speaker}</strong>
                             <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{turn.text}</p>
                           </div>
@@ -780,6 +974,36 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     <p style={mutedParagraphStyle}>
                       <strong>Evidence focus:</strong> {item.evidenceFocus}
                     </p>
+                  ) : null}
+                  {item.intent || item.intentTargetSignal || item.expectedOutcome ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.intent ? <span style={stagePillStyle}>intent: {item.intent}</span> : null}
+                      {item.intentTargetSignal ? (
+                        <span style={stagePillStyle}>target signal: {item.intentTargetSignal}</span>
+                      ) : null}
+                      {item.expectedOutcome ? (
+                        <span style={stagePillStyle}>outcome: {item.expectedOutcome}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {item.candidateTrajectory || item.expectedWithNoIntervention || item.bestIntervention ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {item.candidateTrajectory ? (
+                        <span style={stagePillStyle}>trajectory: {item.candidateTrajectory}</span>
+                      ) : null}
+                      {item.expectedWithNoIntervention ? (
+                        <span style={stagePillStyle}>no-intervention: {item.expectedWithNoIntervention}</span>
+                      ) : null}
+                      {item.bestIntervention ? (
+                        <span style={stagePillStyle}>best move: {item.bestIntervention}</span>
+                      ) : null}
+                      {item.interventionValue ? (
+                        <span style={stagePillStyle}>value: {item.interventionValue}</span>
+                      ) : null}
+                      {item.expectedEvidenceGain ? (
+                        <span style={stagePillStyle}>evidence gain: {item.expectedEvidenceGain}</span>
+                      ) : null}
+                    </div>
                   ) : null}
                   {item.timingVerdict || item.urgency || item.interruptionCost ? (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1071,6 +1295,8 @@ function buildCandidateStateTimeline(
         "STAGE_ADVANCED",
         "SIGNAL_SNAPSHOT_RECORDED",
         "DECISION_RECORDED",
+        "INTENT_SNAPSHOT_RECORDED",
+        "TRAJECTORY_SNAPSHOT_RECORDED",
         "CRITIC_VERDICT_RECORDED",
         "HINT_SERVED",
         "CODE_RUN_COMPLETED",
@@ -1133,6 +1359,42 @@ function buildCandidateStateTimeline(
           evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
           answeredTargets: [],
           collectedEvidence: [],
+          payload,
+        };
+      }
+
+      if (event.eventType === "INTENT_SNAPSHOT_RECORDED") {
+        const intent = asRecord(payload.intent);
+        return {
+          id: event.id,
+          kind: "intent" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Interviewer intent",
+          summary: `${stringValue(intent.intent) ?? "intent"} -> ${stringValue(intent.expectedOutcome) ?? "unknown outcome"}`,
+          urgency: stringValue(intent.urgency),
+          intent: stringValue(intent.intent),
+          intentTargetSignal: stringValue(intent.targetSignal),
+          expectedOutcome: stringValue(intent.expectedOutcome),
+          payload,
+        };
+      }
+
+      if (event.eventType === "TRAJECTORY_SNAPSHOT_RECORDED") {
+        const trajectory = asRecord(payload.trajectory);
+        return {
+          id: event.id,
+          kind: "trajectory" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Trajectory estimate",
+          summary: `${stringValue(trajectory.candidateTrajectory) ?? "trajectory"} / ${stringValue(trajectory.bestIntervention) ?? "unknown intervention"}`,
+          interruptionCost: stringValue(trajectory.interruptionCost),
+          candidateTrajectory: stringValue(trajectory.candidateTrajectory),
+          expectedWithNoIntervention: stringValue(trajectory.expectedWithNoIntervention),
+          interventionValue: stringValue(trajectory.interventionValue),
+          bestIntervention: stringValue(trajectory.bestIntervention),
+          expectedEvidenceGain: stringValue(trajectory.evidenceGainIfAskNow),
           payload,
         };
       }

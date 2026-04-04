@@ -19,6 +19,14 @@ export type InterviewerDecisionSnapshotRow = SnapshotRow & {
   decisionJson: unknown;
 };
 
+export type IntentSnapshotRow = SnapshotRow & {
+  intentJson: unknown;
+};
+
+export type TrajectorySnapshotRow = SnapshotRow & {
+  trajectoryJson: unknown;
+};
+
 type RawSnapshotClient = {
   $executeRawUnsafe?: (...args: unknown[]) => Promise<unknown>;
   $queryRawUnsafe?: <T>(...args: unknown[]) => Promise<T>;
@@ -67,6 +75,8 @@ export async function persistSessionSnapshots(input: {
   source?: string | null;
   signals?: unknown;
   decision?: unknown;
+  intent?: unknown;
+  trajectory?: unknown;
 }) {
   if (snapshotPersistenceDisabled) {
     return;
@@ -99,6 +109,30 @@ export async function persistSessionSnapshots(input: {
         input.stage ?? null,
         input.source ?? null,
         JSON.stringify(input.decision),
+      ),
+    );
+  }
+
+  if (input.intent) {
+    operations.push(
+      rawClient.$executeRawUnsafe(
+        'INSERT INTO "IntentSnapshot" ("sessionId", stage, source, "intentJson") VALUES ($1, $2, $3, $4::jsonb)',
+        input.sessionId,
+        input.stage ?? null,
+        input.source ?? null,
+        JSON.stringify(input.intent),
+      ),
+    );
+  }
+
+  if (input.trajectory) {
+    operations.push(
+      rawClient.$executeRawUnsafe(
+        'INSERT INTO "TrajectorySnapshot" ("sessionId", stage, source, "trajectoryJson") VALUES ($1, $2, $3, $4::jsonb)',
+        input.sessionId,
+        input.stage ?? null,
+        input.source ?? null,
+        JSON.stringify(input.trajectory),
       ),
     );
   }
@@ -151,6 +185,54 @@ export async function readInterviewerDecisionSnapshots(sessionId: string): Promi
   try {
     const rows = await rawClient.$queryRawUnsafe<InterviewerDecisionSnapshotRow[]>(
       'SELECT id, "sessionId", stage, source, "decisionJson", "createdAt" FROM "InterviewerDecisionSnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC',
+      sessionId,
+    );
+    return rows;
+  } catch (error) {
+    if (handleSnapshotError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function readIntentSnapshots(sessionId: string): Promise<IntentSnapshotRow[]> {
+  if (snapshotPersistenceDisabled) {
+    return [];
+  }
+
+  const rawClient = prisma as unknown as RawSnapshotClient;
+  if (!rawClient.$queryRawUnsafe) {
+    return [];
+  }
+
+  try {
+    const rows = await rawClient.$queryRawUnsafe<IntentSnapshotRow[]>(
+      'SELECT id, "sessionId", stage, source, "intentJson", "createdAt" FROM "IntentSnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC',
+      sessionId,
+    );
+    return rows;
+  } catch (error) {
+    if (handleSnapshotError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function readTrajectorySnapshots(sessionId: string): Promise<TrajectorySnapshotRow[]> {
+  if (snapshotPersistenceDisabled) {
+    return [];
+  }
+
+  const rawClient = prisma as unknown as RawSnapshotClient;
+  if (!rawClient.$queryRawUnsafe) {
+    return [];
+  }
+
+  try {
+    const rows = await rawClient.$queryRawUnsafe<TrajectorySnapshotRow[]>(
+      'SELECT id, "sessionId", stage, source, "trajectoryJson", "createdAt" FROM "TrajectorySnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC',
       sessionId,
     );
     return rows;

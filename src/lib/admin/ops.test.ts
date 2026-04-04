@@ -226,6 +226,34 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/batch=complexity_and_tradeoff/i);
   });
 
+  it("describes interviewer intent snapshots in a readable way", () => {
+    const description = buildSessionEventDescription("INTENT_SNAPSHOT_RECORDED", {
+      intent: {
+        intent: "advance",
+        targetSignal: "implementation",
+        expectedOutcome: "advance_stage",
+      },
+    });
+
+    expect(description).toMatch(/interviewer intent/i);
+    expect(description).toMatch(/advance/i);
+    expect(description).toMatch(/implementation/i);
+  });
+
+  it("describes trajectory snapshots in a readable way", () => {
+    const description = buildSessionEventDescription("TRAJECTORY_SNAPSHOT_RECORDED", {
+      trajectory: {
+        candidateTrajectory: "steady_progress",
+        bestIntervention: "none",
+        interruptionCost: "high",
+      },
+    });
+
+    expect(description).toMatch(/trajectory estimate/i);
+    expect(description).toMatch(/steady_progress/i);
+    expect(description).toMatch(/interruption=high/i);
+  });
+
   it("surfaces auto-captured evidence in critic descriptions", () => {
     const description = buildSessionEventDescription("CRITIC_VERDICT_RECORDED", {
       criticVerdict: {

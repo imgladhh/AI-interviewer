@@ -18,6 +18,15 @@ import {
   type HintRequestTiming,
   type MomentumAtHint,
 } from "@/lib/assistant/hint_strategy";
+import {
+  decideInterviewerIntent,
+  type IntentDecision,
+  type InterviewerIntent,
+} from "@/lib/assistant/interviewer_intent";
+import {
+  assessPassConditions,
+  selectRelevantPassAssessment,
+} from "@/lib/assistant/pass_conditions";
 import type {
   DecisionPressure,
   DecisionUrgency,
@@ -26,6 +35,10 @@ import type {
 } from "@/lib/assistant/pacing";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
+import {
+  estimateCandidateTrajectory,
+  type TrajectoryEstimate,
+} from "@/lib/assistant/trajectory_estimator";
 
 type ExecutionRunLike = {
   status: "PASSED" | "FAILED" | "ERROR" | "TIMEOUT";
@@ -66,6 +79,21 @@ export type CandidateDecisionTarget =
 export type CandidateDecision = {
   action: CandidateDecisionAction;
   target: CandidateDecisionTarget;
+  intent?: InterviewerIntent;
+  intentReason?: string;
+  intentTargetSignal?: string;
+  expectedOutcome?: IntentDecision["expectedOutcome"];
+  trajectory?: TrajectoryEstimate["candidateTrajectory"];
+  expectedWithNoIntervention?: TrajectoryEstimate["expectedWithNoIntervention"];
+  interventionValue?: TrajectoryEstimate["interventionValue"];
+  bestIntervention?: TrajectoryEstimate["bestIntervention"];
+  expectedEvidenceGain?: TrajectoryEstimate["evidenceGainIfAskNow"];
+  worthAskingNow?: boolean;
+  timing?: "ask_now" | "defer" | "skip";
+  closureCandidate?: boolean;
+  passConditions?: string[];
+  missingPassConditions?: string[];
+  passConditionTopic?: string;
   pressure?: DecisionPressure;
   urgency?: DecisionUrgency;
   canDefer?: boolean;
@@ -106,6 +134,8 @@ export function makeCandidateDecision(input: {
   signals: CandidateSignalSnapshot;
   recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>;
   latestExecutionRun?: ExecutionRunLike | null;
+  intent?: IntentDecision;
+  trajectory?: TrajectoryEstimate;
 }): CandidateDecision {
   const { currentStage, policy, signals, latestExecutionRun } = input;
   const ledger = buildMemoryLedger({
@@ -128,6 +158,12 @@ export function makeCandidateDecision(input: {
   const tradeoffEvidence = findStructuredEvidence(signals, "complexity", /tradeoff/i);
   const hadRecentImplementationReadiness = detectRecentImplementationReadiness(input.recentEvents ?? []);
   const proofStyleAlreadyPressedTooMuch = ledger.recentProofStyleProbeCount >= 1;
+  const passAssessment = assessPassConditions({
+    currentStage,
+    signals,
+    memory: ledger,
+    latestExecutionRun,
+  });
   const shouldPreferImplementation =
     (signals.readyToCode || hadRecentImplementationReadiness) &&
     signals.understanding === "clear" &&
@@ -135,17 +171,99 @@ export function makeCandidateDecision(input: {
     signals.progress === "progressing" &&
     signals.communication !== "unclear";
   const enoughPreCodeEvidence =
-    shouldPreferImplementation &&
-    signals.complexityRigor !== "missing" &&
-    (signals.testingDiscipline !== "missing" || signals.edgeCaseAwareness !== "missing");
+    shouldPreferImplementation && passAssessment.implementation.complete;
   const targetAlreadyAnswered = (...targets: string[]) =>
     targets.some((target) => ledger.answeredTargets.includes(target));
   const hasCollectedEvidence = (...evidence: string[]) =>
     evidence.some((item) => ledger.collectedEvidence.includes(item));
+  const resolvedIntent =
+    input.intent ??
+    decideInterviewerIntent({
+      currentStage,
+      signals,
+      memory: ledger,
+      latestExecutionRun,
+    });
+  const resolvedTrajectory =
+    input.trajectory ??
+    estimateCandidateTrajectory({
+      currentStage,
+      signals,
+      memory: ledger,
+      latestExecutionRun,
+      intent: resolvedIntent,
+    });
+  const attachIntentTrajectory = (decision: CandidateDecision): CandidateDecision => {
+    const relevantPassAssessment = selectRelevantPassAssessment(
+      decision.target,
+      decision.suggestedStage ?? currentStage,
+      passAssessment,
+    );
+    const worthAskingNow =
+      resolvedIntent.intent === "close"
+        ? false
+        : !(resolvedTrajectory.interruptionCost === "high" && resolvedTrajectory.evidenceGainIfAskNow === "low");
+    return {
+      ...decision,
+      intent: resolvedIntent.intent,
+      intentReason: resolvedIntent.reason,
+      intentTargetSignal: resolvedIntent.targetSignal,
+      expectedOutcome: resolvedIntent.expectedOutcome,
+      trajectory: resolvedTrajectory.candidateTrajectory,
+      expectedWithNoIntervention: resolvedTrajectory.expectedWithNoIntervention,
+      interventionValue: resolvedTrajectory.interventionValue,
+      bestIntervention: resolvedTrajectory.bestIntervention,
+      expectedEvidenceGain: resolvedTrajectory.evidenceGainIfAskNow,
+      worthAskingNow,
+      timing:
+        !worthAskingNow
+          ? "defer"
+          : resolvedIntent.intent === "close"
+            ? "skip"
+            : "ask_now",
+      closureCandidate:
+        resolvedIntent.intent === "close" ||
+        resolvedTrajectory.bestIntervention === "close_topic" ||
+        decision.action === "move_to_wrap_up" ||
+        decision.action === "close_topic" ||
+        decision.action === "end_interview",
+      passConditions: relevantPassAssessment.passConditions,
+      missingPassConditions: relevantPassAssessment.missing,
+      passConditionTopic: relevantPassAssessment.topic,
+    };
+  };
+
+  if (input.intent && resolvedIntent.intent === "close") {
+    return attachIntentTrajectory({
+      action: currentStage === "WRAP_UP" ? "end_interview" : "close_topic",
+      target: "summary",
+      question:
+        currentStage === "WRAP_UP"
+          ? "That covers this question well. We are done here."
+          : "You have already covered the important evidence for this topic. Let us close this out and move on.",
+      reason: resolvedIntent.reason,
+      confidence: 0.91,
+      suggestedStage: currentStage === "WRAP_UP" ? "WRAP_UP" : currentStage,
+      policyAction: currentStage === "WRAP_UP" ? "WRAP_UP" : input.policy.recommendedAction,
+    });
+  }
+
+  if (input.intent && resolvedIntent.intent === "advance" && resolvedTrajectory.bestIntervention === "move_to_implementation" && currentStage !== "WRAP_UP") {
+    return attachIntentTrajectory({
+      action: "encourage_and_continue",
+      target: "implementation",
+      question:
+        "You have enough evidence on the approach. Go ahead and implement it now, and we can come back to any remaining details after we see the code.",
+      reason: "Intent and trajectory both suggest that the highest-value move is to advance into implementation instead of interrupting momentum.",
+      confidence: 0.9,
+      suggestedStage: "IMPLEMENTATION",
+      policyAction: "LET_IMPLEMENT",
+    });
+  }
 
   if (signals.confidence <= 0.4) {
     if (shouldPreferImplementation) {
-      return {
+      return attachIntentTrajectory({
         action: "encourage_and_continue",
         target: "implementation",
         question:
@@ -159,11 +277,11 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "Implementation progress plus one concise note about the key state update or branch.",
         suggestedStage: "IMPLEMENTATION",
         policyAction: "LET_IMPLEMENT",
-      };
+      });
     }
 
     if (candidateHasFloor && signals.progress === "progressing") {
-      return {
+      return attachIntentTrajectory({
         action: "hold_and_listen",
         target: currentStage === "IMPLEMENTATION" ? "implementation" : "reasoning",
         question:
@@ -175,10 +293,10 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "One more concrete explanation, branch walk-through, or state update that improves classifier confidence.",
         suggestedStage: currentStage,
         policyAction: policy.recommendedAction,
-      };
+      });
     }
 
-    return {
+    return attachIntentTrajectory({
       action: "ask_for_clarification",
       target: currentStage === "PROBLEM_UNDERSTANDING" ? "understanding" : "reasoning",
       question:
@@ -198,7 +316,7 @@ export function makeCandidateDecision(input: {
           : "A tiny example, the exact next step, and the expected state or output.",
       suggestedStage: currentStage,
       policyAction: policy.recommendedAction,
-    };
+    });
   }
 
   if (policy.shouldServeHint) {
@@ -210,7 +328,7 @@ export function makeCandidateDecision(input: {
       hintLevel: policy.hintLevel,
       recentEvents: input.recentEvents,
     });
-    return {
+    return attachIntentTrajectory({
       action: "give_hint",
       target: mapHintTarget(policy.hintStyle),
       question: buildHintDecisionQuestion(policy.hintStyle, policy.hintLevel),
@@ -230,12 +348,12 @@ export function makeCandidateDecision(input: {
       hintRequestTiming: hintStrategy.hintRequestTiming,
       momentumAtHint: hintStrategy.momentumAtHint,
       policyAction: policy.recommendedAction,
-    };
+    });
   }
 
   if (signals.progress === "stuck" && repeatedFailures >= 2) {
     const failureSignal = classifyFailureSignal(latestExecutionRun, signals);
-    return {
+    return attachIntentTrajectory({
       action: "ask_for_debug_plan",
       target: "debugging",
       question: failureSignal.question,
@@ -246,12 +364,12 @@ export function makeCandidateDecision(input: {
       expectedAnswer: failureSignal.expectedAnswer,
       suggestedStage: "DEBUGGING",
       policyAction: "DEBUG_RUNTIME",
-    };
+    });
   }
 
   if (latestExecutionRun?.status === "FAILED" || latestExecutionRun?.status === "ERROR" || latestExecutionRun?.status === "TIMEOUT") {
     const failureSignal = classifyFailureSignal(latestExecutionRun, signals);
-    return {
+    return attachIntentTrajectory({
       action: "ask_for_debug_plan",
       target: "debugging",
       question: failureSignal.question,
@@ -262,11 +380,11 @@ export function makeCandidateDecision(input: {
       expectedAnswer: failureSignal.expectedAnswer,
       suggestedStage: "DEBUGGING",
       policyAction: policy.recommendedAction,
-    };
+    });
   }
 
   if (!latestExecutionRun && enoughPreCodeEvidence) {
-    return {
+    return attachIntentTrajectory({
       action: "encourage_and_continue",
       target: "implementation",
       question:
@@ -279,10 +397,27 @@ export function makeCandidateDecision(input: {
       expectedAnswer: "Implementation progress plus brief narration of the main loop or state update.",
       suggestedStage: "IMPLEMENTATION",
       policyAction: "LET_IMPLEMENT",
-    };
+    });
   }
 
   if (latestExecutionRun?.status === "PASSED" && currentStage !== "WRAP_UP") {
+    if (passAssessment.testing.complete && passAssessment.complexity.complete) {
+      return attachIntentTrajectory({
+        action: "move_to_wrap_up",
+        target: "summary",
+        question:
+          "Good. The implementation, validation, and performance story are all covered well enough. Give me one concise final wrap-up and then we will close this question.",
+        reason:
+          "The testing and complexity pass conditions are already satisfied, so the highest-value next move is to wrap up cleanly.",
+        confidence: 0.91,
+        targetCodeLine: "the final wrapped solution story",
+        specificIssue: "The main post-code evaluation gates are already satisfied.",
+        expectedAnswer: "A concise final summary of the solution and one production-minded check.",
+        suggestedStage: "WRAP_UP",
+        policyAction: "WRAP_UP",
+      });
+    }
+
     if (
       !targetAlreadyAnswered("testing", "edge_case") &&
       (signals.edgeCaseAwareness === "missing" || signals.edgeCaseAwareness === "partial")
@@ -291,7 +426,7 @@ export function makeCandidateDecision(input: {
         signals.edgeCaseAwareness === "missing"
           ? "Your latest run passed. Before you call it done, what empty-input, single-element, or duplicate-heavy cases would you test next?"
           : "Your latest run passed. Which boundary condition would you test next, and what exact output should it produce?";
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_test_case",
         target: "edge_case",
         question: testPrompt,
@@ -311,11 +446,11 @@ export function makeCandidateDecision(input: {
             : "One highest-risk boundary case and the exact output expected from the current implementation.",
         suggestedStage: "TESTING_AND_COMPLEXITY",
         policyAction: "VALIDATE_AND_TEST",
-      };
+      });
     }
 
     if (!targetAlreadyAnswered("complexity", "tradeoff")) {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_complexity",
         target: "complexity",
         question: "Now that the implementation works, walk me through the final time and space complexity and the main tradeoff behind this approach.",
@@ -326,10 +461,10 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "Final time complexity, space complexity, and one tradeoff compared with an alternative.",
         suggestedStage: "TESTING_AND_COMPLEXITY",
         policyAction: "VALIDATE_AND_TEST",
-      };
+      });
     }
 
-    return {
+    return attachIntentTrajectory({
       action: "move_to_wrap_up",
       target: "summary",
       question: "Good. You have already covered the implementation, validation, and performance story well enough. Give me one concise final wrap-up of the approach and one thing you would double-check in production, then we will close this question.",
@@ -340,12 +475,12 @@ export function makeCandidateDecision(input: {
       expectedAnswer: "A short final summary of the approach and one realistic production-risk check or improvement.",
       suggestedStage: "WRAP_UP",
       policyAction: "WRAP_UP",
-    };
+    });
   }
 
   if (currentStage === "PROBLEM_UNDERSTANDING") {
     if (shouldPreferImplementation && signals.behavior !== "overthinking" && signals.confidence >= 0.5) {
-      return {
+      return attachIntentTrajectory({
         action: "encourage_and_continue",
         target: "implementation",
         question:
@@ -358,11 +493,11 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "Implementation progress with short narration of the key branch, state update, or invariant.",
         suggestedStage: "IMPLEMENTATION",
         policyAction: "LET_IMPLEMENT",
-      };
+      });
     }
 
     if (signals.understanding !== "clear") {
-      return {
+      return attachIntentTrajectory({
         action: "ask_followup",
         target: "understanding",
         question: "Before we choose an algorithm, what assumptions are you making about the input and what would a correct output look like on one small example?",
@@ -373,10 +508,10 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "A clarified restatement with explicit assumptions and one small example.",
         suggestedStage: "PROBLEM_UNDERSTANDING",
         policyAction: "CLARIFY",
-      };
+      });
     }
 
-    return {
+    return attachIntentTrajectory({
       action: "move_stage",
       target: "approach",
       question: "Good. Given those assumptions, what algorithmic direction would you take first, and why does it fit the constraints?",
@@ -387,7 +522,7 @@ export function makeCandidateDecision(input: {
       expectedAnswer: "A concrete algorithm direction plus why it fits the constraints.",
       suggestedStage: "APPROACH_DISCUSSION",
       policyAction: "PROBE_APPROACH",
-    };
+    });
   }
 
   if (currentStage === "APPROACH_DISCUSSION") {
@@ -397,7 +532,7 @@ export function makeCandidateDecision(input: {
       !unstableTrend &&
       signals.confidence >= 0.5
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "encourage_and_continue",
         target: "implementation",
         question:
@@ -410,7 +545,7 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "Implementation progress with one short note on the most failure-prone branch, state update, or invariant.",
         suggestedStage: "IMPLEMENTATION",
         policyAction: "LET_IMPLEMENT",
-      };
+      });
     }
 
     if (shouldPreferImplementation && proofStyleAlreadyPressedTooMuch) {
@@ -447,7 +582,7 @@ export function makeCandidateDecision(input: {
     }
 
     if (invariantEvidence && !ledger.shouldAvoidTarget("correctness")) {
-      return {
+      return attachIntentTrajectory({
         action: "probe_correctness",
         target: "correctness",
         question:
@@ -460,11 +595,11 @@ export function makeCandidateDecision(input: {
           "One explicit invariant or one concrete example that shows what remains true after each step and why that guarantees correctness.",
         suggestedStage: "APPROACH_DISCUSSION",
         policyAction: "PROBE_APPROACH",
-      };
+      });
     }
 
     if (tradeoffEvidence && signals.algorithmChoice !== "strong" && !ledger.shouldAvoidTarget("tradeoff", "complexity")) {
-      return {
+      return attachIntentTrajectory({
         action: "probe_tradeoff",
         target: "tradeoff",
         question:
@@ -477,7 +612,7 @@ export function makeCandidateDecision(input: {
           "A direct comparison against one alternative, plus the runtime, memory, or simplicity tradeoff that justifies the chosen approach.",
         suggestedStage: "APPROACH_DISCUSSION",
         policyAction: "PROBE_APPROACH",
-      };
+      });
     }
 
     if (unstableTrend && signals.reasoningDepth !== "deep") {
@@ -693,7 +828,7 @@ export function makeCandidateDecision(input: {
       (signals.codeQuality === "correct" || latestExecutionRun?.status === "PASSED") &&
       (signals.edgeCaseAwareness === "missing" || signals.edgeCaseAwareness === "partial")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_test_case",
         target: "edge_case",
         question:
@@ -710,7 +845,7 @@ export function makeCandidateDecision(input: {
           : "The highest-risk boundary cases and whether the current code already handles them.",
         suggestedStage: "TESTING_AND_COMPLEXITY",
         policyAction: "VALIDATE_AND_TEST",
-      };
+      });
     }
 
     if (signals.progress === "stuck") {
@@ -748,7 +883,7 @@ export function makeCandidateDecision(input: {
       !targetAlreadyAnswered("testing", "edge_case") &&
       !ledger.shouldAvoidTarget("testing", "edge_case")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_test_case",
         target: "testing",
         question:
@@ -760,7 +895,7 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "Two or three concrete test cases, why they matter, and the exact expected output for each.",
         suggestedStage: "TESTING_AND_COMPLEXITY",
         policyAction: "VALIDATE_AND_TEST",
-      };
+      });
     }
 
     if (
@@ -850,7 +985,7 @@ export function makeCandidateDecision(input: {
       !targetAlreadyAnswered("testing", "edge_case") &&
       (signals.testingDiscipline === "missing" || signals.edgeCaseAwareness === "missing")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_test_case",
         target: "testing",
         question: "Before we wrap, which edge cases would you test first, and why are those the highest-risk cases for this solution?",
@@ -861,11 +996,11 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "A short list of high-risk edge cases and why they matter.",
         suggestedStage: "TESTING_AND_COMPLEXITY",
         policyAction: "VALIDATE_AND_TEST",
-      };
+      });
     }
 
     if (!targetAlreadyAnswered("complexity", "tradeoff") && signals.complexityRigor !== "strong") {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_complexity",
         target: "complexity",
         question:
@@ -877,11 +1012,11 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "Final time complexity, space complexity, and the tradeoff accepted to reach them.",
         suggestedStage: "TESTING_AND_COMPLEXITY",
         policyAction: "VALIDATE_AND_TEST",
-      };
+      });
     }
 
     if (!targetAlreadyAnswered("complexity", "tradeoff")) {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_complexity",
         target: "complexity",
         question: "Great. Give me the final time complexity, space complexity, and one tradeoff you made in choosing this approach.",
@@ -892,14 +1027,14 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "A concise final complexity statement plus one tradeoff in the chosen approach.",
         suggestedStage: "WRAP_UP",
         policyAction: "WRAP_UP",
-      };
+      });
     }
 
     if (
       hasCollectedEvidence("complexity_tradeoff", "test_cases") &&
       !ledger.missingEvidence.includes("correctness_proof")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "move_to_wrap_up",
         target: "summary",
         question: "Good. You have covered the tests and performance story. Give me one concise final summary of the solution and one implementation detail you would still watch carefully, then we will close this question.",
@@ -910,16 +1045,17 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "A concise final summary plus one implementation detail or risk to watch.",
         suggestedStage: "WRAP_UP",
         policyAction: "WRAP_UP",
-      };
+      });
     }
   }
 
   if (
     currentStage === "WRAP_UP" &&
-    targetAlreadyAnswered("summary") &&
-    (signals.progress === "done" || hasCollectedEvidence("implementation_plan", "test_cases", "complexity_tradeoff"))
+    (passAssessment.wrapUp.complete ||
+      (targetAlreadyAnswered("summary") &&
+        (signals.progress === "done" || hasCollectedEvidence("implementation_plan", "test_cases", "complexity_tradeoff"))))
   ) {
-    return {
+    return attachIntentTrajectory({
       action: "end_interview",
       target: "summary",
       question: "That covers this question well. We are done here.",
@@ -930,7 +1066,7 @@ export function makeCandidateDecision(input: {
       expectedAnswer: "No further answer is required beyond a brief acknowledgment.",
       suggestedStage: "WRAP_UP",
       policyAction: "WRAP_UP",
-    };
+    });
   }
 
   if (currentStage === "WRAP_UP") {
@@ -938,7 +1074,7 @@ export function makeCandidateDecision(input: {
       ledger.missingEvidence.includes("correctness_proof") &&
       !ledger.shouldAvoidTarget("reasoning", "correctness")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "probe_correctness",
         target: "correctness",
         question:
@@ -950,14 +1086,14 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "A short proof sketch, invariant, or state argument that explains why the final solution is correct.",
         suggestedStage: "WRAP_UP",
         policyAction: "WRAP_UP",
-      };
+      });
     }
 
     if (
       ledger.missingEvidence.includes("exact_test_outputs") &&
       !ledger.shouldAvoidTarget("testing", "edge_case")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "ask_for_test_case",
         target: "testing",
         question:
@@ -969,14 +1105,14 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "One high-risk test case, why it matters, and the precise expected output.",
         suggestedStage: "WRAP_UP",
         policyAction: "WRAP_UP",
-      };
+      });
     }
 
     if (
       ledger.missingEvidence.includes("constraint_tradeoff") &&
       !ledger.shouldAvoidTarget("complexity", "tradeoff")
     ) {
-      return {
+      return attachIntentTrajectory({
         action: "probe_tradeoff",
         target: "tradeoff",
         question:
@@ -988,12 +1124,12 @@ export function makeCandidateDecision(input: {
         expectedAnswer: "A concise explanation of the accepted runtime, memory, or simplicity tradeoff and why it fits the constraints.",
         suggestedStage: "WRAP_UP",
         policyAction: "WRAP_UP",
-      };
+      });
     }
   }
 
   if (repeatedHints >= 2 && signals.progress !== "done") {
-    return {
+    return attachIntentTrajectory({
       action: "ask_followup",
       target: "summary",
       question:
@@ -1005,10 +1141,10 @@ export function makeCandidateDecision(input: {
       expectedAnswer: "What already works, what remains uncertain, and one precise next step.",
       suggestedStage: currentStage,
       policyAction: policy.recommendedAction,
-    };
+    });
   }
 
-  return {
+  return attachIntentTrajectory({
     action: "move_to_wrap_up",
     target: "summary",
     question: "Wrap this up for me once: what is the final approach, what are the main tradeoffs, and what would you improve if you had more time?",
@@ -1019,7 +1155,7 @@ export function makeCandidateDecision(input: {
     expectedAnswer: "The final approach, main tradeoffs, and one improvement to try next.",
     suggestedStage: "WRAP_UP",
     policyAction: "WRAP_UP",
-  };
+  });
 }
 
 function looksImproving(trendSummary?: string) {

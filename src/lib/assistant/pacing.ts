@@ -1,8 +1,10 @@
 import type { CandidateDecision } from "@/lib/assistant/decision_engine";
 import { assessFlowState, type ContextReestablishmentCost } from "@/lib/assistant/flow_state";
+import type { InterviewerIntent } from "@/lib/assistant/interviewer_intent";
 import type { MemoryLedger } from "@/lib/assistant/memory_ledger";
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
+import type { TrajectoryEstimate } from "@/lib/assistant/trajectory_estimator";
 
 type ExecutionRunLike = {
   status: "PASSED" | "FAILED" | "ERROR" | "TIMEOUT";
@@ -251,32 +253,22 @@ export function applyDecisionPressure(input: {
   signals: CandidateSignalSnapshot;
   ledger: MemoryLedger;
   pacing: PacingAssessment;
+  currentStage: CodingInterviewStage;
+  intent?: InterviewerIntent;
+  trajectory?: TrajectoryEstimate["candidateTrajectory"];
   latestExecutionRun?: ExecutionRunLike | null;
 }): CandidateDecision {
   const { decision, signals, ledger, pacing, latestExecutionRun } = input;
-  let pressure: DecisionPressure = "neutral";
-
-  if (decision.action === "hold_and_listen" || decision.action === "ask_for_clarification") {
-    pressure = "soft";
-  } else if (
-    decision.action === "ask_for_debug_plan" ||
-    (decision.action === "probe_correctness" && (ledger.recentFailedRuns >= 2 || latestExecutionRun?.status === "FAILED")) ||
-    (decision.action === "probe_tradeoff" && signals.algorithmChoice === "suboptimal")
-  ) {
-    pressure = "surgical";
-  } else if (
-    ["probe_tradeoff", "probe_correctness", "ask_for_test_case", "ask_for_complexity"].includes(decision.action)
-  ) {
-    pressure = "challenging";
-  }
-
-  if (signals.confidence <= 0.5 && pressure !== "surgical") {
-    pressure = "soft";
-  }
-
-  if (!pacing.questionWorthAsking && pressure !== "surgical") {
-    pressure = "soft";
-  }
+  const pressure = scheduleDecisionPressure({
+    decision,
+    signals,
+    ledger,
+    pacing,
+    currentStage: input.currentStage,
+    intent: input.intent,
+    trajectory: input.trajectory,
+    latestExecutionRun,
+  });
 
   return {
     ...decision,
@@ -288,6 +280,65 @@ export function applyDecisionPressure(input: {
     batchable: pacing.batchable,
     batchGroup: pacing.batchGroup,
   };
+}
+
+function scheduleDecisionPressure(input: {
+  decision: CandidateDecision;
+  signals: CandidateSignalSnapshot;
+  ledger: MemoryLedger;
+  pacing: PacingAssessment;
+  currentStage: CodingInterviewStage;
+  intent?: InterviewerIntent;
+  trajectory?: TrajectoryEstimate["candidateTrajectory"];
+  latestExecutionRun?: ExecutionRunLike | null;
+}): DecisionPressure {
+  const { decision, signals, ledger, pacing, latestExecutionRun } = input;
+  let pressure: DecisionPressure = "neutral";
+
+  if (
+    decision.action === "hold_and_listen" ||
+    decision.action === "ask_for_clarification" ||
+    decision.action === "encourage_and_continue" ||
+    input.intent === "guide" ||
+    input.intent === "advance"
+  ) {
+    pressure = "soft";
+  } else if (
+    decision.action === "ask_for_debug_plan" ||
+    (decision.action === "probe_correctness" && (ledger.recentFailedRuns >= 2 || latestExecutionRun?.status === "FAILED")) ||
+    (decision.action === "probe_tradeoff" && signals.algorithmChoice === "suboptimal") ||
+    input.intent === "probe"
+  ) {
+    pressure = "surgical";
+  } else if (
+    ["probe_tradeoff", "probe_correctness", "ask_for_test_case", "ask_for_complexity"].includes(decision.action) ||
+    input.intent === "pressure" ||
+    input.intent === "validate"
+  ) {
+    pressure = "challenging";
+  }
+
+  if (input.trajectory === "collapsing" || input.intent === "unblock") {
+    pressure = "soft";
+  }
+
+  if (signals.confidence <= 0.5 && pressure !== "surgical") {
+    pressure = "soft";
+  }
+
+  if (!pacing.questionWorthAsking && pressure !== "surgical") {
+    pressure = "soft";
+  }
+
+  if ((decision.action === "move_to_wrap_up" || decision.action === "close_topic" || decision.action === "end_interview") && pressure !== "surgical") {
+    pressure = "neutral";
+  }
+
+  if (pressure === "surgical" && ledger.recentlyProbedTargets.filter((target) => target === decision.target).length >= 2) {
+    pressure = "challenging";
+  }
+
+  return pressure;
 }
 
 function classifyInterruptionCost(input: {

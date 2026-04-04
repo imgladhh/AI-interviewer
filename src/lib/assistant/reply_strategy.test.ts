@@ -104,4 +104,35 @@ describe("reply strategy issue shaping", () => {
     expect(reply).toMatch(/tiny example|what you expect/i);
     expect(reply).not.toMatch(/be precise/i);
   });
+
+  it("uses graceful wrap-up wording for move_to_wrap_up", () => {
+    const reply = buildFallbackReplyFromDecision({
+      decision: {
+        ...baseDecision,
+        action: "move_to_wrap_up",
+        target: "summary",
+        pressure: "soft",
+        intent: "close",
+        question: "Give me one concise final wrap-up, then we will close this question.",
+      },
+      signals: baseSignals,
+      currentStage: "WRAP_UP",
+    });
+
+    expect(reply).toMatch(/wrap-up|close this question|stop here/i);
+  });
+
+  it("mentions intent in the reply strategy description", () => {
+    const strategy = describeReplyStrategy(
+      {
+        ...baseDecision,
+        action: "probe_tradeoff",
+        target: "tradeoff",
+        intent: "validate",
+      },
+      baseSignals,
+    );
+
+    expect(strategy).toMatch(/Intent=validate/i);
+  });
 });

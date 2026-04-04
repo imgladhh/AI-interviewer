@@ -2,8 +2,14 @@
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import { assessLatentCalibration, type LatentCalibration } from "@/lib/assistant/latent_calibration";
 import { assessFlowState, type FlowState } from "@/lib/assistant/flow_state";
+import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
 import { buildSessionSnapshotState } from "@/lib/session/state";
-import { readCandidateStateSnapshots, readInterviewerDecisionSnapshots } from "@/lib/session/snapshots";
+import {
+  readCandidateStateSnapshots,
+  readInterviewerDecisionSnapshots,
+  readIntentSnapshots,
+  readTrajectorySnapshots,
+} from "@/lib/session/snapshots";
 import { describeCodingStage, isCodingInterviewStage } from "@/lib/assistant/stages";
 import { getPersonaJobSnapshot, type PersonaJobSnapshot } from "@/lib/persona/queue";
 
@@ -49,7 +55,10 @@ export type SessionSummary = {
   stageJourney: string[];
   latestSignals: Record<string, unknown> | null;
   latestDecision: Record<string, unknown> | null;
+  latestIntent: Record<string, unknown> | null;
+  latestTrajectory: Record<string, unknown> | null;
   latestCritic: Record<string, unknown> | null;
+  sessionCritic: SessionCriticSummary | null;
   latentCalibration: LatentCalibration | null;
   flowState: FlowState | null;
   answeredTargets: string[];
@@ -65,7 +74,7 @@ export type SessionSummary = {
 
 export type SessionTimelineItem = {
   id: string;
-  kind: "stage" | "signal" | "decision" | "critic" | "hint" | "code_run";
+  kind: "stage" | "signal" | "decision" | "intent" | "trajectory" | "critic" | "hint" | "code_run";
   at: string;
   title: string;
   summary: string;
@@ -78,6 +87,14 @@ export type SessionTimelineItem = {
   unresolvedIssues?: string[];
   missingEvidence?: string[];
   evidenceFocus?: string | null;
+  intent?: string | null;
+  intentTargetSignal?: string | null;
+  expectedOutcome?: string | null;
+  candidateTrajectory?: string | null;
+  expectedWithNoIntervention?: string | null;
+  interventionValue?: string | null;
+  bestIntervention?: string | null;
+  expectedEvidenceGain?: string | null;
   autoCapturedEvidence?: string[];
   candidateCeiling?: string | null;
   easeOfExecution?: string | null;
@@ -169,6 +186,8 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
     ? await Promise.all([
         readCandidateStateSnapshots(latestSession.id),
         readInterviewerDecisionSnapshots(latestSession.id),
+        readIntentSnapshots(latestSession.id),
+        readTrajectorySnapshots(latestSession.id),
         prisma.executionRun.findMany({
           where: { sessionId: latestSession.id },
           orderBy: { createdAt: "asc" },
@@ -199,7 +218,9 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
             ...latestSession,
             candidateStateSnapshots: latestSessionSnapshotData[0],
             interviewerDecisionSnapshots: latestSessionSnapshotData[1],
-            executionRuns: latestSessionSnapshotData[2],
+            intentSnapshots: latestSessionSnapshotData[2],
+            trajectorySnapshots: latestSessionSnapshotData[3],
+            executionRuns: latestSessionSnapshotData[4],
           })
         : null,
   };
@@ -264,6 +285,8 @@ function summarizeSession(session: {
   events: Array<{ eventType: string; eventTime: Date; payloadJson: unknown }>;
   candidateStateSnapshots: Array<{ id: string; stage: string | null; source: string | null; snapshotJson: unknown; createdAt: Date }>;
   interviewerDecisionSnapshots: Array<{ id: string; stage: string | null; source: string | null; decisionJson: unknown; createdAt: Date }>;
+  intentSnapshots: Array<{ id: string; stage: string | null; source: string | null; intentJson: unknown; createdAt: Date }>;
+  trajectorySnapshots: Array<{ id: string; stage: string | null; source: string | null; trajectoryJson: unknown; createdAt: Date }>;
   executionRuns: Array<{ status: "PASSED" | "FAILED" | "ERROR" | "TIMEOUT"; stdout: string | null; stderr: string | null; createdAt: Date }>;
 }): SessionSummary {
   const ordered = [...session.events].sort((left, right) => left.eventTime.getTime() - right.eventTime.getTime());
@@ -288,7 +311,13 @@ function summarizeSession(session: {
     events: ordered,
     candidateStateSnapshots: session.candidateStateSnapshots,
     interviewerDecisionSnapshots: session.interviewerDecisionSnapshots,
+    intentSnapshots: session.intentSnapshots,
+    trajectorySnapshots: session.trajectorySnapshots,
     executionRuns: session.executionRuns,
+  });
+  const sessionCritic = summarizeSessionCritic({
+    events: ordered,
+    latestSignals: snapshotState.latestSignals,
   });
 
   return {
@@ -298,7 +327,10 @@ function summarizeSession(session: {
     stageJourney: snapshotState.stageJourney,
     latestSignals: snapshotState.latestSignals,
     latestDecision: snapshotState.latestDecision,
+    latestIntent: snapshotState.latestIntent,
+    latestTrajectory: snapshotState.latestTrajectory,
     latestCritic,
+    sessionCritic,
     latentCalibration: snapshotState.latentCalibration,
     flowState: snapshotState.flowState,
     answeredTargets: snapshotState.ledger?.answeredTargets ?? [],
@@ -324,6 +356,8 @@ function buildSessionTimeline(
         "STAGE_ADVANCED",
         "SIGNAL_SNAPSHOT_RECORDED",
         "DECISION_RECORDED",
+        "INTENT_SNAPSHOT_RECORDED",
+        "TRAJECTORY_SNAPSHOT_RECORDED",
         "CRITIC_VERDICT_RECORDED",
         "HINT_SERVED",
         "CODE_RUN_COMPLETED",
@@ -411,6 +445,40 @@ function buildSessionTimeline(
           evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
           answeredTargets: [],
           collectedEvidence: [],
+          payload,
+        };
+      }
+
+      if (event.eventType === "INTENT_SNAPSHOT_RECORDED") {
+        const intent = asRecord(payload.intent);
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "intent" as const,
+          at: event.eventTime.toISOString(),
+          title: "Interviewer intent",
+          summary: `${stringOrFallback(intent.intent, "intent")} -> ${stringOrFallback(intent.expectedOutcome, "unknown outcome")}`,
+          urgency: stringValue(intent.urgency),
+          intent: stringValue(intent.intent),
+          intentTargetSignal: stringValue(intent.targetSignal),
+          expectedOutcome: stringValue(intent.expectedOutcome),
+          payload,
+        };
+      }
+
+      if (event.eventType === "TRAJECTORY_SNAPSHOT_RECORDED") {
+        const trajectory = asRecord(payload.trajectory);
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "trajectory" as const,
+          at: event.eventTime.toISOString(),
+          title: "Trajectory estimate",
+          summary: `${stringOrFallback(trajectory.candidateTrajectory, "trajectory")} / ${stringOrFallback(trajectory.bestIntervention, "unknown intervention")}`,
+          interruptionCost: stringValue(trajectory.interruptionCost),
+          candidateTrajectory: stringValue(trajectory.candidateTrajectory),
+          expectedWithNoIntervention: stringValue(trajectory.expectedWithNoIntervention),
+          interventionValue: stringValue(trajectory.interventionValue),
+          bestIntervention: stringValue(trajectory.bestIntervention),
+          expectedEvidenceGain: stringValue(trajectory.evidenceGainIfAskNow),
           payload,
         };
       }
@@ -581,6 +649,16 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
       .filter(Boolean)
       .join(", ");
     return `Interviewer decision: ${stringOrFallback(decision.action, "unknown action")} toward ${stringOrFallback(decision.target, "unknown target")}${timing ? ` (${timing})` : ""}.`;
+  }
+
+  if (eventType === "INTENT_SNAPSHOT_RECORDED") {
+    const intent = asRecord(payload.intent);
+    return `Interviewer intent: ${stringOrFallback(intent.intent, "unknown intent")} targeting ${stringOrFallback(intent.targetSignal, "general signal")} to ${stringOrFallback(intent.expectedOutcome, "collect signal")}.`;
+  }
+
+  if (eventType === "TRAJECTORY_SNAPSHOT_RECORDED") {
+    const trajectory = asRecord(payload.trajectory);
+    return `Trajectory estimate: ${stringOrFallback(trajectory.candidateTrajectory, "unknown trajectory")} with ${stringOrFallback(trajectory.bestIntervention, "unknown intervention")} as the best intervention and interruption=${stringOrFallback(trajectory.interruptionCost, "unknown")}.`;
   }
 
   if (eventType === "CRITIC_VERDICT_RECORDED") {

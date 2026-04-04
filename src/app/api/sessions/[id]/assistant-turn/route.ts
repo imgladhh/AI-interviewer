@@ -178,6 +178,36 @@ export async function POST(_: Request, { params }: RouteContext) {
     events.push(decisionEvent);
   }
 
+  if (turn.intent) {
+    const intentEvent = await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.INTENT_SNAPSHOT_RECORDED,
+        payloadJson: {
+          stage: currentStage,
+          source: turn.source,
+          intent: turn.intent,
+        },
+      },
+    });
+    events.push(intentEvent);
+  }
+
+  if (turn.trajectory) {
+    const trajectoryEvent = await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.TRAJECTORY_SNAPSHOT_RECORDED,
+        payloadJson: {
+          stage: currentStage,
+          source: turn.source,
+          trajectory: turn.trajectory,
+        },
+      },
+    });
+    events.push(trajectoryEvent);
+  }
+
   if (turn.criticVerdict) {
     const criticEvent = await prisma.sessionEvent.create({
       data: {
@@ -199,6 +229,8 @@ export async function POST(_: Request, { params }: RouteContext) {
     source: turn.source,
     signals: turn.signals,
     decision: turn.decision,
+    intent: turn.intent,
+    trajectory: turn.trajectory,
   });
 
   const aiSpokeEvent = await prisma.sessionEvent.create({
@@ -215,6 +247,8 @@ export async function POST(_: Request, { params }: RouteContext) {
           escalationReason: turn.escalationReason ?? null,
           signals: turn.signals ?? null,
           decision: turn.decision ?? null,
+          intent: turn.intent ?? null,
+          trajectory: turn.trajectory ?? null,
           criticVerdict: turn.criticVerdict ?? null,
         },
       },
@@ -300,6 +334,8 @@ export async function POST(_: Request, { params }: RouteContext) {
       escalationReason: turn.escalationReason ?? null,
       signals: turn.signals ?? null,
       decision: turn.decision ?? null,
+      intent: turn.intent ?? null,
+      trajectory: turn.trajectory ?? null,
       criticVerdict: turn.criticVerdict ?? null,
       providerFailure: turn.providerFailure ?? null,
     },

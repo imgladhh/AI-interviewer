@@ -5,6 +5,7 @@
   type CodingInterviewStage,
 } from "@/lib/assistant/stages";
 import { buildHintingLedger, type HintLedger } from "@/lib/assistant/hinting_ledger";
+import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
 import type { Recommendation } from "@prisma/client";
 
 type TranscriptLike = {
@@ -42,6 +43,22 @@ type InterviewerDecisionSnapshotLike = {
   createdAt?: Date | string;
 };
 
+type IntentSnapshotLike = {
+  id?: string;
+  stage?: string | null;
+  source?: string | null;
+  intentJson: unknown;
+  createdAt?: Date | string;
+};
+
+type TrajectorySnapshotLike = {
+  id?: string;
+  stage?: string | null;
+  source?: string | null;
+  trajectoryJson: unknown;
+  createdAt?: Date | string;
+};
+
 type SessionReportInput = {
   sessionId: string;
   questionTitle: string;
@@ -53,6 +70,8 @@ type SessionReportInput = {
   executionRuns: ExecutionRunLike[];
   candidateStateSnapshots?: CandidateStateSnapshotLike[];
   interviewerDecisionSnapshots?: InterviewerDecisionSnapshotLike[];
+  intentSnapshots?: IntentSnapshotLike[];
+  trajectorySnapshots?: TrajectorySnapshotLike[];
 };
 
 type DimensionScore = {
@@ -152,9 +171,24 @@ type MomentOfTruth = {
 };
 
 type RubricSummaryItem = {
+  key: string;
   dimension: string;
+  score: number;
+  maxScore: number;
   verdict: "strong" | "mixed" | "weak";
   rationale: string;
+  basis: string;
+  evidence: string[];
+};
+
+type StageReplaySection = {
+  key: string;
+  label: string;
+  stages: string[];
+  evidence: string[];
+  signalSnapshots: CandidateSignalSummary[];
+  decisions: CandidateDecisionSummary[];
+  turns: Array<{ speaker: string; text: string }>;
 };
 
 type CounterfactualSummary = {
@@ -162,6 +196,13 @@ type CounterfactualSummary = {
   selfCorrectionWindows: number[];
   wouldLikelySelfCorrect: boolean;
   shouldWaitBeforeIntervening: boolean;
+};
+
+type SnapshotTimelineEntry = {
+  createdAt: string;
+  stage: string | null;
+  kind: "intent" | "trajectory";
+  payload: Record<string, unknown>;
 };
 
 export type GeneratedSessionReport = {
@@ -193,6 +234,8 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   );
   const latestSignal = findLatestSignalSnapshot(input.events, input.candidateStateSnapshots ?? []);
   const latestDecision = findLatestDecisionSnapshot(input.events, input.interviewerDecisionSnapshots ?? []);
+  const latestIntent = findLatestIntentSnapshot(input.intentSnapshots ?? []);
+  const latestTrajectory = findLatestTrajectorySnapshot(input.trajectorySnapshots ?? []);
   const hintRequestedCount = input.events.filter((event) => event.eventType === "HINT_REQUESTED").length;
   const hintServedCount = input.events.filter((event) => event.eventType === "HINT_SERVED").length;
   const hintLedger = buildHintingLedger(input.events);
@@ -246,7 +289,14 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     passedRuns,
     failedRuns,
   });
-  const rubricSummary = buildRubricSummary(dimensions);
+  const stageSections = buildStageReplaySections(stageReplay);
+  const rubricSummary = buildRubricSummary(dimensions, latestSignal);
+  const sessionCritic = summarizeSessionCritic({
+    events: input.events,
+    latestSignals: latestSignal,
+  });
+  const intentTimeline = buildSnapshotTimeline("intent", input.intentSnapshots ?? []);
+  const trajectoryTimeline = buildSnapshotTimeline("trajectory", input.trajectorySnapshots ?? []);
   const overallSummary = buildOverallSummary({
     recommendation,
     currentStage,
@@ -302,12 +352,18 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       },
       candidateState: latestSignal,
       latestDecision,
+      latestIntent,
+      latestTrajectory,
       stageReplay,
+      stageSections,
       evidenceTrace,
       candidateDna,
       momentsOfTruth,
       rubricSummary,
       counterfactualSummary,
+      sessionCritic,
+      intentTimeline,
+      trajectoryTimeline,
       dimensions,
       strengths,
       weaknesses,
@@ -840,12 +896,134 @@ function buildMomentsOfTruth(input: {
   return moments.slice(0, 3);
 }
 
-function buildRubricSummary(dimensions: DimensionScore[]): RubricSummaryItem[] {
-  return dimensions.map((dimension) => ({
-    dimension: dimension.label,
-    verdict: dimension.score >= dimension.maxScore - 1 ? "strong" : dimension.score <= Math.ceil(dimension.maxScore / 2) ? "weak" : "mixed",
-    rationale: dimension.issue ?? dimension.evidence,
-  }));
+function buildRubricSummary(
+  dimensions: DimensionScore[],
+  latestSignal: CandidateSignalSummary | null,
+): RubricSummaryItem[] {
+  const communication = dimensions.find((dimension) => dimension.key === "communication");
+  const implementation = dimensions.find((dimension) => dimension.key === "implementation");
+  const debugging = dimensions.find((dimension) => dimension.key === "debugging");
+  const testingAndComplexity = dimensions.find((dimension) => dimension.key === "testing_and_complexity");
+
+  const correctnessScore = clampRubricScore(
+    Math.round(((implementation?.score ?? 3) + (debugging?.score ?? 3)) / 2),
+  );
+  const complexityScore = clampRubricScore(
+    latestSignal?.complexityRigor === "strong"
+      ? 5
+      : latestSignal?.complexityRigor === "moderate"
+        ? 4
+        : latestSignal?.complexityRigor === "missing"
+          ? 2
+          : testingAndComplexity?.score ?? 3,
+  );
+  const communicationScore = clampRubricScore(communication?.score ?? 3);
+
+  return [
+    {
+      key: "correctness",
+      dimension: "Correctness",
+      score: correctnessScore,
+      maxScore: 5,
+      verdict: rubricVerdict(correctnessScore, 5),
+      rationale:
+        implementation?.issue ??
+        debugging?.issue ??
+        "Correctness evidence was inferred from implementation and debugging outcomes.",
+      basis:
+        correctnessScore >= 4
+          ? "Working code or strong recovery signals supported a high-confidence correctness read."
+          : correctnessScore === 3
+            ? "Correctness signals were mixed: the solution direction was sound, but execution or debugging evidence stayed incomplete."
+            : "Correctness evidence remained weak because the session never closed the loop on implementation or recovery.",
+      evidence: [implementation?.evidence, debugging?.evidence].filter((item): item is string => Boolean(item)),
+    },
+    {
+      key: "complexity",
+      dimension: "Complexity",
+      score: complexityScore,
+      maxScore: 5,
+      verdict: rubricVerdict(complexityScore, 5),
+      rationale:
+        testingAndComplexity?.issue ??
+        "Complexity scoring was inferred from the final testing and tradeoff discussion.",
+      basis:
+        complexityScore >= 4
+          ? "The candidate closed with an explicit time/space story and a credible tradeoff explanation."
+          : complexityScore === 3
+            ? "Some complexity evidence was present, but the tradeoff or final performance story stayed partial."
+            : "Complexity rigor stayed weak or absent, so the performance story remained under-specified.",
+      evidence: [testingAndComplexity?.evidence].filter((item): item is string => Boolean(item)),
+    },
+    {
+      key: "communication",
+      dimension: "Communication",
+      score: communicationScore,
+      maxScore: 5,
+      verdict: rubricVerdict(communicationScore, 5),
+      rationale:
+        communication?.issue ??
+        "Communication scoring was inferred from how clearly the candidate exposed reasoning.",
+      basis:
+        communicationScore >= 4
+          ? "The candidate consistently exposed reasoning clearly enough for targeted follow-up."
+          : communicationScore === 3
+            ? "Communication was serviceable, but parts of the reasoning remained compressed."
+            : "Communication gaps forced the interviewer to reconstruct the thought process repeatedly.",
+      evidence: [communication?.evidence].filter((item): item is string => Boolean(item)),
+    },
+  ];
+}
+
+function buildStageReplaySections(stageReplay: StageReplayGroup[]): StageReplaySection[] {
+  const sectionDefinitions = [
+    {
+      key: "discussion",
+      label: "Discussion",
+      stageMatchers: ["problem understanding", "approach discussion"],
+    },
+    {
+      key: "coding",
+      label: "Coding",
+      stageMatchers: ["implementation", "debugging"],
+    },
+    {
+      key: "testing",
+      label: "Testing",
+      stageMatchers: ["testing and complexity", "wrap up"],
+    },
+  ];
+
+  return sectionDefinitions
+    .map((section) => {
+      const groups = stageReplay.filter((group) =>
+        section.stageMatchers.includes(group.stage.trim().toLowerCase()),
+      );
+      return {
+        key: section.key,
+        label: section.label,
+        stages: groups.map((group) => group.label),
+        evidence: groups.flatMap((group) => group.evidence),
+        signalSnapshots: groups.flatMap((group) => group.signalSnapshots),
+        decisions: groups.flatMap((group) => group.decisions),
+        turns: groups.flatMap((group) => group.turns).slice(0, 6),
+      };
+    })
+    .filter(
+      (section) =>
+        section.evidence.length > 0 ||
+        section.signalSnapshots.length > 0 ||
+        section.decisions.length > 0 ||
+        section.turns.length > 0,
+    );
+}
+
+function rubricVerdict(score: number, maxScore: number): "strong" | "mixed" | "weak" {
+  return score >= maxScore - 1 ? "strong" : score <= Math.ceil(maxScore / 2) ? "weak" : "mixed";
+}
+
+function clampRubricScore(value: number) {
+  return Math.max(1, Math.min(5, value));
 }
 
 function buildOverallSummary(input: {
@@ -1084,6 +1262,33 @@ function findLatestDecisionSnapshot(
   }
 
   return asRecord(asRecord(latestDecisionEvent.payloadJson).decision) as unknown as CandidateDecisionSummary;
+}
+
+function findLatestIntentSnapshot(intentSnapshots: IntentSnapshotLike[] = []) {
+  const latestSnapshot = intentSnapshots.at(-1);
+  return latestSnapshot ? asRecord(latestSnapshot.intentJson) : null;
+}
+
+function findLatestTrajectorySnapshot(trajectorySnapshots: TrajectorySnapshotLike[] = []) {
+  const latestSnapshot = trajectorySnapshots.at(-1);
+  return latestSnapshot ? asRecord(latestSnapshot.trajectoryJson) : null;
+}
+
+function buildSnapshotTimeline(
+  kind: "intent" | "trajectory",
+  rows: Array<{
+    stage?: string | null;
+    createdAt?: Date | string;
+    intentJson?: unknown;
+    trajectoryJson?: unknown;
+  }>,
+): SnapshotTimelineEntry[] {
+  return rows.map((row) => ({
+    createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : new Date(0).toISOString(),
+    stage: row.stage ?? null,
+    kind,
+    payload: asRecord(kind === "intent" ? row.intentJson : row.trajectoryJson),
+  }));
 }
 
 function buildStageAdvanceEvidence(payload: Record<string, unknown>) {

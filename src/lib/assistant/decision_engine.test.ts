@@ -133,6 +133,9 @@ describe("makeCandidateDecision", () => {
     expect(["encourage_and_continue", "move_stage"]).toContain(result.action);
     expect(["IMPLEMENTATION", "APPROACH_DISCUSSION"]).toContain(result.suggestedStage);
     expect(result.question).toMatch(/implement|coding|algorithmic direction|go ahead/i);
+    expect(result.intent).toBeTruthy();
+    expect(result.trajectory).toBeTruthy();
+    expect(result.passConditionTopic).toBeTruthy();
   });
 
   it("lets the candidate start coding in approach discussion when the direction is solid", () => {
@@ -542,6 +545,8 @@ describe("makeCandidateDecision", () => {
 
     expect(result.action).toBe("ask_for_complexity");
     expect(result.question).toMatch(/time and space complexity|tradeoff/i);
+    expect(result.passConditionTopic).toBe("complexity");
+    expect(result.passConditions).toContain("time_complexity_stated");
   });
 
   it("does not immediately repeat complexity after the candidate already answered complexity and tradeoff", () => {
@@ -803,6 +808,8 @@ describe("makeCandidateDecision", () => {
 
     expect(result.action).toBe("end_interview");
     expect(result.question).toMatch(/done here|covers this question well/i);
+    expect(result.intent).toBe("close");
+    expect(result.closureCandidate).toBe(true);
   });
 
   it("asks for clarification instead of probing hard when signal confidence is low", () => {

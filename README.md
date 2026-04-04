@@ -16,12 +16,13 @@ This repo now has a working MVP-plus skeleton with:
 - Lightweight evaluation/report v0 with stage journey, replay markers, dimension scores, strengths, weaknesses, actionable improvements, and product-facing candidate profiling
 - Snapshot-first report/admin pipeline with canonical candidate-state and interviewer-decision snapshots, plus shared replay evidence across report and admin
 - Snapshot-first admin summary plus stage-grouped replay UI in the standalone report page
+- Intent-first + trajectory-aware interviewer control path with persisted intent/trajectory snapshots and session-level critic summaries surfaced in report/admin
 - Default interviewer skills layer for tone, pacing, follow-up discipline, and coaching-without-spoiling
 - Browser voice loop with interruption handling, continuous listening, and turn-taking policies
 - Dedicated STT handoff for spoken candidate turns, with provider selection and browser transcript fallback
 - Dedicated STT-backed voice mode with provider-led turn detection, provider preview drafts, usage logging, low-cost mode controls, and switchable STT providers
 - `Vitest` unit/route tests and `Playwright` end-to-end tests
-- Full `Vitest` coverage is now green locally again (`182 passed / 34 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
+- Full `Vitest` coverage is now green locally again (`198 passed / 38 files`), so test validation is part of the normal development loop rather than a blocked follow-up task.
 
 ## Recent Progress
 
@@ -114,6 +115,13 @@ This repo now has a working MVP-plus skeleton with:
 - decision_engine now avoids immediately repeating `testing`, `edge_case`, `complexity`, and `tradeoff` targets once the candidate has already supplied the relevant evidence, and instead moves the interview forward.
 - interviewer closure logic now explicitly models `move_to_wrap_up`, `close_topic`, and `end_interview`, so once evidence is saturated the system stops saying `Keep going` and closes the topic cleanly.
 - critic verdicts now track `evidenceAlreadySaturated` and `recommendedClosure`, so repeated wrap-up, summary, testing, and complexity loops can be converted into explicit closure turns instead of more probing.
+- Added `interviewer_intent.ts` so each turn can explicitly model why the interviewer is acting now (`validate`, `probe`, `guide`, `unblock`, `advance`, `close`) instead of only what action it takes.
+- Added `trajectory_estimator.ts` so interviewer control can reason about whether the candidate is self-recovering, plateauing, stuck, or steadily progressing before deciding to intervene.
+- decision_engine v3 now consumes `intent + trajectory + pass conditions + pacing`, pushing the interviewer from purely state-driven behavior toward intent-driven, trajectory-aware behavior.
+- Added pass-condition/topic gates for implementation, complexity, testing, and wrap-up so stage exits are backed by explicit completion criteria instead of only heuristics.
+- Intent and trajectory snapshots are now persisted and loaded through the snapshot-first pipeline, so `/admin` and `/report` can explain not just what happened, but why the interviewer chose that path.
+- Added `session_critic.ts` as a session-level meta-review layer, scoring redundancy, interruption quality, pressure balance, flow preservation, timing quality, and closure quality across the whole interview.
+- `/admin` and `/report` now surface latest interviewer intent, latest trajectory estimate, and a session-level critic summary in addition to turn-level decision and critic metadata.
 - Candidate-state and interviewer-decision snapshots now have dedicated persistence tables plus snapshot-first read helpers, so `/admin` and `/report` can load canonical state without replaying the full event stream at runtime.
 - Added tests for signal extraction, decision logic, evidence-based reporting, reply strategy shaping, provider compliance handling, and provider fallback ordering.
 - signal extraction now records finer correctness failure patterns such as missing proof sketches, imprecise expected outputs for test cases, shallow tradeoff analysis, and tradeoffs that are not justified against the actual constraints.
@@ -217,17 +225,21 @@ This repo now has a working MVP-plus skeleton with:
 - `src/lib/assistant/stages.ts`: coding interview stage inference and progression helpers
 - `src/lib/assistant/signal_extractor.ts`: structured candidate-state extraction with provider-backed observation and heuristic fallback
 - `src/lib/assistant/decision_engine.ts`: candidate-state-driven interviewer decision selection
+- `src/lib/assistant/interviewer_intent.ts`: interviewer intent inference for validate/probe/guide/unblock/advance/close turns
+- `src/lib/assistant/trajectory_estimator.ts`: candidate trajectory estimation and intervention-value scoring
 - `src/lib/assistant/reply_strategy.ts`: action-specific interviewer wording and fallback turn shaping
 - `src/lib/assistant/policy.ts`: explicit stage policy, exit criteria, hint escalation, and prompt strategy selection
 - `src/lib/assistant/generate-turn.ts`: multi-provider assistant turn generation, provider sequencing, critic-aware rewrite passes, and decision-compliance enforcement
 - `src/lib/assistant/critic.ts`: structured interviewer-turn review for specificity, intensity, repetition, code-readiness gating, evidence saturation, and “worth asking now” timing checks
+- `src/lib/assistant/session_critic.ts`: session-level interviewer QA summary for redundancy, interruption, pressure balance, timing, flow, and closure
 - `src/lib/assistant/pacing.ts`: explicit pacing assessment for implementation urgency, evidence sufficiency, question worth, pressure selection, and closure timing
+- `src/lib/assistant/pass_conditions.ts`: topic/stage pass-condition evaluation for implementation, testing, complexity, and wrap-up
 - `src/lib/assistant/hinting_ledger.ts`: hint granularity, rescue-mode classification, and hint-cost aggregation
 - `src/lib/usage/cost.ts`: rough token/audio cost estimation and session usage summaries
 - `src/lib/usage/budget.ts`: session budget guardrail and budget-cap closure messaging
 - `src/lib/evaluation/report.ts`: snapshot-aware, rubric-driven report generation with evidence trace, execution-aware scoring, candidate DNA profiling, and moment-of-truth extraction
-- `src/lib/session/snapshots.ts`: best-effort persistence plus snapshot-first read helpers for candidate-state and interviewer-decision snapshots
-- `src/lib/session/state.ts`: canonical snapshot-state aggregation for report/admin consumers
+- `src/lib/session/snapshots.ts`: best-effort persistence plus snapshot-first read helpers for candidate-state, interviewer-decision, intent, and trajectory snapshots
+- `src/lib/session/state.ts`: canonical snapshot-state aggregation for report/admin consumers, including intent and trajectory summaries
 - `src/lib/session/budget-enforcement.ts`: budget-cap closure handling for assistant turns
 - `src/lib/persona/queue.ts`: BullMQ queue helpers
 - `src/lib/persona/ingest-public-profile.ts`: public-profile fetching, heuristic extraction, and persona synthesis with graceful fallback
@@ -333,9 +345,11 @@ npm run build
 - Interviewer profile preview route behavior
 - Sessions route behavior
 - Assistant-turn fallback generation and stage-aware behavior
+- Interviewer intent inference and trajectory estimation
 - Reply strategy shaping and issue-aware fallback phrasing
 - Signal extraction and candidate-state reasoning
 - Decision-engine behavior for stuck/debugging/tradeoff/testing cases
+- Session-level critic summaries plus snapshot-first state aggregation
 - Stage inference, policy decisions, and prompt strategy behavior
 - Streaming assistant-turn route behavior
 - Voice turn-taking policy behavior

@@ -32,12 +32,30 @@ type DecisionSnapshotRow = {
   createdAt: Date | string;
 };
 
+type IntentSnapshotRow = {
+  id: string;
+  stage: string | null;
+  source: string | null;
+  intentJson: unknown;
+  createdAt: Date | string;
+};
+
+type TrajectorySnapshotRow = {
+  id: string;
+  stage: string | null;
+  source: string | null;
+  trajectoryJson: unknown;
+  createdAt: Date | string;
+};
+
 export type SessionSnapshotState = {
   currentStage: CodingInterviewStage;
   currentStageLabel: string;
   stageJourney: string[];
   latestSignals: Record<string, unknown> | null;
   latestDecision: Record<string, unknown> | null;
+  latestIntent: Record<string, unknown> | null;
+  latestTrajectory: Record<string, unknown> | null;
   latentCalibration: LatentCalibration | null;
   flowState: FlowState | null;
   ledger: MemoryLedger | null;
@@ -56,6 +74,22 @@ export type SessionSnapshotState = {
     source: string | null;
     createdAt: string;
     decision: Record<string, unknown>;
+  }>;
+  intentSnapshots: Array<{
+    id: string;
+    stage: string;
+    label: string;
+    source: string | null;
+    createdAt: string;
+    intent: Record<string, unknown>;
+  }>;
+  trajectorySnapshots: Array<{
+    id: string;
+    stage: string;
+    label: string;
+    source: string | null;
+    createdAt: string;
+    trajectory: Record<string, unknown>;
   }>;
 };
 
@@ -133,6 +167,8 @@ export function buildSessionSnapshotState(input: {
   events: SessionEventLike[];
   candidateStateSnapshots?: CandidateSnapshotRow[];
   interviewerDecisionSnapshots?: DecisionSnapshotRow[];
+  intentSnapshots?: IntentSnapshotRow[];
+  trajectorySnapshots?: TrajectorySnapshotRow[];
   executionRuns?: ExecutionRunLike[] | null;
 }) : SessionSnapshotState {
   const fallbackCurrentStage = normalizeStage(input.currentStage);
@@ -155,6 +191,26 @@ export function buildSessionSnapshotState(input: {
       source: row.source ?? null,
       createdAt: new Date(row.createdAt).toISOString(),
       decision: asRecord(row.decisionJson),
+    }))
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+  const intentSnapshots = (input.intentSnapshots ?? [])
+    .map((row) => ({
+      id: row.id,
+      stage: normalizeStage(row.stage),
+      label: describeCodingStage(normalizeStage(row.stage)),
+      source: row.source ?? null,
+      createdAt: new Date(row.createdAt).toISOString(),
+      intent: asRecord(row.intentJson),
+    }))
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+  const trajectorySnapshots = (input.trajectorySnapshots ?? [])
+    .map((row) => ({
+      id: row.id,
+      stage: normalizeStage(row.stage),
+      label: describeCodingStage(normalizeStage(row.stage)),
+      source: row.source ?? null,
+      createdAt: new Date(row.createdAt).toISOString(),
+      trajectory: asRecord(row.trajectoryJson),
     }))
     .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 
@@ -183,6 +239,8 @@ export function buildSessionSnapshotState(input: {
       ).decision,
     ) ??
     null;
+  const latestIntent = intentSnapshots.at(-1)?.intent ?? null;
+  const latestTrajectory = trajectorySnapshots.at(-1)?.trajectory ?? null;
 
   const latestExecutionRun = latestExecutionRunFromEvents(input.events, input.executionRuns);
   const ledger =
@@ -222,10 +280,14 @@ export function buildSessionSnapshotState(input: {
     stageJourney: stageJourney.map((stage) => describeCodingStage(stage)),
     latestSignals: latestSignals && Object.keys(latestSignals).length > 0 ? latestSignals : null,
     latestDecision: latestDecision && Object.keys(latestDecision).length > 0 ? latestDecision : null,
+    latestIntent: latestIntent && Object.keys(latestIntent).length > 0 ? latestIntent : null,
+    latestTrajectory: latestTrajectory && Object.keys(latestTrajectory).length > 0 ? latestTrajectory : null,
     latentCalibration,
     flowState,
     ledger,
     signalSnapshots,
     decisionSnapshots,
+    intentSnapshots,
+    trajectorySnapshots,
   };
 }

@@ -14,8 +14,11 @@ import { buildFallbackReplyFromDecision, describeReplyStrategy } from "@/lib/ass
 import { extractCandidateSignalsSmart, type CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import { assessLatentCalibration } from "@/lib/assistant/latent_calibration";
+import { decideInterviewerIntent, type IntentDecision } from "@/lib/assistant/interviewer_intent";
+import { assessPassConditions, selectRelevantPassAssessment } from "@/lib/assistant/pass_conditions";
 import { applyDecisionPressure, assessInterviewPacing } from "@/lib/assistant/pacing";
 import { assessFlowState } from "@/lib/assistant/flow_state";
+import { estimateCandidateTrajectory, type TrajectoryEstimate } from "@/lib/assistant/trajectory_estimator";
 import {
   describeCodingStage,
   inferSuggestedCodingStage,
@@ -80,6 +83,8 @@ type GenerateAssistantTurnResult = {
   };
   signals?: CandidateSignalSnapshot;
   decision?: CandidateDecision;
+  intent?: IntentDecision;
+  trajectory?: TrajectoryEstimate;
   criticVerdict?: CriticVerdict;
   providerFailure?: {
     provider: "gemini" | "openai";
@@ -104,13 +109,13 @@ export async function generateAssistantTurn(
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
-  const decision = buildDecision(input, signals);
+  const { decision, intent, trajectory } = buildDecision(input, signals);
   let providerFailure: GenerateAssistantTurnResult["providerFailure"] | undefined;
 
   for (const provider of resolveProviderSequence()) {
     if (provider === "gemini") {
       try {
-        const reply = await generateWithGemini(input, signals, decision);
+        const reply = await generateWithGemini(input, signals, decision, intent, trajectory);
         if (reply) {
           return reply;
         }
@@ -129,7 +134,7 @@ export async function generateAssistantTurn(
 
     if (provider === "openai") {
       try {
-        const reply = await generateWithOpenAI(input, signals, decision);
+        const reply = await generateWithOpenAI(input, signals, decision, intent, trajectory);
         if (reply) {
           return reply;
         }
@@ -147,7 +152,7 @@ export async function generateAssistantTurn(
   }
 
   logProviderFallback("fallback", "Using local interviewer heuristics.");
-  return generateFallbackTurn(input, signals, decision, providerFailure);
+  return generateFallbackTurn(input, signals, decision, intent, trajectory, providerFailure);
 }
 
 export async function* streamAssistantTurn(
@@ -160,12 +165,12 @@ export async function* streamAssistantTurn(
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
-  const decision = buildDecision(input, signals);
+  const { decision, intent, trajectory } = buildDecision(input, signals);
   let providerFailure: GenerateAssistantTurnResult["providerFailure"] | undefined;
 
   for (const provider of resolveProviderSequence()) {
     if (provider === "gemini") {
-      const geminiResult = yield* yieldProviderStream(streamWithGemini(input, signals, decision, options), input, "gemini");
+      const geminiResult = yield* yieldProviderStream(streamWithGemini(input, signals, decision, intent, trajectory, options), input, "gemini");
       if (geminiResult.handled) {
         return;
       }
@@ -179,7 +184,7 @@ export async function* streamAssistantTurn(
     }
 
     if (provider === "openai") {
-      const openAiResult = yield* yieldProviderStream(streamWithOpenAI(input, signals, decision, options), input, "openai");
+      const openAiResult = yield* yieldProviderStream(streamWithOpenAI(input, signals, decision, intent, trajectory, options), input, "openai");
       if (openAiResult.handled) {
         return;
       }
@@ -193,7 +198,7 @@ export async function* streamAssistantTurn(
   }
 
   logProviderFallback("fallback", "Using local interviewer heuristics.");
-  const fallback = generateFallbackTurn(input, signals, decision, providerFailure);
+  const fallback = generateFallbackTurn(input, signals, decision, intent, trajectory, providerFailure);
   for (const chunk of chunkText(fallback.reply)) {
     if (options?.signal?.aborted) {
       return;
@@ -305,9 +310,11 @@ async function generateWithOpenAI(
   input: GenerateAssistantTurnInput,
   signals: CandidateSignalSnapshot,
   decision: CandidateDecision,
+  intent: IntentDecision,
+  trajectory: TrajectoryEstimate,
 ): Promise<GenerateAssistantTurnResult | null> {
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
-  const prompt = buildInterviewerPrompt(input, signals, decision);
+  const prompt = buildInterviewerPrompt(input, signals, decision, intent, trajectory);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -361,6 +368,8 @@ async function generateWithOpenAI(
     model,
     signals,
     decision,
+    intent,
+    trajectory,
     criticVerdict: reviewed.verdict,
     hintServed: decision.action === "give_hint",
     hintStyle: decision.hintStyle,
@@ -384,10 +393,12 @@ async function* streamWithOpenAI(
   input: GenerateAssistantTurnInput,
   signals: CandidateSignalSnapshot,
   decision: CandidateDecision,
+  intent: IntentDecision,
+  trajectory: TrajectoryEstimate,
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
-  const prompt = buildInterviewerPrompt(input, signals, decision);
+  const prompt = buildInterviewerPrompt(input, signals, decision, intent, trajectory);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -472,6 +483,8 @@ async function* streamWithOpenAI(
         model,
         signals,
         decision,
+        intent,
+        trajectory,
         criticVerdict: reviewed.verdict,
         hintServed: decision.action === "give_hint",
         hintStyle: decision.hintStyle,
@@ -496,9 +509,11 @@ async function generateWithGemini(
   input: GenerateAssistantTurnInput,
   signals: CandidateSignalSnapshot,
   decision: CandidateDecision,
+  intent: IntentDecision,
+  trajectory: TrajectoryEstimate,
 ): Promise<GenerateAssistantTurnResult | null> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-  const prompt = buildInterviewerPrompt(input, signals, decision);
+  const prompt = buildInterviewerPrompt(input, signals, decision, intent, trajectory);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -561,6 +576,8 @@ async function generateWithGemini(
     model,
     signals,
     decision,
+    intent,
+    trajectory,
     criticVerdict: reviewed.verdict,
     hintServed: decision.action === "give_hint",
     hintStyle: decision.hintStyle,
@@ -584,10 +601,12 @@ async function* streamWithGemini(
   input: GenerateAssistantTurnInput,
   signals: CandidateSignalSnapshot,
   decision: CandidateDecision,
+  intent: IntentDecision,
+  trajectory: TrajectoryEstimate,
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-  const prompt = buildInterviewerPrompt(input, signals, decision);
+  const prompt = buildInterviewerPrompt(input, signals, decision, intent, trajectory);
   const inputTokens = estimateTokens(buildSystemPrompt()) + estimateTokens(prompt);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
@@ -676,8 +695,10 @@ async function* streamWithGemini(
       suggestedStage: inferStage(final, input),
       source: "gemini",
       model,
-      signals,
-      decision,
+        signals,
+        decision,
+        intent,
+        trajectory,
         criticVerdict: reviewed.verdict,
         hintServed: decision.action === "give_hint",
         hintStyle: decision.hintStyle,
@@ -723,6 +744,8 @@ function buildInterviewerPrompt(
   input: GenerateAssistantTurnInput,
   signals: CandidateSignalSnapshot,
   decision: CandidateDecision,
+  intent: IntentDecision,
+  trajectory: TrajectoryEstimate,
 ) {
   const stage = normalizeStage(input.currentStage);
   const policy = resolveCodingInterviewPolicy({
@@ -758,6 +781,17 @@ function buildInterviewerPrompt(
     signals,
     recentTranscripts: input.recentTranscripts,
   });
+  const passConditions = assessPassConditions({
+    currentStage: stage,
+    signals,
+    memory: ledger,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const relevantPassConditions = selectRelevantPassAssessment(
+    decision.target,
+    decision.suggestedStage ?? stage,
+    passConditions,
+  );
 
   return [
     `Mode: ${input.mode}`,
@@ -773,6 +807,10 @@ function buildInterviewerPrompt(
     `Session memory: ${sessionMemory}`,
     `Latent calibration: candidate_ceiling=${calibration.candidateCeiling}, ease_of_execution=${calibration.easeOfExecution}, level_up_ready=${calibration.levelUpReady}, confidence_in_verdict=${calibration.confidenceInVerdict}.`,
     `Flow state: coding_burst=${flowState.codingBurst}, thinking_burst=${flowState.thinkingBurst}, mute_until_pause=${flowState.muteUntilPause}, context_reestablishment_cost=${flowState.contextReestablishmentCost}.`,
+    `Interviewer intent: intent=${intent.intent}, target_signal=${intent.targetSignal ?? "none"}, expected_outcome=${intent.expectedOutcome}, urgency=${intent.urgency}, can_defer=${intent.canDefer}.`,
+    `Intent reason: ${intent.reason}`,
+    `Trajectory estimate: candidate_trajectory=${trajectory.candidateTrajectory}, expected_without_intervention=${trajectory.expectedWithNoIntervention}, intervention_value=${trajectory.interventionValue}, best_intervention=${trajectory.bestIntervention}, interruption_cost=${trajectory.interruptionCost}, evidence_gain_if_ask_now=${trajectory.evidenceGainIfAskNow}, confidence=${trajectory.confidence}.`,
+    `Relevant pass conditions for ${relevantPassConditions.topic}: required=${relevantPassConditions.passConditions.join(", ")}; satisfied=${relevantPassConditions.satisfied.join(", ") || "none"}; missing=${relevantPassConditions.missing.join(", ") || "none"}.`,
     `Candidate state confidence: ${signals.confidence}`,
     `Candidate evidence:\n- ${signals.evidence.join("\n- ")}`,
     signals.structuredEvidence.length > 0
@@ -790,6 +828,9 @@ function buildInterviewerPrompt(
     `Testing discipline: ${signals.testingDiscipline}`,
     `Complexity rigor: ${signals.complexityRigor}`,
     `Decision engine output: action=${decision.action}, target=${decision.target}, confidence=${decision.confidence}, pressure=${decision.pressure ?? "neutral"}, urgency=${decision.urgency ?? "medium"}, can_defer=${decision.canDefer ?? false}, interruption_cost=${decision.interruptionCost ?? "medium"}, evidence_importance=${decision.evidenceImportance ?? "important"}, batchable=${decision.batchable ?? false}${decision.batchGroup ? `, batch_group=${decision.batchGroup}` : ""}.`,
+    decision.passConditions?.length
+      ? `Decision pass gate: topic=${decision.passConditionTopic ?? "none"}, required=${decision.passConditions.join(", ")}, missing=${decision.missingPassConditions?.join(", ") || "none"}.`
+      : null,
     `Decision reason: ${decision.reason}`,
     decision.specificIssue ? `Specific issue to surface: ${decision.specificIssue}` : null,
     decision.targetCodeLine ? `Target code line or focus area: ${decision.targetCodeLine}` : null,
@@ -843,6 +884,8 @@ function generateFallbackTurn(
   input: GenerateAssistantTurnInput,
   signals: CandidateSignalSnapshot,
   decision: CandidateDecision,
+  intent: IntentDecision,
+  trajectory: TrajectoryEstimate,
   providerFailure?: GenerateAssistantTurnResult["providerFailure"],
 ): GenerateAssistantTurnResult {
   const latestUserTurn = [...input.recentTranscripts].reverse().find((item) => item.speaker === "USER");
@@ -1178,6 +1221,8 @@ function generateFallbackTurn(
     source: "fallback",
     signals,
     decision,
+    intent,
+    trajectory,
     providerFailure,
     policyAction: policy.recommendedAction,
     policyReason: policy.reason,
@@ -1655,35 +1700,63 @@ function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSign
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
-  const rawDecision = makeCandidateDecision({
-    currentStage,
-    policy,
-    signals,
-    recentEvents: input.recentEvents,
-    latestExecutionRun: input.latestExecutionRun,
-  });
   const ledger = buildMemoryLedger({
     currentStage,
     recentEvents: input.recentEvents,
     signals,
     latestExecutionRun: input.latestExecutionRun,
   });
+  const intent = decideInterviewerIntent({
+    currentStage,
+    signals,
+    memory: ledger,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const flowState = assessFlowState({
+    currentStage,
+    signals,
+    recentTranscripts: input.recentTranscripts,
+  });
+  const trajectory = estimateCandidateTrajectory({
+    currentStage,
+    signals,
+    memory: ledger,
+    latestExecutionRun: input.latestExecutionRun,
+    flowState,
+    intent,
+  });
+  const decision = makeCandidateDecision({
+    currentStage,
+    policy,
+    signals,
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+    intent,
+    trajectory,
+  });
   const pacing = assessInterviewPacing({
     currentStage,
     signals,
     ledger,
     latestExecutionRun: input.latestExecutionRun,
-    decision: rawDecision,
+    decision,
     recentTranscripts: input.recentTranscripts,
   });
-
-  return applyDecisionPressure({
-    decision: rawDecision,
+  const pressureAdjustedDecision = applyDecisionPressure({
+    decision,
     signals,
     ledger,
     pacing,
+    currentStage,
+    intent: intent.intent,
+    trajectory: trajectory.candidateTrajectory,
     latestExecutionRun: input.latestExecutionRun,
   });
+  return {
+    decision: pressureAdjustedDecision,
+    intent,
+    trajectory,
+  };
 }
 
 async function applyCriticPass(
