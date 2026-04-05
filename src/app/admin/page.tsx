@@ -1,5 +1,6 @@
 ﻿import Link from "next/link";
 import { buildUnifiedOpsFeed, getAdminProfileDetail, listAdminProfiles, type OpsFeedScope } from "@/lib/admin/ops";
+import { runPolicyRegressionLab } from "@/lib/assistant/policy-regression";
 
 type AdminPageProps = {
   searchParams?: Promise<{
@@ -17,6 +18,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
 
   const detail = activeProfileId ? await getAdminProfileDetail(activeProfileId) : null;
   const feed = buildUnifiedOpsFeed(detail, scope);
+  const policyLab = runPolicyRegressionLab();
 
   return (
     <main style={{ minHeight: "100vh", padding: 24 }}>
@@ -157,6 +159,55 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         {detail.profile.personaSummary ?? "No persona summary prepared yet."}
                       </p>
                     </div>
+
+                    {detail.sessionSummary ? (
+                      <section style={panelStyle}>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <strong>Executive Summary</strong>
+                          <p style={{ margin: 0, color: "var(--muted)" }}>
+                            Start here for the current operating picture: stage, latest move, policy posture, and whether an invariant overrode the default path.
+                          </p>
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gap: 12,
+                            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                            marginTop: 14,
+                          }}
+                        >
+                          <MetricCard label="Current Stage" value={detail.sessionSummary.currentStageLabel} />
+                          <MetricCard
+                            label="Latest Decision"
+                            value={String(detail.sessionSummary.latestDecision?.action ?? "No decision yet")}
+                          />
+                          <MetricCard
+                            label="Policy Archetype"
+                            value={String(detail.sessionSummary.latestDecision?.policyArchetype ?? "unknown")}
+                          />
+                          <MetricCard
+                            label="Invariant Override"
+                            value={String(detail.sessionSummary.latestDecision?.blockedByInvariant ?? "none")}
+                          />
+                          <MetricCard
+                            label="Latest Intent"
+                            value={String(detail.sessionSummary.latestIntent?.intent ?? "unknown")}
+                          />
+                          <MetricCard
+                            label="Trajectory"
+                            value={String(detail.sessionSummary.latestTrajectory?.candidateTrajectory ?? "unknown")}
+                          />
+                          <MetricCard
+                            label="Timing Quality"
+                            value={String(detail.sessionSummary.sessionCritic?.timingQuality ?? "unknown")}
+                          />
+                          <MetricCard
+                            label="Closure Quality"
+                            value={String(detail.sessionSummary.sessionCritic?.closureQuality ?? "unknown")}
+                          />
+                        </div>
+                      </section>
+                    ) : null}
 
                     {detail.sessionSummary ? (
                       <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
@@ -380,6 +431,36 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                   value={String(detail.sessionSummary.latestDecision.blockedByInvariant ?? "none")}
                                 />
                               </div>
+                              {Array.isArray(detail.sessionSummary.latestDecision.decisionPathway) &&
+                              detail.sessionSummary.latestDecision.decisionPathway.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Decision Pathway</strong>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                    {detail.sessionSummary.latestDecision.decisionPathway.map((step) => (
+                                      <span
+                                        key={`admin-decision-pathway-${step}`}
+                                        style={{
+                                          ...stagePillStyle,
+                                          background:
+                                            typeof step === "string" && step.startsWith("Invariant(")
+                                              ? "rgba(220, 120, 24, 0.12)"
+                                              : typeof step === "string" && step.startsWith("Policy(")
+                                                ? "rgba(24, 90, 219, 0.08)"
+                                                : "rgba(12, 114, 68, 0.10)",
+                                          color:
+                                            typeof step === "string" && step.startsWith("Invariant(")
+                                              ? "#9a4d00"
+                                              : typeof step === "string" && step.startsWith("Policy(")
+                                                ? "var(--accent-strong)"
+                                                : "#0a6b45",
+                                        }}
+                                      >
+                                        {String(step)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
                               <dl style={definitionListStyle}>
                                 {Object.entries(detail.sessionSummary.latestDecision).map(([key, value]) => (
                                 <div key={key} style={definitionRowStyle}>
@@ -569,8 +650,11 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     ) : null}
 
                     {detail.sessionSummary ? (
-                      <div style={panelStyle}>
-                        <strong>Session State Timeline</strong>
+                      <details style={panelStyle}>
+                        <summary style={sectionSummaryStyle}>Session State Timeline</summary>
+                        <p style={{ margin: 0, color: "var(--muted)" }}>
+                          Full turn-by-turn snapshots, pathway badges, and raw payloads for deeper debugging.
+                        </p>
                         <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
                           {detail.sessionSummary.timeline.length > 0 ? (
                             detail.sessionSummary.timeline.map((item) => (
@@ -622,6 +706,24 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                     {item.batchGroup ? (
                                       <Badge tone="neutral">batch: {item.batchGroup}</Badge>
                                     ) : null}
+                                  </div>
+                                ) : null}
+                                {item.decisionPathway && item.decisionPathway.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {item.decisionPathway.map((step) => (
+                                      <Badge
+                                        key={`${item.id}-path-${step}`}
+                                        tone={
+                                          step.startsWith("Invariant(")
+                                            ? "warning"
+                                            : step.startsWith("Policy(")
+                                              ? "info"
+                                              : "neutral"
+                                        }
+                                      >
+                                        {step}
+                                      </Badge>
+                                    ))}
                                   </div>
                                 ) : null}
                                 {item.answeredTargets && item.answeredTargets.length > 0 ? (
@@ -708,11 +810,11 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                             <span style={{ color: "var(--muted)" }}>No state timeline items recorded yet.</span>
                           )}
                         </div>
-                      </div>
+                      </details>
                     ) : null}
 
                     <details style={panelStyle}>
-                      <summary style={{ cursor: "pointer", fontWeight: 700 }}>View Raw Job Status JSON</summary>
+                      <summary style={sectionSummaryStyle}>Raw Job Status JSON</summary>
                       <pre style={preStyle}>{JSON.stringify(detail.job, null, 2)}</pre>
                     </details>
                   </>
@@ -724,6 +826,89 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
 
             <section style={cardStyle}>
               <div style={{ padding: 20, display: "grid", gap: 16 }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Policy Regression Lab</h2>
+                  <p style={{ margin: "6px 0 0", color: "var(--muted)" }}>
+                    Golden scenarios rendered through multiple archetypes so policy differences stay visible and testable.
+                  </p>
+                </div>
+
+                <div style={{ display: "grid", gap: 14 }}>
+                  {policyLab.map((scenario) => (
+                    <article key={scenario.scenarioId} style={timelineCardStyle}>
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <strong>{scenario.label}</strong>
+                          <Badge tone="neutral">{scenario.scenarioId}</Badge>
+                          <Badge tone={scenario.divergentFields.length > 0 ? "info" : "neutral"}>
+                            {scenario.divergentFields.length > 0 ? "policy diff" : "policy converge"}
+                          </Badge>
+                        </div>
+                        <span style={{ color: "var(--muted)" }}>
+                          {scenario.summary}
+                        </span>
+                      </div>
+
+                      {scenario.divergentFields.length > 0 ? (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {scenario.divergentFields.map((field) => (
+                            <Badge key={`${scenario.scenarioId}-diff-${field}`} tone="info">
+                              diff: {field}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: 12,
+                          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                        }}
+                      >
+                        {scenario.results.map((result) => (
+                          <div key={`${scenario.scenarioId}-${result.archetype}`} style={panelStyle}>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                              <Badge tone="info">{result.archetype}</Badge>
+                              <Badge tone="neutral">{result.action}</Badge>
+                              {result.target ? <Badge tone="neutral">target: {result.target}</Badge> : null}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                              {result.pressure ? <Badge tone="info">pressure: {result.pressure}</Badge> : null}
+                              {result.timing ? <Badge tone="neutral">timing: {result.timing}</Badge> : null}
+                              {result.suggestedStage ? <Badge tone="neutral">stage: {result.suggestedStage}</Badge> : null}
+                            </div>
+                            {result.decisionPathway && result.decisionPathway.length > 0 ? (
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                                {result.decisionPathway.map((step) => (
+                                  <Badge
+                                    key={`${scenario.scenarioId}-${result.archetype}-${step}`}
+                                    tone={
+                                      step.startsWith("Invariant(")
+                                        ? "warning"
+                                        : step.startsWith("Policy(")
+                                          ? "info"
+                                          : "neutral"
+                                    }
+                                  >
+                                    {step}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : null}
+                            <p style={{ margin: 0, color: "var(--muted)" }}>{result.reason}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <details style={cardStyle}>
+              <div style={{ padding: 20, display: "grid", gap: 16 }}>
+                <summary style={sectionSummaryStyle}>Unified Operations Feed</summary>
                 <div>
                   <h2 style={{ margin: 0 }}>Unified Operations Feed</h2>
                   <p style={{ margin: "6px 0 0", color: "var(--muted)" }}>
@@ -767,7 +952,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                   </div>
                 )}
               </div>
-            </section>
+            </details>
           </section>
         </section>
       </div>
@@ -814,7 +999,7 @@ function Badge({
   tone,
 }: {
   children: React.ReactNode;
-  tone: "info" | "neutral";
+  tone: "info" | "neutral" | "warning";
 }) {
   return (
     <span
@@ -824,8 +1009,18 @@ function Badge({
         padding: "5px 10px",
         borderRadius: 999,
         border: "1px solid var(--border)",
-        background: tone === "info" ? "rgba(24, 90, 219, 0.08)" : "var(--surface-alt)",
-        color: tone === "info" ? "var(--accent-strong)" : "var(--muted)",
+        background:
+          tone === "info"
+            ? "rgba(24, 90, 219, 0.08)"
+            : tone === "warning"
+              ? "rgba(220, 120, 24, 0.14)"
+              : "var(--surface-alt)",
+        color:
+          tone === "info"
+            ? "var(--accent-strong)"
+            : tone === "warning"
+              ? "#9a4d00"
+              : "var(--muted)",
         fontSize: 13,
       }}
     >
@@ -867,6 +1062,13 @@ const timelineCardStyle = {
   background: "#fff",
   display: "grid",
   gap: 12,
+} as const;
+
+const sectionSummaryStyle = {
+  cursor: "pointer",
+  fontWeight: 700,
+  color: "var(--accent-strong)",
+  marginBottom: 10,
 } as const;
 
 const miniTimelineCardStyle = {

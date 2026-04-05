@@ -106,6 +106,11 @@ describe("generateSessionReport", () => {
     expect((reportJson.latestDecision as Record<string, unknown>).policyArchetype).toBe("collaborative");
     expect((reportJson.latestDecision as Record<string, unknown>).blockedByInvariant).toBe("flow_preservation");
     expect(Array.isArray((rubricSummary[0] as Record<string, unknown>).evidenceRefs)).toBe(true);
+    expect((reportJson.evaluatedLevel as string)).toBeTruthy();
+    expect((reportJson.levelRationale as string)).toMatch(/signal|reasoning|execution|rescue/i);
+    expect((reportJson.recommendationRationale as string)).toMatch(/independence|coachability|execution|final call/i);
+    expect(((reportJson.recommendationBasis as Record<string, unknown>).band as string)).toBeTruthy();
+    expect(((reportJson.recommendationBasis as Record<string, unknown>).independenceSignal as string)).toMatch(/strong|mixed|weak/);
   });
 
   it("groups replay evidence around stage, signals, decisions, and code runs", () => {
@@ -482,3 +487,47 @@ describe("generateSessionReport", () => {
 
 
 
+
+
+it("downgrades the recommendation band when independence is weak despite a middling base recommendation", () => {
+  const report = generateSessionReport({
+    sessionId: "session-weak-independence",
+    questionTitle: "Two Sum",
+    transcripts: [
+      { speaker: "USER", text: "I think I need a lot of help finishing this." },
+    ],
+    events: [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          stage: "IMPLEMENTATION",
+          signals: {
+            understanding: "clear",
+            progress: "partial",
+            communication: "clear",
+            codeQuality: "partial",
+            algorithmChoice: "reasonable",
+            edgeCaseAwareness: "partial",
+            behavior: "structured",
+            reasoningDepth: "moderate",
+            testingDiscipline: "partial",
+            complexityRigor: "moderate",
+            confidence: 0.74,
+            summary: "The candidate has the right direction but relies on interviewer support to keep moving.",
+          },
+        },
+      },
+      { eventType: "HINT_REQUESTED", payloadJson: { source: "candidate" } },
+      { eventType: "HINT_SERVED", payloadJson: { hintLevel: "DIRECT", hintStyle: "IMPLEMENTATION_GUIDE", rescueMode: "implementation_rescue", hintTier: "L3_SOLUTION", hintCost: 4 } },
+      { eventType: "HINT_REQUESTED", payloadJson: { source: "candidate" } },
+      { eventType: "HINT_SERVED", payloadJson: { hintLevel: "DIRECT", hintStyle: "IMPLEMENTATION_GUIDE", rescueMode: "implementation_rescue", hintTier: "L3_SOLUTION", hintCost: 4 } },
+      { eventType: "CODE_RUN_COMPLETED", payloadJson: { status: "FAILED" } },
+    ],
+    executionRuns: [{ id: "run-weak-1", status: "FAILED", stderr: "wrong answer" }],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  expect((reportJson.recommendation as string)).toMatch(/BORDERLINE|NO_HIRE/);
+  expect(((reportJson.recommendationBasis as Record<string, unknown>).band as string)).toMatch(/Borderline|No Hire/);
+  expect(((reportJson.recommendationBasis as Record<string, unknown>).independenceSignal as string)).toBe("weak");
+});

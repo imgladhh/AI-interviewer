@@ -1778,6 +1778,7 @@ function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSign
   const finalizedDecision = {
     ...invariantResult.decision,
     policyArchetype: policyConfig.archetype,
+    decisionPathway: invariantResult.decisionPathway,
     ...toDecisionJustificationFields(buildDecisionJustification({
       decision: invariantResult.decision,
       signals,

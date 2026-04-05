@@ -133,6 +133,16 @@ type ReportJson = {
   improvementPlan?: string[];
   overallScore?: number;
   recommendation?: string;
+  recommendationBand?: string;
+  recommendationBasis?: {
+    band?: string;
+    independenceSignal?: string;
+    coachabilitySignal?: string;
+    notes?: string[];
+  };
+  evaluatedLevel?: string;
+  levelRationale?: string;
+  recommendationRationale?: string;
   overallSummary?: string;
   candidateState?: CandidateState | null;
   latestDecision?: LatestDecision | null;
@@ -206,6 +216,12 @@ type CandidateStateTimelineItem = {
   interventionValue?: string | null;
   bestIntervention?: string | null;
   expectedEvidenceGain?: string | null;
+  policyArchetype?: string | null;
+  blockedByInvariant?: string | null;
+  decisionPathway?: string[];
+  justificationWhyNow?: string | null;
+  justificationWhyThisAction?: string | null;
+  supportingSignals?: string[];
   payload: Record<string, unknown>;
 };
 
@@ -360,11 +376,80 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
             </p>
           </div>
           <div style={heroMetaRowStyle}>
-            <Metric label="Recommendation" value={reportJson.recommendation ?? session.evaluation?.recommendation ?? "BORDERLINE"} />
+            <Metric label="Recommendation" value={reportJson.recommendationBand ?? reportJson.recommendation ?? session.evaluation?.recommendation ?? "BORDERLINE"} />
             <Metric label="Overall Score" value={`${reportJson.overallScore ?? session.evaluation?.overallScore ?? 0}/100`} />
-            <Metric label="Level" value={reportJson.targetLevel ?? session.targetLevel ?? "Unspecified"} />
+            <Metric label="Level" value={reportJson.evaluatedLevel ?? reportJson.targetLevel ?? session.targetLevel ?? "Unspecified"} />
             <Metric label="Language" value={reportJson.selectedLanguage ?? session.selectedLanguage ?? "Unspecified"} />
           </div>
+        </section>
+
+        <section style={gridStyle}>
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Executive Summary</h2>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={listItemStyle}>
+                <strong>Recommendation</strong>
+                <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                  {reportJson.recommendationBand ?? reportJson.recommendation ?? session.evaluation?.recommendation ?? "BORDERLINE"}
+                </p>
+                {reportJson.recommendationRationale ? (
+                  <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.recommendationRationale}</p>
+                ) : null}
+              </div>
+              <div style={listItemStyle}>
+                <strong>Level Call</strong>
+                <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                  {reportJson.evaluatedLevel ?? reportJson.targetLevel ?? session.targetLevel ?? "Unspecified"}
+                </p>
+                {reportJson.levelRationale ? (
+                  <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.levelRationale}</p>
+                ) : null}
+              </div>
+              <div style={listItemStyle}>
+                <strong>Moments of Truth</strong>
+                <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                  {(reportJson.momentsOfTruth ?? []).length > 0
+                    ? `${(reportJson.momentsOfTruth ?? []).length} key turning point${(reportJson.momentsOfTruth ?? []).length === 1 ? "" : "s"} captured.`
+                    : "No pivotal moments were captured yet."}
+                </p>
+                {(reportJson.momentsOfTruth ?? []).slice(0, 2).map((item, index) => (
+                  <div key={`executive-moment-${index}`} style={{ ...listItemStyle, marginTop: 8 }}>
+                    <strong>{item.title ?? "Moment of truth"}</strong>
+                    {item.detail ? (
+                      <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{item.detail}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </article>
+
+          <article style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Recommendation Basis</h2>
+            <div style={{ display: "grid", gap: 10 }}>
+              <MetricRow
+                label="Band"
+                value={reportJson.recommendationBasis?.band ?? reportJson.recommendationBand ?? reportJson.recommendation ?? "unknown"}
+              />
+              <MetricRow
+                label="Independence"
+                value={reportJson.recommendationBasis?.independenceSignal ?? "unknown"}
+              />
+              <MetricRow
+                label="Coachability"
+                value={reportJson.recommendationBasis?.coachabilitySignal ?? "unknown"}
+              />
+              {Array.isArray(reportJson.recommendationBasis?.notes) && reportJson.recommendationBasis.notes.length > 0 ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {reportJson.recommendationBasis.notes.map((note, index) => (
+                    <div key={`executive-basis-note-${index}`} style={listItemStyle}>
+                      {note}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </article>
         </section>
 
         <section style={gridStyle}>
@@ -537,6 +622,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
             </div>
           </article>
         </section>
+
+        <details style={diagnosticsDetailsStyle}>
+          <summary style={diagnosticsSummaryStyle}>Deep Diagnostics</summary>
+          <p style={{ ...mutedParagraphStyle, marginTop: 0 }}>
+            Open this section for full interviewer-state, ledger, and replay diagnostics. The executive summary and stage storyline above are the product-facing view.
+          </p>
 
         <section style={gridStyle}>
           <article style={panelStyle}>
@@ -894,6 +985,9 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
 
         <section style={panelStyle}>
           <h2 style={sectionTitleStyle}>Stage Replay</h2>
+          <p style={{ ...mutedParagraphStyle, marginTop: 0 }}>
+            Read this as the interview storyline: each section summarizes what changed in that phase before you expand the supporting evidence and representative turns.
+          </p>
           <div style={{ display: "grid", gap: 16 }}>
             {stageReplaySections.length === 0 ? (
               <p style={mutedParagraphStyle}>No stage-grouped replay markers were captured for this session.</p>
@@ -915,54 +1009,66 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     </div>
                   </summary>
                   <div style={{ display: "grid", gap: 12 }}>
+                    <div style={listItemStyle}>
+                      <strong>Plot summary</strong>
+                      <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{summarizeStageSection(group)}</p>
+                    </div>
                     {Array.isArray(group.evidence) && group.evidence.length > 0 ? (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <strong>Evidence trail</strong>
-                        {group.evidence.map((item, evidenceIndex) => (
-                          <div key={`${group.key ?? group.label}-evidence-${evidenceIndex}`} style={listItemStyle}>
-                            {item}
-                          </div>
-                        ))}
-                      </div>
+                      <details style={nestedDetailsStyle}>
+                        <summary style={nestedSummaryStyle}>Evidence trail</summary>
+                        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                          {group.evidence.map((item, evidenceIndex) => (
+                            <div key={`${group.key ?? group.label}-evidence-${evidenceIndex}`} style={listItemStyle}>
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     ) : null}
                     {Array.isArray(group.signalSnapshots) && group.signalSnapshots.length > 0 ? (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <strong>Candidate state checkpoints</strong>
-                        {group.signalSnapshots.map((signal, signalIndex) => (
-                          <div key={`${group.key ?? group.label}-signal-${signalIndex}`} style={listItemStyle}>
-                            <strong>
-                              {signal.progress ?? "unknown progress"} / {signal.reasoningDepth ?? "unknown reasoning"}
-                            </strong>
-                            <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
-                              {signal.summary ?? signal.trendSummary ?? "Candidate snapshot recorded for this stage."}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
+                      <details style={nestedDetailsStyle}>
+                        <summary style={nestedSummaryStyle}>Candidate state checkpoints</summary>
+                        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                          {group.signalSnapshots.map((signal, signalIndex) => (
+                            <div key={`${group.key ?? group.label}-signal-${signalIndex}`} style={listItemStyle}>
+                              <strong>
+                                {signal.progress ?? "unknown progress"} / {signal.reasoningDepth ?? "unknown reasoning"}
+                              </strong>
+                              <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                                {signal.summary ?? signal.trendSummary ?? "Candidate snapshot recorded for this stage."}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     ) : null}
                     {Array.isArray(group.decisions) && group.decisions.length > 0 ? (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <strong>Interviewer decisions</strong>
-                        {group.decisions.map((decision, decisionIndex) => (
-                          <div key={`${group.key ?? group.label}-decision-${decisionIndex}`} style={listItemStyle}>
-                            <strong>{decision.action ?? "decision"}</strong>
-                            <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
-                              {decision.question ?? decision.reason ?? "No detail captured."}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
+                      <details style={nestedDetailsStyle}>
+                        <summary style={nestedSummaryStyle}>Interviewer decisions</summary>
+                        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                          {group.decisions.map((decision, decisionIndex) => (
+                            <div key={`${group.key ?? group.label}-decision-${decisionIndex}`} style={listItemStyle}>
+                              <strong>{decision.action ?? "decision"}</strong>
+                              <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                                {decision.question ?? decision.reason ?? "No detail captured."}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     ) : null}
                     {Array.isArray(group.turns) && group.turns.length > 0 ? (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <strong>Representative turns</strong>
-                        {group.turns.map((turn, turnIndex) => (
-                          <div key={`${group.key ?? group.label}-turn-${turnIndex}`} style={listItemStyle}>
-                            <strong>{turn.speaker}</strong>
-                            <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{turn.text}</p>
-                          </div>
-                        ))}
-                      </div>
+                      <details style={nestedDetailsStyle}>
+                        <summary style={nestedSummaryStyle}>Representative turns</summary>
+                        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                          {group.turns.map((turn, turnIndex) => (
+                            <div key={`${group.key ?? group.label}-turn-${turnIndex}`} style={listItemStyle}>
+                              <strong>{turn.speaker}</strong>
+                              <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{turn.text}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     ) : null}
                   </div>
                 </details>
@@ -1096,6 +1202,8 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
             )}
           </div>
         </section>
+
+        </details>
 
         <section style={gridStyle}>
           <ListPanel title="Strengths" items={reportJson.strengths ?? []} />
@@ -1504,6 +1612,16 @@ function summarizeStageCount(count: number | undefined, label: string) {
   return `${safeCount} ${label}${safeCount === 1 ? "" : "s"}`;
 }
 
+function summarizeStageSection(group: StageReplaySection) {
+  const signals = group.signalSnapshots?.length ?? 0;
+  const decisions = group.decisions?.length ?? 0;
+  const turns = group.turns?.length ?? 0;
+  const evidence = group.evidence?.length ?? 0;
+  const stages = (group.stages ?? []).join(", ") || "this phase";
+
+  return `Across ${stages}, the replay captured ${signals} signal snapshots, ${decisions} interviewer decisions, ${turns} representative turns, and ${evidence} evidence markers.`;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -1570,6 +1688,33 @@ const accordionSummaryStyle = {
   flexWrap: "wrap",
   alignItems: "center",
   padding: 18,
+} as const;
+
+const nestedDetailsStyle = {
+  borderRadius: 14,
+  border: "1px solid var(--border)",
+  background: "rgba(255,255,255,0.72)",
+  padding: 12,
+} as const;
+
+const nestedSummaryStyle = {
+  cursor: "pointer",
+  fontWeight: 700,
+  color: "var(--accent-strong)",
+} as const;
+
+
+const diagnosticsDetailsStyle = {
+  ...panelStyle,
+  padding: 18,
+} as const;
+
+const diagnosticsSummaryStyle = {
+  cursor: "pointer",
+  fontWeight: 700,
+  fontSize: 18,
+  color: "var(--accent-strong)",
+  marginBottom: 12,
 } as const;
 
 const heroMetaRowStyle = {

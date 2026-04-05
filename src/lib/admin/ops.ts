@@ -97,6 +97,7 @@ export type SessionTimelineItem = {
   expectedEvidenceGain?: string | null;
   policyArchetype?: string | null;
   blockedByInvariant?: string | null;
+  decisionPathway?: string[];
   justificationWhyNow?: string | null;
   justificationWhyThisAction?: string | null;
   supportingSignals?: string[];
@@ -449,6 +450,9 @@ function buildSessionTimeline(
           batchGroup: stringValue(decision.batchGroup),
           policyArchetype: stringValue(decision.policyArchetype),
           blockedByInvariant: stringValue(decision.blockedByInvariant),
+          decisionPathway: Array.isArray(decision.decisionPathway)
+            ? decision.decisionPathway.filter((item): item is string => typeof item === "string")
+            : [],
           justificationWhyNow: stringValue(decision.justificationWhyNow),
           justificationWhyThisAction: stringValue(decision.justificationWhyThisAction),
           supportingSignals: Array.isArray(decision.supportingSignals)

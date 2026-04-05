@@ -411,12 +411,26 @@ Concrete work:
 - make `/admin` and `/report` distinguish:
   - behavior chosen because of policy
   - behavior overridden by invariant guard
+- add a decision pathway view so each turn can be explained as:
+  - `Policy -> Action`
+  - or `Policy -> Invariant Override -> Action`
 - keep policy deterministic and observable through snapshots, `/admin`, and `/report`
 
 Success criteria:
 - the same transcript produces different but explainable interviewer behavior under different archetypes
 - invariants still override policy when necessary
 - manually changing `PolicyConfig` produces a deterministic and inspectable behavior shift
+
+Phase 1 status:
+- policy now affects real interviewer behavior in:
+  - `src/lib/assistant/decision_engine.ts`
+  - `src/lib/assistant/pacing.ts`
+  - `src/lib/assistant/hint_strategy.ts`
+- invariant enforcement now runs before the final decision snapshot is emitted
+- decision snapshots now record a visible decision pathway such as:
+  - `Policy(collaborative) -> Action(encourage_and_continue)`
+  - `Policy(bar_raiser) -> Invariant(flow_preservation) -> Action(hold_and_listen)`
+- `/admin` now surfaces that pathway in both the latest decision card and the session timeline, so policy effect vs invariant override is inspectable without digging through raw payloads
 
 ### Priority 2: Voice Naturalness
 
@@ -432,6 +446,12 @@ Concrete work:
 - keep spoken/live assistant text aligned with final transcript text
 - refine silence thresholds and filler-word handling
 - make silence handling dynamic based on whether the candidate is actively coding or paused
+- add soft interruption protection for think-aloud phrases such as:
+  - `wait`
+  - `let me think`
+  - `hold on`
+  - `let me see`
+- make silence handling sensitive not just to stage, but also to low-certainty / negative-intent voice fragments during coding
 - reduce awkward double-speak, premature cutoffs, and stale provider preview behavior
 
 Phase 1 status:
@@ -440,6 +460,7 @@ Phase 1 status:
 - added conservative filler/noise cleanup in `src/lib/voice/transcript-normalization.ts`
 - added low-signal utterance filtering so filler-only fragments like `um yeah so` do not get committed as candidate turns
 - added client-side authoritative assistant reply handling in `src/lib/voice/assistant-stream.ts` so the remaining TTS tail follows the final authoritative transcript instead of a stale streamed draft
+- added think-aloud / negative-intent protection for phrases like `wait`, `let me think`, and `hold on`, so coding/debugging turns get a longer silence threshold before auto-submit
 - kept the first slice intentionally narrow and deterministic; deeper voice work should extend these rules instead of replacing them
 
 Success criteria:
@@ -481,6 +502,18 @@ Phase 1 status:
   - decision snapshots
   - execution runs
 - `/report/[id]` now surfaces those evidence refs directly in the rubric scorecard instead of hiding the grounding in raw debug data
+- `/report/[id]` now also surfaces decision pathway / policy / invariant metadata in the latest interviewer decision card, so the report can explain both the candidate and the interviewer behavior
+- report generation now emits an estimated evaluated level plus recommendation rationale, so the top-level verdict reads more like a judgment than a raw score dump
+- report generation now also emits a stronger recommendation band plus explicit recommendation basis:
+  - independence signal
+  - coachability signal
+  - execution closure notes
+- /report/[id] now surfaces that recommendation basis so the top-level verdict reads more like a hiring judgment than a score dump
+- the next report pass should upgrade those refs into stronger evidence traces with:
+  - `snapshot_id`
+  - `event_id`
+  - `execution_run_id`
+  - a short note explaining why that evidence matters
 - kept the first slice intentionally narrow; the next rubric pass should harden:
   - level mapping
   - stronger hire/borderline/no-hire interpretation
@@ -511,6 +544,23 @@ Concrete work:
 - add a policy-diff / strategy-lab workflow:
   - run the same golden transcript through multiple archetypes
   - compare intent timeline, pressure, timing, and closure behavior
+- build a policy regression fixture set with at least:
+  - a strong / nearly perfect candidate
+  - a clearly stuck candidate
+  - the same transcript under `bar_raiser` and `collaborative`
+
+Phase 1 status:
+- added a minimal strategy-lab module in `src/lib/assistant/policy-regression.ts`
+- added golden regression fixtures for:
+  - a strong pre-code candidate
+  - a stuck debugging candidate
+  - a saturated wrap-up candidate
+  - a strong coding-flow preservation case
+  - an answered-target anti-repetition case
+- added archetype comparison coverage in `src/lib/assistant/policy-regression.test.ts`
+- added `npm run eval:policies` as a CLI entry point for offline policy scenario inspection
+- /admin now includes a lightweight Policy Regression Lab card so archetype differences are visible without opening raw test output
+- the strategy lab now surfaces scenario-level diff summaries, so it is obvious when archetypes diverge on action, target, pressure, timing, or stage
 - use session critic outputs to identify:
   - over-interruption
   - over-pressure
@@ -544,6 +594,32 @@ Success criteria:
 - the UI feels like a deliberate interview product rather than a debug console
 - deeper system reasoning remains visible for development and audit
 
+Phase 1 status:
+- `/report/[id]` now starts moving toward an executive-summary-first layout instead of dropping directly into dense detail
+- the top of the report now foregrounds:
+  - recommendation
+  - evaluated level
+  - recommendation basis
+  - moments of truth
+- the report still preserves deeper candidate/interviewer state below, so product-facing readability improves without losing audit depth
+- stage replay now reads more like an interview storyline:
+  - each phase opens with a short plot summary
+  - evidence, checkpoints, interviewer decisions, and representative turns are nested under collapsible detail blocks
+- deeper report diagnostics are now pushed under a `Deep Diagnostics` fold so first-time readers see the product-facing summary before the audit-heavy state snapshots and replay timelines
+  - `/admin` now also starts with a compact executive summary for the current session posture:
+    - current stage
+    - latest decision
+    - policy archetype
+    - invariant override
+    - latest intent / trajectory
+    - critic timing / closure quality
+  - heavy admin detail is increasingly folded behind explicit sections such as:
+    - `Session State Timeline`
+    - `Raw Job Status JSON`
+    - `Unified Operations Feed`
+  - `Raw Job Status JSON`
+  - `Unified Operations Feed`
+
 ## Milestone Guidance
 
 ### Milestone 1 Finale
@@ -557,6 +633,9 @@ Milestone 1 finale checks:
 - strategy visibility: can we tell whether a turn came from policy bias or invariant override?
 - data consistency: does voice/transcript cleanup keep noise out of signal extraction?
 - deterministic behavior: does changing `PolicyConfig` create a reliable behavior shift?
+- interrupted snapshot alignment: after a spoken interruption, do persisted snapshots reflect the part of the AI turn that was actually spoken?
+- invariant transparency: can `/admin` tell us exactly when `ANTI_REPETITION`, budget guardrails, or flow-preservation rules changed the decision?
+- denoise safety: are filler filters conservative enough that short but meaningful confirmations like `OK` or `Yes` are not lost?
 
 ### Milestone 2
 

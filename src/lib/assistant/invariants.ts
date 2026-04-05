@@ -20,14 +20,17 @@ type InvariantInput = {
 type InvariantResult = {
   decision: CandidateDecision;
   blockedByInvariant?: string;
+  decisionPathway: string[];
 };
 
 export function applyDecisionInvariants(input: InvariantInput): InvariantResult {
   const { decision, currentStage, signals, memory, trajectory, policyConfig, budgetState } = input;
+  const basePathway = [`Policy(${input.policyConfig.archetype})`];
 
   if (budgetState?.exceeded) {
     return {
       blockedByInvariant: "budget_guardrail",
+      decisionPathway: [...basePathway, "Invariant(budget_guardrail)", "Action(end_interview)"],
       decision: {
         ...decision,
         action: "end_interview",
@@ -50,6 +53,7 @@ export function applyDecisionInvariants(input: InvariantInput): InvariantResult 
   ) {
     return {
       blockedByInvariant: "flow_preservation",
+      decisionPathway: [...basePathway, "Invariant(flow_preservation)", "Action(hold_and_listen)"],
       decision: {
         ...decision,
         action: "hold_and_listen",
@@ -65,6 +69,11 @@ export function applyDecisionInvariants(input: InvariantInput): InvariantResult 
   if (isProbingAnsweredTarget(decision.target, memory)) {
     return {
       blockedByInvariant: "anti_repetition",
+      decisionPathway: [
+        ...basePathway,
+        "Invariant(anti_repetition)",
+        `Action(${currentStage === "WRAP_UP" ? "close_topic" : "encourage_and_continue"})`,
+      ],
       decision: {
         ...decision,
         action: currentStage === "WRAP_UP" ? "close_topic" : "encourage_and_continue",
@@ -87,6 +96,7 @@ export function applyDecisionInvariants(input: InvariantInput): InvariantResult 
   ) {
     return {
       blockedByInvariant: "no_double_surgical_pressure",
+      decisionPathway: [...basePathway, "Invariant(no_double_surgical_pressure)", "Action(adjust_pressure)"],
       decision: {
         ...decision,
         pressure: "challenging",
@@ -97,6 +107,7 @@ export function applyDecisionInvariants(input: InvariantInput): InvariantResult 
   if (decision.action === "give_hint" && isPassConditionAlreadySatisfied(decision, currentStage, memory, policyConfig)) {
     return {
       blockedByInvariant: "no_hint_after_completion",
+      decisionPathway: [...basePathway, "Invariant(no_hint_after_completion)", "Action(move_to_wrap_up)"],
       decision: {
         ...decision,
         action: "move_to_wrap_up",
@@ -110,7 +121,10 @@ export function applyDecisionInvariants(input: InvariantInput): InvariantResult 
     };
   }
 
-  return { decision };
+  return {
+    decision,
+    decisionPathway: [...basePathway, `Action(${decision.action})`],
+  };
 }
 
 function readPreviousPressure(recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>) {

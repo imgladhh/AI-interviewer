@@ -122,7 +122,7 @@ function normalizeSpacing(text: string) {
 function stripFillerNoise(text: string) {
   let normalized = text
     .replace(/\b(um+|uh+|ah+|er+|mm+)\b[,\s]*/gi, " ")
-    .replace(/(^|[\s,])you know(?=[,\s])/gi, "$1")
+    .replace(/(^|[\s,])you know(?=[,\s]|$)/gi, "$1")
     .replace(/(^|[\s,])like(?=,)/gi, "$1");
 
   normalized = normalized.replace(/\s+([,.!?;:])/g, "$1");

@@ -9,6 +9,17 @@ const INTERRUPTION_PHRASES = [
   "hold up",
 ];
 
+const NEGATIVE_INTENT_PHRASES = [
+  "wait",
+  "let me think",
+  "let me see",
+  "hold on",
+  "hang on",
+  "give me a second",
+  "one second",
+  "hold up",
+];
+
 const LOW_SIGNAL_TOKENS = new Set([
   "um",
   "uh",
@@ -30,6 +41,7 @@ type TurnTimingInput = {
   interruptedRecently?: boolean;
   activeCoding?: boolean;
   flowMode?: "discussion" | "coding" | "debugging" | "wrap_up";
+  negativeIntent?: boolean;
 };
 
 export function getAutoSubmitDelayMs(input: TurnTimingInput) {
@@ -45,7 +57,11 @@ export function getAutoSubmitDelayMs(input: TurnTimingInput) {
 
   if (hasConnectorEnding || hasComplexityTalk) {
     const baseDelay = input.interruptedRecently ? 2000 : 1600;
-    return applyVoiceFlowBias(applyCodingDelayBias(baseDelay, input.activeCoding), input.flowMode);
+    return applyNegativeIntentBias(
+      applyVoiceFlowBias(applyCodingDelayBias(baseDelay, input.activeCoding), input.flowMode),
+      input.negativeIntent,
+      input.flowMode,
+    );
   }
 
   const baseDelay = resolveAutoSubmitBaseDelay({
@@ -53,7 +69,11 @@ export function getAutoSubmitDelayMs(input: TurnTimingInput) {
     endsSentence,
     interruptedRecently: input.interruptedRecently,
   });
-  return applyVoiceFlowBias(applyCodingDelayBias(baseDelay, input.activeCoding), input.flowMode);
+  return applyNegativeIntentBias(
+    applyVoiceFlowBias(applyCodingDelayBias(baseDelay, input.activeCoding), input.flowMode),
+    input.negativeIntent,
+    input.flowMode,
+  );
 }
 
 export function getFinalChunkCommitDelayMs(input: TurnTimingInput) {
@@ -66,37 +86,53 @@ export function getFinalChunkCommitDelayMs(input: TurnTimingInput) {
   const hasConnectorEnding = /\b(and|so|then|because|but|or|with|for|to)$/.test(normalized);
 
   if (/[.!?]$/.test(normalized)) {
-    return applyVoiceFlowBias(
-      applyCodingDelayBias(wordCount >= 10 ? 320 : 520, input.activeCoding, 220, 1600),
+    return applyNegativeIntentBias(
+      applyVoiceFlowBias(
+        applyCodingDelayBias(wordCount >= 10 ? 320 : 520, input.activeCoding, 220, 1600),
+        input.flowMode,
+        240,
+        1600,
+      ),
+      input.negativeIntent,
       input.flowMode,
-      240,
-      1600,
     );
   }
 
   if (wordCount <= 3) {
-    return applyVoiceFlowBias(
-      applyCodingDelayBias(input.interruptedRecently ? 1500 : 1200, input.activeCoding, 220, 1600),
+    return applyNegativeIntentBias(
+      applyVoiceFlowBias(
+        applyCodingDelayBias(input.interruptedRecently ? 1500 : 1200, input.activeCoding, 220, 1600),
+        input.flowMode,
+        240,
+        1600,
+      ),
+      input.negativeIntent,
       input.flowMode,
-      240,
-      1600,
     );
   }
 
   if (hasConnectorEnding) {
-    return applyVoiceFlowBias(
-      applyCodingDelayBias(input.interruptedRecently ? 1200 : 900, input.activeCoding, 220, 1600),
+    return applyNegativeIntentBias(
+      applyVoiceFlowBias(
+        applyCodingDelayBias(input.interruptedRecently ? 1200 : 900, input.activeCoding, 220, 1600),
+        input.flowMode,
+        240,
+        1600,
+      ),
+      input.negativeIntent,
       input.flowMode,
-      240,
-      1600,
     );
   }
 
-  return applyVoiceFlowBias(
-    applyCodingDelayBias(input.interruptedRecently ? 950 : 720, input.activeCoding, 220, 1600),
+  return applyNegativeIntentBias(
+    applyVoiceFlowBias(
+      applyCodingDelayBias(input.interruptedRecently ? 950 : 720, input.activeCoding, 220, 1600),
+      input.flowMode,
+      240,
+      1600,
+    ),
+    input.negativeIntent,
     input.flowMode,
-    240,
-    1600,
   );
 }
 
@@ -125,6 +161,17 @@ export function isLowSignalUtterance(text: string) {
   }
 
   return tokens.every((token) => LOW_SIGNAL_TOKENS.has(token));
+}
+
+export function hasNegativeIntentCue(text: string) {
+  const normalized = normalizeUtterance(text).replace(/[,.!?;:]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return NEGATIVE_INTENT_PHRASES.some(
+    (phrase) => normalized === phrase || normalized.startsWith(`${phrase} `),
+  );
 }
 
 export function normalizeUtterance(text: string) {
@@ -182,4 +229,24 @@ function applyVoiceFlowBias(
   }
 
   return baseDelay;
+}
+
+function applyNegativeIntentBias(
+  baseDelay: number,
+  negativeIntent = false,
+  flowMode: TurnTimingInput["flowMode"] = "discussion",
+) {
+  if (!negativeIntent) {
+    return baseDelay;
+  }
+
+  if (flowMode === "coding") {
+    return Math.min(baseDelay + 520, 3200);
+  }
+
+  if (flowMode === "debugging") {
+    return Math.min(baseDelay + 380, 3000);
+  }
+
+  return Math.min(baseDelay + 180, 2600);
 }

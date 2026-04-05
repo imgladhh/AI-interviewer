@@ -15,7 +15,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "worker:persona": "tsx src/workers/persona-worker.ts"
+    "worker:persona": "tsx src/workers/persona-worker.ts",
+    "eval:policies": "tsx src/scripts/eval-policies.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

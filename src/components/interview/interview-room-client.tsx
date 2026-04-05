@@ -23,6 +23,7 @@ import { mergeTranscriptFragments, normalizeTranscriptText } from "@/lib/voice/t
 import {
   getAutoSubmitDelayMs,
   getFinalChunkCommitDelayMs,
+  hasNegativeIntentCue,
   isLowSignalUtterance,
   shouldIgnoreInterruptedUtterance,
 } from "@/lib/voice/turn-taking";
@@ -676,11 +677,13 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     if (isLowSignalUtterance(candidateText)) {
       return;
     }
+    const negativeIntent = shouldProtectThinkAloud(candidateText, currentVoiceFlowMode());
     const delayMs = getAutoSubmitDelayMs({
       text: candidateText || "spoken candidate answer",
       interruptedRecently: interruptedRecently(),
       activeCoding: isActivelyCoding(),
       flowMode: currentVoiceFlowMode(),
+      negativeIntent,
     });
 
     if (delayMs === null) {
@@ -706,6 +709,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       return;
     }
 
+    const negativeIntent = shouldProtectThinkAloud(text, currentVoiceFlowMode());
     const delayMs = getAutoSubmitDelayMs({
       text,
       interruptedRecently: interruptedRecently(),
@@ -747,6 +751,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       interruptedRecently: interruptedRecently(),
       activeCoding: isActivelyCoding(),
       flowMode: currentVoiceFlowMode(),
+      negativeIntent: shouldProtectThinkAloud(mergedFinalText, currentVoiceFlowMode()),
     });
 
     if (delayMs === null) {
@@ -2231,6 +2236,10 @@ function shouldDelaySpeechDrivenCommit(
     return !hasTerminalPunctuation && wordCount <= 2;
   }
 
+  if ((flowMode === "coding" || flowMode === "debugging") && hasNegativeIntentCue(normalized)) {
+    return true;
+  }
+
   if (wordCount <= 4) {
     return true;
   }
@@ -2244,6 +2253,17 @@ function shouldDelaySpeechDrivenCommit(
   }
 
   return false;
+}
+
+function shouldProtectThinkAloud(
+  text: string,
+  flowMode: "discussion" | "coding" | "debugging" | "wrap_up" = "discussion",
+) {
+  if (flowMode !== "coding" && flowMode !== "debugging") {
+    return false;
+  }
+
+  return hasNegativeIntentCue(text);
 }
 
 function asStringArray(value: unknown) {

@@ -211,6 +211,20 @@ type SnapshotTimelineEntry = {
   payload: Record<string, unknown>;
 };
 
+type EvaluatedLevel = {
+  level: "L3" | "L4" | "L5" | "L6";
+  rationale: string;
+};
+
+type RecommendationBand = "Strong Hire" | "Hire" | "Borderline" | "No Hire";
+
+type RecommendationBasis = {
+  band: RecommendationBand;
+  independenceSignal: "strong" | "mixed" | "weak";
+  coachabilitySignal: "high" | "moderate" | "low";
+  notes: string[];
+};
+
 export type GeneratedSessionReport = {
   overallScore: number;
   recommendation: Recommendation;
@@ -310,8 +324,24 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   });
   const intentTimeline = buildSnapshotTimeline("intent", input.intentSnapshots ?? []);
   const trajectoryTimeline = buildSnapshotTimeline("trajectory", input.trajectorySnapshots ?? []);
+  const evaluatedLevel = inferEvaluatedLevel({
+    overallScore: adjustedOverallScore,
+    latestSignal,
+    hintSummary,
+    passedRuns,
+    independenceScore: dimensions.find((dimension) => dimension.key === "independence")?.score ?? 3,
+  });
+  const recommendationBasis = buildRecommendationBasis({
+    recommendation,
+    evaluatedLevel,
+    hintSummary,
+    independenceScore: dimensions.find((dimension) => dimension.key === "independence")?.score ?? 3,
+    passedRuns,
+    failedRuns,
+  });
   const overallSummary = buildOverallSummary({
     recommendation,
+    evaluatedLevel,
     currentStage,
     passedRuns,
     failedRuns,
@@ -382,6 +412,19 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       weaknesses,
       missedSignals,
       improvementPlan,
+      evaluatedLevel: evaluatedLevel.level,
+      levelRationale: evaluatedLevel.rationale,
+      recommendationBand: recommendationBasis.band,
+      recommendationBasis,
+      recommendationRationale: buildRecommendationRationale({
+        recommendation,
+        evaluatedLevel,
+        recommendationBasis,
+        passedRuns,
+        failedRuns,
+        hintSummary,
+        latestSignal,
+      }),
       overallScore: adjustedOverallScore,
       recommendation,
       overallSummary,
@@ -1100,6 +1143,7 @@ function clampRubricScore(value: number) {
 
 function buildOverallSummary(input: {
   recommendation: Recommendation;
+  evaluatedLevel: EvaluatedLevel;
   currentStage: string;
   passedRuns: number;
   failedRuns: number;
@@ -1110,6 +1154,7 @@ function buildOverallSummary(input: {
 }) {
   return [
     `Recommendation: ${input.recommendation}.`,
+    `Estimated level: ${input.evaluatedLevel.level}.`,
     `The session reached ${describeCodingStageSafe(input.currentStage)} and covered ${input.stageJourney.join(" -> ")}.`,
     input.latestSignal?.summary ? `Latest candidate state: ${input.latestSignal.summary}.` : null,
     `Code execution produced ${input.passedRuns} passing run(s) and ${input.failedRuns} non-passing run(s).`,
@@ -1119,6 +1164,136 @@ function buildOverallSummary(input: {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildRecommendationRationale(input: {
+  recommendation: Recommendation;
+  evaluatedLevel: EvaluatedLevel;
+  recommendationBasis: RecommendationBasis;
+  passedRuns: number;
+  failedRuns: number;
+  hintSummary: HintSummary;
+  latestSignal: CandidateSignalSummary | null;
+}) {
+  const executionLine =
+    input.passedRuns > 0
+      ? `Execution closed with ${input.passedRuns} passing run(s).`
+      : `Execution never closed with a passing run and left ${input.failedRuns} non-passing run(s).`;
+  const hintLine =
+    input.hintSummary.totalHintCost > 0
+      ? `Hint cost reached ${input.hintSummary.totalHintCost.toFixed(2)}, which reduced confidence in independent execution.`
+      : "The candidate finished without meaningful hint cost, which supports independent execution.";
+  const rigorLine =
+    input.latestSignal?.complexityRigor === "strong" || input.latestSignal?.reasoningDepth === "deep"
+      ? "Reasoning and complexity signals were strong enough to support a higher-level read."
+      : "Reasoning or complexity signals stayed mixed, which limits the final recommendation.";
+
+  return `${input.recommendationBasis.band} is the final call, mapping to an estimated ${input.evaluatedLevel.level} fit here. ${executionLine} ${hintLine} Independence signal was ${input.recommendationBasis.independenceSignal}, and coachability read as ${input.recommendationBasis.coachabilitySignal}. ${rigorLine}`;
+}
+
+function buildRecommendationBasis(input: {
+  recommendation: Recommendation;
+  evaluatedLevel: EvaluatedLevel;
+  hintSummary: HintSummary;
+  independenceScore: number;
+  passedRuns: number;
+  failedRuns: number;
+}): RecommendationBasis {
+  const independenceSignal =
+    input.independenceScore >= 4 ? "strong" : input.independenceScore >= 3 ? "mixed" : "weak";
+  const coachabilitySignal = input.hintSummary.coachability.label;
+  const notes: string[] = [];
+
+  if (input.passedRuns > 0) {
+    notes.push(`Execution closed with ${input.passedRuns} passing run(s).`);
+  } else {
+    notes.push(`Execution never closed with a passing run and left ${input.failedRuns} non-passing run(s).`);
+  }
+
+  if (independenceSignal === "strong") {
+    notes.push("Independence stayed strong throughout the session.");
+  } else if (independenceSignal === "mixed") {
+    notes.push("Independence was mixed and needed some interviewer steering.");
+  } else {
+    notes.push("Independence stayed weak because rescue was needed to keep progress moving.");
+  }
+
+  if (coachabilitySignal === "high") {
+    notes.push("Coachability was high: light guidance converted into forward progress.");
+  } else if (coachabilitySignal === "moderate") {
+    notes.push("Coachability was moderate: guidance helped, but required more than one layer.");
+  } else {
+    notes.push("Coachability was low: progress often required specific or near-solution rescue.");
+  }
+
+  const band: RecommendationBand =
+    input.recommendation === "STRONG_HIRE"
+      ? independenceSignal === "strong"
+        ? "Strong Hire"
+        : "Hire"
+      : input.recommendation === "HIRE"
+        ? independenceSignal === "weak"
+          ? "Borderline"
+          : "Hire"
+        : input.recommendation === "BORDERLINE"
+          ? coachabilitySignal === "high"
+            ? "Borderline"
+            : "No Hire"
+          : "No Hire";
+
+  return {
+    band,
+    independenceSignal,
+    coachabilitySignal,
+    notes,
+  };
+}
+
+function inferEvaluatedLevel(input: {
+  overallScore: number;
+  latestSignal: CandidateSignalSummary | null;
+  hintSummary: HintSummary;
+  passedRuns: number;
+  independenceScore: number;
+}): EvaluatedLevel {
+  if (
+    input.overallScore >= 88 &&
+    input.hintSummary.totalHintCost === 0 &&
+    input.passedRuns > 0 &&
+    input.independenceScore >= 4 &&
+    input.latestSignal?.reasoningDepth === "deep" &&
+    input.latestSignal?.complexityRigor === "strong"
+  ) {
+    return {
+      level: "L6",
+      rationale: "Strong execution, zero hint cost, and deep reasoning/complexity signals point to staff-leaning interview behavior.",
+    };
+  }
+
+  if (
+    input.overallScore >= 78 &&
+    input.passedRuns > 0 &&
+    input.hintSummary.totalHintCost <= 2.5 &&
+    input.independenceScore >= 3 &&
+    (input.latestSignal?.reasoningDepth === "deep" || input.latestSignal?.complexityRigor === "strong")
+  ) {
+    return {
+      level: "L5",
+      rationale: "The candidate converted the interview into a clean passing execution with solid reasoning and limited rescue.",
+    };
+  }
+
+  if (input.overallScore >= 62) {
+    return {
+      level: "L4",
+      rationale: "The candidate showed workable mid-level signal, but still relied on partial guidance, partial rigor, or incomplete closure.",
+    };
+  }
+
+  return {
+    level: "L3",
+    rationale: "The candidate showed junior-leaning signal because execution, rigor, or independence still needed substantial interviewer support.",
+  };
 }
 
 function collectStrengths(

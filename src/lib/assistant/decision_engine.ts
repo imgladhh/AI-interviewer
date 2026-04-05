@@ -93,6 +93,7 @@ export type CandidateDecision = {
   timing?: "ask_now" | "defer" | "skip";
   closureCandidate?: boolean;
   policyArchetype?: PolicyArchetype;
+  decisionPathway?: string[];
   justificationWhyNow?: string;
   justificationWhyThisAction?: string;
   justificationWhyNotAlternatives?: string[];

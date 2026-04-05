@@ -65,6 +65,11 @@ describe("decision invariants", () => {
     expect(result.blockedByInvariant).toBe("flow_preservation");
     expect(result.decision.action).toBe("hold_and_listen");
     expect(result.decision.target).toBe("implementation");
+    expect(result.decisionPathway).toEqual([
+      "Policy(collaborative)",
+      "Invariant(flow_preservation)",
+      "Action(hold_and_listen)",
+    ]);
   });
 
   it("blocks repeated probing of an answered target", () => {

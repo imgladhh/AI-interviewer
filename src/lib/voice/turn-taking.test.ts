@@ -2,6 +2,7 @@
 import {
   getAutoSubmitDelayMs,
   getFinalChunkCommitDelayMs,
+  hasNegativeIntentCue,
   isLowSignalUtterance,
   normalizeUtterance,
   shouldIgnoreInterruptedUtterance,
@@ -97,6 +98,29 @@ describe("voice turn-taking policy", () => {
     expect(discussionDelay).not.toBeNull();
     expect(debuggingDelay).not.toBeNull();
     expect(debuggingDelay!).toBeGreaterThan(discussionDelay!);
+  });
+
+  it("recognizes think-aloud phrases as negative-intent cues", () => {
+    expect(hasNegativeIntentCue("wait, let me think")).toBe(true);
+    expect(hasNegativeIntentCue("hold on I want to check the loop condition")).toBe(true);
+    expect(hasNegativeIntentCue("the bug is the pointer update")).toBe(false);
+  });
+
+  it("waits longer when the candidate is thinking out loud during coding", () => {
+    const normalDelay = getAutoSubmitDelayMs({
+      text: "the bug is probably in the pointer update",
+      flowMode: "coding",
+      negativeIntent: false,
+    });
+    const thinkAloudDelay = getAutoSubmitDelayMs({
+      text: "wait, let me think about the pointer update",
+      flowMode: "coding",
+      negativeIntent: true,
+    });
+
+    expect(normalDelay).not.toBeNull();
+    expect(thinkAloudDelay).not.toBeNull();
+    expect(thinkAloudDelay!).toBeGreaterThan(normalDelay!);
   });
 });
 
