@@ -1,5 +1,6 @@
 ﻿import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
+import { decorateTranscriptForRead, deriveTranscriptCommitState } from "@/lib/session/commit-arbiter";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { createTranscriptSegmentSchema } from "@/schemas/session-runtime";
 
@@ -24,7 +25,9 @@ export async function GET(_: Request, { params }: RouteContext) {
     orderBy: { segmentIndex: "asc" },
   });
 
-  return ok({ transcripts });
+  return ok({
+    transcripts: transcripts.map((transcript) => decorateTranscriptForRead(transcript)),
+  });
 }
 
 export async function POST(request: Request, { params }: RouteContext) {
@@ -79,6 +82,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         speaker: parsed.data.speaker,
         transcriptSegmentId: segment.id,
         isFinal: parsed.data.isFinal,
+        commitState: deriveTranscriptCommitState({ isFinal: parsed.data.isFinal }),
         transcriptSource: parsed.data.transcriptSource ?? null,
         transcriptProvider: parsed.data.transcriptProvider ?? null,
       },
@@ -100,6 +104,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         eventType: SESSION_EVENT_TYPES.CANDIDATE_TRANSCRIPT_REFINED,
         payloadJson: {
           transcriptSegmentId: segment.id,
+          correctionOfId: parsed.data.correctionOfId ?? null,
           transcriptProvider: parsed.data.transcriptProvider ?? parsed.data.transcriptSource,
           originalText: parsed.data.sourceText,
           refinedText: parsed.data.text,
@@ -108,6 +113,13 @@ export async function POST(request: Request, { params }: RouteContext) {
     });
   }
 
-  return ok({ transcript: segment }, { status: 201 });
+  return ok(
+    {
+      transcript: decorateTranscriptForRead(segment, {
+        correctionOfId: parsed.data.correctionOfId ?? null,
+      }),
+    },
+    { status: 201 },
+  );
 }
 

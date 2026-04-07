@@ -622,33 +622,145 @@ Phase 1 status:
 
 ## Milestone Guidance
 
-### Milestone 1 Finale
+The original Priority 1-5 roadmap is now largely in place as a completed first major iteration:
+- policy-driven behavior is live
+- voice naturalness phase 1 is live
+- rubric / evaluation hardening phase 1 is live
+- policy tuning / offline evaluation phase 1 is live
+- UI polish phase 1 is live
 
-- finish policy-driven behavior adaptation
-- ensure `/admin` makes policy effect vs invariant override obvious
-- keep snapshot-first report/admin stable
-- maintain green build and test hygiene
+The next roadmap should build on that base instead of reopening the same priorities.
 
-Milestone 1 finale checks:
-- strategy visibility: can we tell whether a turn came from policy bias or invariant override?
-- data consistency: does voice/transcript cleanup keep noise out of signal extraction?
-- deterministic behavior: does changing `PolicyConfig` create a reliable behavior shift?
-- interrupted snapshot alignment: after a spoken interruption, do persisted snapshots reflect the part of the AI turn that was actually spoken?
-- invariant transparency: can `/admin` tell us exactly when `ANTI_REPETITION`, budget guardrails, or flow-preservation rules changed the decision?
-- denoise safety: are filler filters conservative enough that short but meaningful confirmations like `OK` or `Yes` are not lost?
+### Next Roadmap: Interviewer OS
 
-### Milestone 2
+#### Stage 1: Truth Engine
 
-- voice naturalness improvements
-- harder rubric / evaluation system
-- stronger policy tuning and offline evaluation loops
+Priority: `P0`
 
-### Milestone 3
+Core goal:
+- eliminate state drift so the system only reasons over committed truth
 
-- stronger sandbox isolation
-- more advanced interview modes such as system design
-- longer-term analytics and study history
+Concrete work:
+- add a `Commit Arbiter` in the assistant-turn path
+- introduce explicit `PENDING` vs `COMMITTED` transcript state
+- ensure decision, critic, and ledger consume only committed content
+- add transcript versioning for post-commit STT corrections
+- support `correction_of_id`-style evidence-chain updates when previously committed text is revised
+- tighten the denoise pipeline so filler is removed conservatively while still preserving short but meaningful confirmations such as `OK` and `Yes`
 
+Phase 1 status:
+- `commit-arbiter.ts` is live
+- transcript reads now expose `commitState`, `transcriptVersion`, and `correctionOfId`
+- `assistant-turn` and `assistant-turn/stream` now consume committed transcripts only
+- transcript creation/refinement routes now emit commit metadata needed for replay and future correction chaining
+- regression coverage exists for committed-only routing and transcript read decoration
+
+Success criteria:
+- no decision is made from half-final or UI-only transcript text
+- streamed text, spoken text, committed text, and replay state stay aligned
+- STT corrections can update evidence without corrupting the session history
+
+Immediate next implementation:
+- refactor assistant-turn routing so no committed decision is produced without passing the commit arbiter
+
+#### Stage 2: Strategist & DNA
+
+Priority: `P1`
+
+Core goal:
+- make interviewer policy auditable, comparable, and adaptive to candidate profile
+
+Concrete work:
+- add `shadow policy mode` so the system can compare actual vs alternative archetype decisions in the background
+- formalize `Candidate DNA` into a structured vector:
+  - reasoning
+  - implementation
+  - coachability
+  - independence
+- use that vector to influence policy and pressure in a deterministic way
+- strengthen decision explainability:
+  - chosen intent
+  - competing intents
+  - invariant override cause
+- add counterfactual challenge hooks for logically shaky but overconfident answers
+
+Success criteria:
+- policy differences are measurable, not just anecdotal
+- candidate DNA becomes a live control input, not just a report output
+- `/admin` can explain why one policy path was chosen over another
+
+#### Stage 3: Juror & Rubric
+
+Priority: `P2`
+
+Core goal:
+- upgrade the report from AI summary into evidence-backed judgment
+
+Concrete work:
+- strengthen `evidence pinning` from lightweight refs into harder evidence traces
+- attach rubric dimensions to concrete objects such as:
+  - `snapshot_id`
+  - `event_id`
+  - `execution_run_id`
+- harden level mapping for recommendation and leveling logic
+- expand calibration around:
+  - strong hire
+  - borderline
+  - no hire
+- keep recommendation basis explicit and reviewable
+
+Success criteria:
+- every visible score can be traced back to concrete evidence
+- level and recommendation outputs feel like judgments, not vague summaries
+- rubric changes can be audited and tuned over time
+
+#### Stage 4: Polished Persona
+
+Priority: `P3`
+
+Core goal:
+- improve naturalness and pacing without sacrificing truth or control
+
+Concrete work:
+- add more semantic voice control for silence thresholds
+- refine think-aloud / hesitation handling
+- add a light “thinking latency” illusion only where it helps realism
+- treat editor activity as a weak auxiliary signal for struggling / flow detection
+- continue polishing room-level state feedback without turning the UI back into a debug wall
+
+Success criteria:
+- voice interactions feel more natural without breaking transcript truthfulness
+- pacing feels deliberate instead of reactive
+- realism improvements never override correctness or observability
+
+### Atomic Invariants
+
+These remain permanent system rules regardless of roadmap stage:
+- `Budget First`: if estimated session cost crosses the hard threshold, gracefully close
+- `Anti-Repetition`: do not re-probe targets that are already sufficiently evidenced
+- `Safety Sandbox`: keep Docker + timeout isolation as the runtime baseline
+- `Flow Preservation`: do not interrupt high-velocity coding flow unless a higher-priority invariant forces it
+
+### Execution Discipline
+
+- no new strategy should bypass the commit / truth model
+- policy changes should be checked against golden scenarios before they are trusted
+- `/admin` must continue to distinguish:
+  - policy effect
+  - invariant override
+  - committed vs pending truth boundaries
+- build and full test runs should stay green as a release gate
+
+### Follow-up TODOs
+
+- `Wrap-up closure cleanliness`
+  - when the candidate has already declared implementation complete and has already delivered a final summary, the interviewer should close cleanly instead of reopening with lines such as:
+    - `feel free to proceed with your implementation`
+    - `keep moving`
+  - strengthen `candidateDeclaredDone` / `implementationAlreadyDone` tracking in memory and decision logic
+  - add a regression scenario so:
+    - implementation done + summary done -> `close_topic` or `end_interview`
+    - no reopen of implementation after wrap-up
 
 
 

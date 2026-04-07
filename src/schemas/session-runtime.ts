@@ -15,6 +15,7 @@ export const createTranscriptSegmentSchema = z.object({
   transcriptSource: z.enum(["manual", "browser", "openai-stt", "assemblyai-stt", "assistant"]).optional(),
   transcriptProvider: z.string().trim().min(1).max(64).optional(),
   sourceText: z.string().trim().min(1).optional(),
+  correctionOfId: z.string().trim().min(1).optional(),
 });
 
 export const createExecutionRunSchema = z.object({

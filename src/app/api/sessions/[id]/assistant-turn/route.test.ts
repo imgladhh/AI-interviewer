@@ -48,7 +48,10 @@ describe("assistant turn route", () => {
       interviewerProfile: {
         personaSummary: "Backend oriented interviewer.",
       },
-      transcripts: [{ segmentIndex: 0, speaker: "USER", text: "I would first clarify the constraints and expected output." }],
+      transcripts: [
+        { segmentIndex: 0, speaker: "USER", text: "live partial", isFinal: false },
+        { segmentIndex: 1, speaker: "USER", text: "I would first clarify the constraints and expected output.", isFinal: true },
+      ],
       executionRuns: [],
       events: [],
     });
@@ -61,7 +64,7 @@ describe("assistant turn route", () => {
       id: "seg-1",
       text: "Walk me through a concrete example and then tell me the complexity.",
       speaker: "AI",
-      segmentIndex: 1,
+      segmentIndex: 2,
     });
     prisma.sessionEvent.create
       .mockResolvedValueOnce({ id: "evt-1", eventType: "AI_SPOKE" })
@@ -79,7 +82,7 @@ describe("assistant turn route", () => {
       data: {
         sessionId: "session-1",
         speaker: "AI",
-        segmentIndex: 1,
+        segmentIndex: 2,
         text: "Walk me through a concrete example and then tell me the complexity.",
         isFinal: true,
       },
@@ -96,6 +99,16 @@ describe("assistant turn route", () => {
         },
       },
     });
+    expect(generateAssistantTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recentTranscripts: [
+          {
+            speaker: "USER",
+            text: "I would first clarify the constraints and expected output.",
+          },
+        ],
+      }),
+    );
   });
 
   it("ends the interview when the session budget cap has already been exceeded", async () => {

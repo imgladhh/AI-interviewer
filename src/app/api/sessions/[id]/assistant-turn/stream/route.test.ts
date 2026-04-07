@@ -87,7 +87,10 @@ describe("assistant turn stream route", () => {
       question: { title: "Merge Intervals", prompt: "Merge overlapping intervals." },
       interviewerContext: null,
       interviewerProfile: null,
-      transcripts: [{ id: "u1", speaker: "USER", text: "I would use sorting.", segmentIndex: 0 }],
+      transcripts: [
+        { id: "u0", speaker: "USER", text: "sorting maybe", segmentIndex: 0, isFinal: false },
+        { id: "u1", speaker: "USER", text: "I would use sorting.", segmentIndex: 1, isFinal: true },
+      ],
       executionRuns: [],
       events: [
         {
@@ -123,6 +126,17 @@ describe("assistant turn stream route", () => {
     await response.text();
 
     expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(1);
+    expect(streamAssistantTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recentTranscripts: [
+          {
+            speaker: "USER",
+            text: "I would use sorting.",
+          },
+        ],
+      }),
+      expect.any(Object),
+    );
     expect(prisma.sessionEvent.create.mock.calls[0]?.[0]).toMatchObject({
       data: {
         sessionId: "session-1",

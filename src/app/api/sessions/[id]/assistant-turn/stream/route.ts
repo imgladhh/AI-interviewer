@@ -1,5 +1,6 @@
 ﻿import { prisma } from "@/lib/db";
 import { fail } from "@/lib/http";
+import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { streamAssistantTurn } from "@/lib/assistant/generate-turn";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { enforceSessionBudgetLimit } from "@/lib/session/budget-enforcement";
@@ -38,9 +39,11 @@ export async function POST(request: Request, { params }: RouteContext) {
     return fail("Interview session not found", 404);
   }
 
+  const committedTranscripts = getCommittedTranscriptSegments(session.transcripts);
+
   const currentStage = deriveCurrentCodingStage({
     events: session.events,
-    transcripts: session.transcripts,
+    transcripts: committedTranscripts,
     latestExecutionRun: session.executionRuns[0] ?? null,
   });
   const lowCostMode = resolveLowCostMode(session.events);
@@ -56,7 +59,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     personaSummary: session.interviewerProfile?.personaSummary ?? null,
     appliedPromptContext: session.interviewerContext?.appliedPromptContext ?? null,
     currentStage,
-    recentTranscripts: session.transcripts.map((segment) => ({
+    recentTranscripts: committedTranscripts.map((segment) => ({
       speaker: segment.speaker,
       text: segment.text,
     })),

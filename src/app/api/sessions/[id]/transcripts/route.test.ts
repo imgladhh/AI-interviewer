@@ -30,7 +30,7 @@ describe("session transcript routes", () => {
   it("lists transcript segments for a session", async () => {
     prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1" });
     prisma.transcriptSegment.findMany.mockResolvedValue([
-      { id: "seg-1", text: "Hello", speaker: "AI", segmentIndex: 0 },
+      { id: "seg-1", text: "Hello", speaker: "AI", segmentIndex: 0, isFinal: true },
     ]);
 
     const { GET } = await import("@/app/api/sessions/[id]/transcripts/route");
@@ -42,6 +42,10 @@ describe("session transcript routes", () => {
     expect(response.status).toBe(200);
     expect(payload.ok).toBe(true);
     expect(payload.data.transcripts).toHaveLength(1);
+    expect(payload.data.transcripts[0]).toMatchObject({
+      commitState: "COMMITTED",
+      transcriptVersion: 1,
+    });
   });
 
   it("creates a transcript segment and logs a session event", async () => {
@@ -83,6 +87,11 @@ describe("session transcript routes", () => {
       }),
     });
     expect(prisma.sessionEvent.create).toHaveBeenCalledTimes(1);
+    expect(payload.data.transcript).toMatchObject({
+      commitState: "COMMITTED",
+      transcriptVersion: 1,
+      correctionOfId: null,
+    });
   });
 
   it("logs a refinement event when dedicated STT changes the candidate transcript", async () => {
@@ -123,6 +132,9 @@ describe("session transcript routes", () => {
       expect.objectContaining({
         data: expect.objectContaining({
           eventType: "CANDIDATE_TRANSCRIPT_REFINED",
+          payloadJson: expect.objectContaining({
+            correctionOfId: null,
+          }),
         }),
       }),
     );
