@@ -139,6 +139,24 @@ type ReportJson = {
     band?: string;
     independenceSignal?: string;
     coachabilitySignal?: string;
+    reasoningSignal?: string;
+    executionSignal?: string;
+    notes?: string[];
+    evidenceTrace?: Array<{
+      kind?: string;
+      id?: string;
+      label?: string;
+      note?: string;
+    }>;
+  };
+  calibrationMatrix?: {
+    finalCall?: string;
+    evaluatedLevel?: string;
+    overallScore?: number;
+    executionSignal?: string;
+    reasoningSignal?: string;
+    independenceSignal?: string;
+    coachabilitySignal?: string;
     notes?: string[];
   };
   evaluatedLevel?: string;
@@ -194,6 +212,7 @@ type ReportJson = {
       kind?: string;
       id?: string;
       label?: string;
+      note?: string;
     }>;
   }>;
   stageSections?: StageReplaySection[];
@@ -457,6 +476,14 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 label="Coachability"
                 value={reportJson.recommendationBasis?.coachabilitySignal ?? "unknown"}
               />
+              <MetricRow
+                label="Reasoning"
+                value={reportJson.recommendationBasis?.reasoningSignal ?? reportJson.calibrationMatrix?.reasoningSignal ?? "unknown"}
+              />
+              <MetricRow
+                label="Execution"
+                value={reportJson.recommendationBasis?.executionSignal ?? reportJson.calibrationMatrix?.executionSignal ?? "unknown"}
+              />
               {Array.isArray(reportJson.recommendationBasis?.notes) && reportJson.recommendationBasis.notes.length > 0 ? (
                 <div style={{ display: "grid", gap: 8 }}>
                   {reportJson.recommendationBasis.notes.map((note, index) => (
@@ -464,6 +491,32 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       {note}
                     </div>
                   ))}
+                </div>
+              ) : null}
+              {Array.isArray(reportJson.recommendationBasis?.evidenceTrace) && reportJson.recommendationBasis.evidenceTrace.length > 0 ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <p style={{ ...mutedParagraphStyle, marginTop: 0 }}>
+                    <strong>Evidence Trace:</strong>
+                  </p>
+                  {reportJson.recommendationBasis.evidenceTrace.map((ref, index) => (
+                    <div key={`recommendation-trace-${index}`} style={listItemStyle}>
+                      <strong>{ref.label ?? `${ref.kind ?? "ref"}: ${ref.id ?? "unknown"}`}</strong>
+                      {ref.note ? <div style={{ ...mutedParagraphStyle, marginTop: 6 }}>{ref.note}</div> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {reportJson.calibrationMatrix ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <p style={{ ...mutedParagraphStyle, marginTop: 0 }}>
+                    <strong>Calibration Matrix:</strong>
+                  </p>
+                  <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
+                    <Metric label="Final Call" value={reportJson.calibrationMatrix.finalCall ?? "unknown"} />
+                    <Metric label="Overall Score" value={typeof reportJson.calibrationMatrix.overallScore === "number" ? String(reportJson.calibrationMatrix.overallScore) : "unknown"} />
+                    <Metric label="Execution" value={reportJson.calibrationMatrix.executionSignal ?? "unknown"} />
+                    <Metric label="Reasoning" value={reportJson.calibrationMatrix.reasoningSignal ?? "unknown"} />
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -554,7 +607,8 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                         </p>
                         {item.evidenceRefs.map((ref, refIndex) => (
                           <div key={`rubric-summary-ref-${index}-${refIndex}`} style={listItemStyle}>
-                            {ref.label ?? `${ref.kind ?? "ref"}: ${ref.id ?? "unknown"}`}
+                            <strong>{ref.label ?? `${ref.kind ?? "ref"}: ${ref.id ?? "unknown"}`}</strong>
+                            {ref.note ? <div style={{ ...mutedParagraphStyle, marginTop: 6 }}>{ref.note}</div> : null}
                           </div>
                         ))}
                       </div>
@@ -1993,6 +2047,8 @@ const miniPreStyle = {
   overflowX: "auto" as const,
   fontSize: 12,
 } as const;
+
+
 
 
 

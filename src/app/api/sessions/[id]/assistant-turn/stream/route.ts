@@ -161,6 +161,10 @@ export async function POST(request: Request, { params }: RouteContext) {
             controller.enqueue(encoder.encode(`event: delta\ndata: ${JSON.stringify({ text: chunk.textDelta })}\n\n`));
           }
 
+          if (chunk.meta) {
+            controller.enqueue(encoder.encode(`event: meta\ndata: ${JSON.stringify(chunk.meta)}\n\n`));
+          }
+
           if (chunk.final) {
             finalTurn = chunk.final;
           }

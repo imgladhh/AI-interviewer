@@ -36,6 +36,7 @@ import {
 } from "@/lib/assistant/stages";
 import { estimateOpenAiTextCost, estimateTokens } from "@/lib/usage/cost";
 import { assessSessionBudget } from "@/lib/usage/budget";
+import { resolveAssistantLeadInDelayMs } from "@/lib/voice/turn-taking";
 
 type TranscriptLike = {
   speaker: "USER" | "AI" | "SYSTEM";
@@ -119,6 +120,11 @@ const providerCooldowns: Partial<Record<"gemini" | "openai", number>> = {};
 export type StreamingAssistantTurnChunk = {
   textDelta?: string;
   final?: GenerateAssistantTurnResult;
+  meta?: {
+    thinkingDelayMs: number;
+    action?: string;
+    pressure?: string;
+  };
 };
 
 export async function generateAssistantTurn(
@@ -195,6 +201,17 @@ export async function* streamAssistantTurn(
     latestExecutionRun: input.latestExecutionRun,
   });
   const { decision, intent, trajectory, candidateDna, shadowPolicy } = buildDecision(input, signals);
+  yield {
+    meta: {
+      thinkingDelayMs: resolveAssistantLeadInDelayMs({
+        action: decision.action,
+        pressure: decision.pressure,
+        lowCostMode: input.lowCostMode,
+      }),
+      action: decision.action,
+      pressure: decision.pressure,
+    },
+  };
   let providerFailure: GenerateAssistantTurnResult["providerFailure"] | undefined;
 
   for (const provider of resolveProviderSequence()) {
@@ -1795,6 +1812,7 @@ function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSign
     memory: ledger,
     latestExecutionRun: input.latestExecutionRun,
     flowState,
+    recentEvents: input.recentEvents,
     intent,
   });
   const candidateDna = assessCandidateDna({

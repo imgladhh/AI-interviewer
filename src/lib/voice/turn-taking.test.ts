@@ -2,9 +2,11 @@
 import {
   getAutoSubmitDelayMs,
   getFinalChunkCommitDelayMs,
+  hasHesitationCue,
   hasNegativeIntentCue,
   isLowSignalUtterance,
   normalizeUtterance,
+  resolveAssistantLeadInDelayMs,
   shouldIgnoreInterruptedUtterance,
 } from "@/lib/voice/turn-taking";
 
@@ -121,6 +123,26 @@ describe("voice turn-taking policy", () => {
     expect(normalDelay).not.toBeNull();
     expect(thinkAloudDelay).not.toBeNull();
     expect(thinkAloudDelay!).toBeGreaterThan(normalDelay!);
+  });
+
+  it("recognizes softer hesitation cues during coding", () => {
+    expect(hasHesitationCue("maybe I should use a heap here")).toBe(true);
+    expect(hasHesitationCue("if I sort first then sweep")).toBe(true);
+    expect(hasHesitationCue("the bug is the pointer update")).toBe(false);
+  });
+
+  it("uses a longer assistant lead-in for challenge and probe turns", () => {
+    const closeDelay = resolveAssistantLeadInDelayMs({
+      action: "close_topic",
+      pressure: "soft",
+    });
+    const probeDelay = resolveAssistantLeadInDelayMs({
+      action: "probe_correctness",
+      pressure: "surgical",
+    });
+
+    expect(probeDelay).toBeGreaterThan(closeDelay);
+    expect(probeDelay).toBeGreaterThanOrEqual(320);
   });
 });
 

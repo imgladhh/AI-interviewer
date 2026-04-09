@@ -20,6 +20,18 @@ const NEGATIVE_INTENT_PHRASES = [
   "hold up",
 ];
 
+const HESITATION_PREFIXES = [
+  "i think",
+  "maybe",
+  "let me try",
+  "let me check",
+  "if i",
+  "if we",
+  "probably",
+  "i guess",
+  "maybe i should",
+];
+
 const LOW_SIGNAL_TOKENS = new Set([
   "um",
   "uh",
@@ -174,6 +186,54 @@ export function hasNegativeIntentCue(text: string) {
   );
 }
 
+export function hasHesitationCue(text: string) {
+  const normalized = normalizeUtterance(text).replace(/[,.!?;:]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return HESITATION_PREFIXES.some(
+    (phrase) => normalized === phrase || normalized.startsWith(`${phrase} `),
+  );
+}
+
+export function resolveAssistantLeadInDelayMs(input: {
+  action?: string | null;
+  pressure?: string | null;
+  lowCostMode?: boolean;
+}) {
+  const action = typeof input.action === "string" ? input.action : "";
+  const pressure = typeof input.pressure === "string" ? input.pressure : "";
+  const key = `${action}:${pressure}`;
+
+  let minDelay = 140;
+  let maxDelay = 260;
+
+  if (
+    action === "probe_correctness" ||
+    action === "probe_tradeoff" ||
+    action === "ask_for_complexity" ||
+    action === "ask_for_test_case" ||
+    action === "ask_followup" ||
+    action === "ask_for_clarification"
+  ) {
+    minDelay = 320;
+    maxDelay = pressure === "surgical" ? 1100 : pressure === "challenging" ? 900 : 650;
+  } else if (action === "give_hint") {
+    minDelay = 280;
+    maxDelay = 620;
+  } else if (action === "move_to_wrap_up" || action === "close_topic" || action === "end_interview") {
+    minDelay = 80;
+    maxDelay = 180;
+  }
+
+  if (input.lowCostMode) {
+    maxDelay = Math.max(minDelay, maxDelay - 160);
+  }
+
+  return minDelay + (stableHash(key) % Math.max(1, maxDelay - minDelay + 1));
+}
+
 export function normalizeUtterance(text: string) {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -249,4 +309,12 @@ function applyNegativeIntentBias(
   }
 
   return Math.min(baseDelay + 180, 2600);
+}
+
+function stableHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }

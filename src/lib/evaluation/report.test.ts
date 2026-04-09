@@ -111,6 +111,10 @@ describe("generateSessionReport", () => {
     expect((reportJson.recommendationRationale as string)).toMatch(/independence|coachability|execution|final call/i);
     expect(((reportJson.recommendationBasis as Record<string, unknown>).band as string)).toBeTruthy();
     expect(((reportJson.recommendationBasis as Record<string, unknown>).independenceSignal as string)).toMatch(/strong|mixed|weak/);
+    expect(((reportJson.recommendationBasis as Record<string, unknown>).reasoningSignal as string)).toMatch(/strong|mixed|weak/);
+    expect(((reportJson.recommendationBasis as Record<string, unknown>).executionSignal as string)).toMatch(/closed|mixed|unclosed/);
+    expect(Array.isArray((reportJson.recommendationBasis as Record<string, unknown>).evidenceTrace)).toBe(true);
+    expect((reportJson.calibrationMatrix as Record<string, unknown>).finalCall).toBeTruthy();
   });
 
   it("groups replay evidence around stage, signals, decisions, and code runs", () => {
@@ -462,6 +466,7 @@ describe("generateSessionReport", () => {
     expect(Array.isArray(correctness?.evidence)).toBe(true);
     expect(Array.isArray(correctness?.evidenceRefs)).toBe(true);
     expect((correctness?.evidenceRefs as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+    expect(typeof ((correctness?.evidenceRefs as Array<Record<string, unknown>>)[0]?.note)).toBe("string");
     expect(typeof correctness?.basis).toBe("string");
 
     expect(complexity?.score).toBeGreaterThanOrEqual(4);
@@ -531,4 +536,6 @@ it("downgrades the recommendation band when independence is weak despite a middl
   expect(((reportJson.recommendationBasis as Record<string, unknown>).band as string)).toMatch(/Borderline|No Hire/);
   expect(((reportJson.recommendationBasis as Record<string, unknown>).independenceSignal as string)).toBe("weak");
 });
+
+
 

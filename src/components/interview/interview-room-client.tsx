@@ -23,13 +23,14 @@ import { mergeTranscriptFragments, normalizeTranscriptText } from "@/lib/voice/t
 import {
   getAutoSubmitDelayMs,
   getFinalChunkCommitDelayMs,
+  hasHesitationCue,
   hasNegativeIntentCue,
   isLowSignalUtterance,
   shouldIgnoreInterruptedUtterance,
 } from "@/lib/voice/turn-taking";
 import { resolveAssistantSpeechRemainder } from "@/lib/voice/assistant-stream";
 import type { BrowserVoiceState, InterviewVoiceAdapter, VoiceAvailability } from "@/lib/voice/types";
-import { describeVoiceState } from "@/lib/voice/voice-status";
+import { describeRoomSystemState, describeVoiceState } from "@/lib/voice/voice-status";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,
@@ -191,6 +192,16 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const providerPreviewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerSpeechActiveRef = useRef(false);
   const lastEditorActivityAtRef = useRef<number>(0);
+  const previousEditorLengthRef = useRef(editorCode.length);
+  const assistantLeadInDelayMsRef = useRef(0);
+  const assistantSpeechStartedRef = useRef(false);
+  const lastEditorTelemetryPostedAtRef = useRef(0);
+  const editorTelemetryRef = useRef({
+    editCount: 0,
+    deletionChars: 0,
+    changedChars: 0,
+    pauseMs: 0,
+  });
   const supportsProviderPreview = dedicatedSttProvider === "openai-stt";
 
   useEffect(() => {
@@ -493,8 +504,52 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     return typeof payload.source === "string" ? payload.source : null;
   }, [events]);
 
-  function markEditorActivity() {
-    lastEditorActivityAtRef.current = Date.now();
+  function markEditorActivity(nextCode: string) {
+    const now = Date.now();
+    const previousLength = previousEditorLengthRef.current;
+    const nextLength = nextCode.length;
+    const pauseMs = lastEditorActivityAtRef.current ? now - lastEditorActivityAtRef.current : 0;
+    const changedChars = Math.abs(nextLength - previousLength);
+    const deletionChars = Math.max(0, previousLength - nextLength);
+
+    lastEditorActivityAtRef.current = now;
+    previousEditorLengthRef.current = nextLength;
+
+    if (currentStage !== "IMPLEMENTATION" && currentStage !== "DEBUGGING") {
+      return;
+    }
+
+    editorTelemetryRef.current = {
+      editCount: editorTelemetryRef.current.editCount + 1,
+      deletionChars: editorTelemetryRef.current.deletionChars + deletionChars,
+      changedChars: editorTelemetryRef.current.changedChars + Math.max(1, changedChars),
+      pauseMs,
+    };
+
+    const shouldFlush = now - lastEditorTelemetryPostedAtRef.current >= 12_000;
+    if (!shouldFlush) {
+      return;
+    }
+
+    lastEditorTelemetryPostedAtRef.current = now;
+    const snapshot = editorTelemetryRef.current;
+    editorTelemetryRef.current = {
+      editCount: 0,
+      deletionChars: 0,
+      changedChars: 0,
+      pauseMs: 0,
+    };
+
+    void postEvent(SESSION_EVENT_TYPES.EDITOR_ACTIVITY_RECORDED, {
+      stage: currentStage,
+      flowMode: currentVoiceFlowMode(),
+      activeCoding: true,
+      codeLength: nextLength,
+      editCount: snapshot.editCount,
+      pauseMs: snapshot.pauseMs,
+      deletionRatio:
+        snapshot.changedChars > 0 ? Number((snapshot.deletionChars / snapshot.changedChars).toFixed(2)) : 0,
+    }).catch(() => undefined);
   }
 
   function isActivelyCoding() {
@@ -520,6 +575,20 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
 
     return "discussion";
+  }
+
+  async function waitForAssistantLeadInIfNeeded() {
+    if (assistantSpeechStartedRef.current) {
+      return;
+    }
+
+    const delayMs = assistantLeadInDelayMsRef.current;
+    if (delayMs > 0) {
+      setRoomNotice("The interviewer is taking a brief beat before replying.");
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    assistantSpeechStartedRef.current = true;
   }
 
   function runAction(action: () => Promise<void>) {
@@ -889,6 +958,8 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     await interruptAiTurn();
     setIsAssistantThinking(true);
     setAssistantDraft("");
+    assistantLeadInDelayMsRef.current = 0;
+    assistantSpeechStartedRef.current = false;
 
     try {
       const abortController = new AbortController();
@@ -934,8 +1005,17 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
             const readyToSpeak = extractSpeakableText(accumulated, spokenIndex);
             if (readyToSpeak.text) {
+              await waitForAssistantLeadInIfNeeded();
               spokenIndex = readyToSpeak.nextIndex;
               await voiceAdapterRef.current?.speakText(readyToSpeak.text);
+            }
+          }
+
+          if (parsed.event === "meta") {
+            assistantLeadInDelayMsRef.current =
+              typeof parsed.data?.thinkingDelayMs === "number" ? parsed.data.thinkingDelayMs : 0;
+            if (assistantLeadInDelayMsRef.current > 260) {
+              setRoomNotice("The interviewer is taking a short beat to frame the next question.");
             }
           }
 
@@ -998,6 +1078,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
             });
 
             if (remainingAuthoritativeSpeech) {
+              await waitForAssistantLeadInIfNeeded();
               await voiceAdapterRef.current?.speakText(remainingAuthoritativeSpeech);
             }
           }
@@ -1053,6 +1134,18 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
 
     if (speechDrivenSource && isLowSignalUtterance(normalizedText)) {
       setRoomNotice("Heard a short filler phrase, so the room is waiting for the rest of your answer.");
+      return;
+    }
+
+    if (
+      speechDrivenSource &&
+      currentVoiceFlowMode() !== "wrap_up" &&
+      (hasNegativeIntentCue(normalizedText) || hasHesitationCue(normalizedText))
+    ) {
+      pendingSpeechBufferRef.current = mergeTranscriptFragments(pendingSpeechBufferRef.current, normalizedText);
+      setDraftTranscript(pendingSpeechBufferRef.current);
+      setRoomNotice("That sounded like thinking out loud, so the room is waiting a little longer before submitting.");
+      scheduleSilenceSubmit(pendingSpeechBufferRef.current);
       return;
     }
 
@@ -1352,6 +1445,16 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
         >
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <StatusPill label={describeVoiceState(voiceState)} tone={voiceTone(voiceState)} />
+            <StatusPill
+              label={describeRoomSystemState({
+                voiceState,
+                isAssistantThinking,
+                assistantDraft,
+                isProviderPreviewing,
+                awaitingMeasuredReply: isAssistantThinking && !assistantDraft && assistantLeadInDelayMsRef.current > 260,
+              })}
+              tone="neutral"
+            />
             <StatusPill label={`Stage: ${describeCodingStage(currentStage)}`} tone="neutral" />
             <StatusPill label={props.lowCostMode ? "Low-cost mode on" : "Standard cost mode"} tone="warning" />
             {isContinuousListening ? <StatusPill label="Continuous Listening On" tone="success" /> : null}
@@ -1739,8 +1842,9 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                 theme="vs-dark"
                 value={editorCode}
                 onChange={(value) => {
-                  markEditorActivity();
-                  setEditorCode(value ?? "");
+                  const nextCode = value ?? "";
+                  markEditorActivity(nextCode);
+                  setEditorCode(nextCode);
                 }}
                 options={{
                   minimap: { enabled: false },

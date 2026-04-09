@@ -778,6 +778,36 @@ Success criteria:
 - level and recommendation outputs feel like judgments, not vague summaries
 - rubric changes can be audited and tuned over time
 
+Status: `Completed`
+
+Stage 3 implementation summary:
+- rubric evidence pinning was upgraded from lightweight refs into harder evidence traces with:
+  - `kind`
+  - `id`
+  - `label`
+  - `note`
+- report generation now threads concrete object ids into rubric judgments:
+  - `candidate_state_snapshot`
+  - `decision_snapshot`
+  - `execution_run`
+  - `session_event`
+- `/api/sessions/[id]/report` now passes execution run ids through to the report generator so judgment output can pin to executable evidence
+- recommendation calibration is now more explicit:
+  - `reasoningSignal`
+  - `executionSignal`
+  - `independenceSignal`
+  - `coachabilitySignal`
+- report generation now emits a `calibrationMatrix` so the final call is inspectable instead of hidden inside prose
+- `/report/[id]` now surfaces:
+  - recommendation evidence trace
+  - calibration matrix
+  - rubric evidence-ref notes
+
+Exit criteria met:
+- every visible score can now be traced to concrete evidence with a note, not just a generic label
+- level and recommendation output now read more like judgment than recap
+- calibration is explicit enough to audit and tune over time
+
 #### Stage 4: Polished Persona
 
 Priority: `P3`
@@ -791,6 +821,32 @@ Concrete work:
 - add a light “thinking latency” illusion only where it helps realism
 - treat editor activity as a weak auxiliary signal for struggling / flow detection
 - continue polishing room-level state feedback without turning the UI back into a debug wall
+
+Completed status:
+- extended `src/lib/voice/turn-taking.ts` with softer hesitation cues such as:
+  - `maybe`
+  - `i think`
+  - `let me try`
+  - `if I`
+- voice turn submission now treats those cues as “thinking out loud” during coding/debugging, which raises silence thresholds instead of prematurely committing the turn
+- streaming assistant turns now emit a lightweight delivery profile, so challenge/probe turns can take a small deterministic lead-in before TTS starts speaking
+- the interview room now uses that lead-in as a measured “thinking beat” without changing committed transcript truth
+- Monaco editor activity is now emitted as weak telemetry through `EDITOR_ACTIVITY_RECORDED`
+- `trajectory_estimator.ts` now treats editor rewrite churn and long coding pauses as low-weight struggling signals rather than hard truth
+- the interview room now surfaces a compact system-state pill, so the room can say whether it is:
+  - listening
+  - capturing
+  - deciding
+  - deliberately pausing before reply
+  - streaming
+- these changes stay within the truth boundary:
+  - committed transcript remains authoritative
+  - realism changes affect delivery and pacing, not transcript correctness
+
+Exit criteria met:
+- voice pacing now feels more deliberate in coding/debugging flow
+- think-aloud fragments are less likely to be committed too early
+- realism improvements remain auditable and do not override committed truth
 
 Success criteria:
 - voice interactions feel more natural without breaking transcript truthfulness
@@ -824,6 +880,7 @@ These remain permanent system rules regardless of roadmap stage:
   - status:
     - `candidateDeclaredDone` / `implementationAlreadyDone` / `finalWrapUpDelivered` now feed memory + decision logic
     - regression coverage added so implementation done + summary done closes cleanly
+
 
 
 

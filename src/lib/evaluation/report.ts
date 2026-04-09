@@ -14,6 +14,7 @@ type TranscriptLike = {
 };
 
 type SessionEventLike = {
+  id?: string;
   eventType: string;
   eventTime?: Date | string;
   payloadJson?: unknown;
@@ -181,9 +182,10 @@ type RubricSummaryItem = {
   basis: string;
   evidence: string[];
   evidenceRefs: Array<{
-    kind: "candidate_state_snapshot" | "decision_snapshot" | "execution_run";
+    kind: "candidate_state_snapshot" | "decision_snapshot" | "execution_run" | "session_event";
     id: string;
     label: string;
+    note: string;
   }>;
 };
 
@@ -222,6 +224,20 @@ type RecommendationBasis = {
   band: RecommendationBand;
   independenceSignal: "strong" | "mixed" | "weak";
   coachabilitySignal: "high" | "moderate" | "low";
+  reasoningSignal: "strong" | "mixed" | "weak";
+  executionSignal: "closed" | "mixed" | "unclosed";
+  notes: string[];
+  evidenceTrace: RubricSummaryItem["evidenceRefs"];
+};
+
+type CalibrationMatrix = {
+  finalCall: RecommendationBand;
+  evaluatedLevel: EvaluatedLevel["level"];
+  overallScore: number;
+  executionSignal: RecommendationBasis["executionSignal"];
+  reasoningSignal: RecommendationBasis["reasoningSignal"];
+  independenceSignal: RecommendationBasis["independenceSignal"];
+  coachabilitySignal: RecommendationBasis["coachabilitySignal"];
   notes: string[];
 };
 
@@ -340,6 +356,13 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     independenceScore: dimensions.find((dimension) => dimension.key === "independence")?.score ?? 3,
     passedRuns,
     failedRuns,
+    latestSignal,
+    rubricSummary,
+  });
+  const calibrationMatrix = buildCalibrationMatrix({
+    overallScore: adjustedOverallScore,
+    evaluatedLevel,
+    recommendationBasis,
   });
   const overallSummary = buildOverallSummary({
     recommendation,
@@ -420,6 +443,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       levelRationale: evaluatedLevel.rationale,
       recommendationBand: recommendationBasis.band,
       recommendationBasis,
+      calibrationMatrix,
       recommendationRationale: buildRecommendationRationale({
         recommendation,
         evaluatedLevel,
@@ -958,10 +982,18 @@ function buildMomentsOfTruth(input: {
 
 function buildRubricEvidenceRefs(input: {
   latestSignalSnapshotId: string | null;
-  latestDecisionSnapshotId: string | null;
-  latestExecutionRunId: string | null;
+  latestDecisionSnapshotId?: string | null;
+  latestExecutionRunId?: string | null;
+  latestCodeRunEventId?: string | null;
+  latestCriticEventId?: string | null;
+  latestIntentEventId?: string | null;
+  latestCandidateDnaEventId?: string | null;
   includeDecision?: boolean;
   includeExecutionRun?: boolean;
+  includeCodeRunEvent?: boolean;
+  includeCriticEvent?: boolean;
+  includeIntentEvent?: boolean;
+  includeDnaEvent?: boolean;
 }) {
   const refs: RubricSummaryItem["evidenceRefs"] = [];
 
@@ -970,6 +1002,7 @@ function buildRubricEvidenceRefs(input: {
       kind: "candidate_state_snapshot",
       id: input.latestSignalSnapshotId,
       label: `Signal snapshot ${input.latestSignalSnapshotId}`,
+      note: "Primary candidate-state evidence for this rubric dimension.",
     });
   }
 
@@ -978,6 +1011,7 @@ function buildRubricEvidenceRefs(input: {
       kind: "decision_snapshot",
       id: input.latestDecisionSnapshotId,
       label: `Decision snapshot ${input.latestDecisionSnapshotId}`,
+      note: "Interviewer decision evidence used to interpret pressure, timing, or closure quality.",
     });
   }
 
@@ -986,6 +1020,43 @@ function buildRubricEvidenceRefs(input: {
       kind: "execution_run",
       id: input.latestExecutionRunId,
       label: `Execution run ${input.latestExecutionRunId}`,
+      note: "Executable evidence for implementation correctness or debugging closure.",
+    });
+  }
+
+  if (input.includeCodeRunEvent && input.latestCodeRunEventId) {
+    refs.push({
+      kind: "session_event",
+      id: input.latestCodeRunEventId,
+      label: `Code-run event ${input.latestCodeRunEventId}`,
+      note: "Event-level evidence that a code run completed and affected evaluation.",
+    });
+  }
+
+  if (input.includeCriticEvent && input.latestCriticEventId) {
+    refs.push({
+      kind: "session_event",
+      id: input.latestCriticEventId,
+      label: `Critic event ${input.latestCriticEventId}`,
+      note: "Critic evidence about timing, self-correction, or auto-captured signal.",
+    });
+  }
+
+  if (input.includeIntentEvent && input.latestIntentEventId) {
+    refs.push({
+      kind: "session_event",
+      id: input.latestIntentEventId,
+      label: `Intent event ${input.latestIntentEventId}`,
+      note: "Intent evidence used to judge whether the candidate exposed complexity/tradeoff signal clearly enough.",
+    });
+  }
+
+  if (input.includeDnaEvent && input.latestCandidateDnaEventId) {
+    refs.push({
+      kind: "session_event",
+      id: input.latestCandidateDnaEventId,
+      label: `DNA event ${input.latestCandidateDnaEventId}`,
+      note: "Candidate DNA evidence contributing to communication and independence interpretation.",
     });
   }
 
@@ -997,8 +1068,12 @@ function buildRubricSummary(
   latestSignal: CandidateSignalSummary | null,
   refs: {
     latestSignalSnapshotId: string | null;
-    latestDecisionSnapshotId: string | null;
-    latestExecutionRunId: string | null;
+    latestDecisionSnapshotId?: string | null;
+    latestExecutionRunId?: string | null;
+    latestCodeRunEventId?: string | null;
+    latestCriticEventId?: string | null;
+    latestIntentEventId?: string | null;
+    latestCandidateDnaEventId?: string | null;
   },
 ): RubricSummaryItem[] {
   const communication = dimensions.find((dimension) => dimension.key === "communication");
@@ -1042,8 +1117,12 @@ function buildRubricSummary(
         latestSignalSnapshotId: refs.latestSignalSnapshotId,
         latestDecisionSnapshotId: refs.latestDecisionSnapshotId,
         latestExecutionRunId: refs.latestExecutionRunId,
+        latestCodeRunEventId: refs.latestCodeRunEventId,
+        latestCriticEventId: refs.latestCriticEventId,
         includeDecision: true,
         includeExecutionRun: true,
+        includeCodeRunEvent: true,
+        includeCriticEvent: true,
       }),
     },
     {
@@ -1065,8 +1144,9 @@ function buildRubricSummary(
       evidenceRefs: buildRubricEvidenceRefs({
         latestSignalSnapshotId: refs.latestSignalSnapshotId,
         latestDecisionSnapshotId: refs.latestDecisionSnapshotId,
-        latestExecutionRunId: refs.latestExecutionRunId,
+        latestIntentEventId: refs.latestIntentEventId,
         includeDecision: true,
+        includeIntentEvent: true,
       }),
     },
     {
@@ -1087,8 +1167,8 @@ function buildRubricSummary(
       evidence: [communication?.evidence].filter((item): item is string => Boolean(item)),
       evidenceRefs: buildRubricEvidenceRefs({
         latestSignalSnapshotId: refs.latestSignalSnapshotId,
-        latestDecisionSnapshotId: refs.latestDecisionSnapshotId,
-        latestExecutionRunId: refs.latestExecutionRunId,
+        latestCandidateDnaEventId: refs.latestCandidateDnaEventId,
+        includeDnaEvent: true,
       }),
     },
   ];
@@ -1202,16 +1282,28 @@ function buildRecommendationBasis(input: {
   independenceScore: number;
   passedRuns: number;
   failedRuns: number;
+  latestSignal: CandidateSignalSummary | null;
+  rubricSummary: RubricSummaryItem[];
 }): RecommendationBasis {
   const independenceSignal =
     input.independenceScore >= 4 ? "strong" : input.independenceScore >= 3 ? "mixed" : "weak";
   const coachabilitySignal = input.hintSummary.coachability.label;
+  const reasoningSignal =
+    input.latestSignal?.reasoningDepth === "deep" || input.latestSignal?.complexityRigor === "strong"
+      ? "strong"
+      : input.latestSignal?.reasoningDepth === "thin" || input.latestSignal?.complexityRigor === "missing"
+        ? "weak"
+        : "mixed";
+  const executionSignal =
+    input.passedRuns > 0 ? "closed" : input.failedRuns > 0 ? "mixed" : "unclosed";
   const notes: string[] = [];
 
-  if (input.passedRuns > 0) {
+  if (executionSignal === "closed") {
     notes.push(`Execution closed with ${input.passedRuns} passing run(s).`);
+  } else if (executionSignal === "mixed") {
+    notes.push(`Execution produced attempts, but ${input.failedRuns} non-passing run(s) remained open.`);
   } else {
-    notes.push(`Execution never closed with a passing run and left ${input.failedRuns} non-passing run(s).`);
+    notes.push("Execution never stabilized into a passing run.");
   }
 
   if (independenceSignal === "strong") {
@@ -1230,26 +1322,54 @@ function buildRecommendationBasis(input: {
     notes.push("Coachability was low: progress often required specific or near-solution rescue.");
   }
 
+  if (reasoningSignal === "strong") {
+    notes.push("Reasoning and tradeoff signals were strong enough to support a senior-leaning read.");
+  } else if (reasoningSignal === "weak") {
+    notes.push("Reasoning or complexity signals stayed weak, which limited the final call.");
+  }
+
   const band: RecommendationBand =
     input.recommendation === "STRONG_HIRE"
-      ? independenceSignal === "strong"
+      ? independenceSignal === "strong" && executionSignal === "closed" && reasoningSignal === "strong"
         ? "Strong Hire"
         : "Hire"
       : input.recommendation === "HIRE"
-        ? independenceSignal === "weak"
+        ? executionSignal === "unclosed" || independenceSignal === "weak"
           ? "Borderline"
           : "Hire"
         : input.recommendation === "BORDERLINE"
-          ? coachabilitySignal === "high"
+          ? coachabilitySignal === "high" && executionSignal !== "unclosed"
             ? "Borderline"
             : "No Hire"
           : "No Hire";
+
+  const evidenceTrace = input.rubricSummary.flatMap((item) => item.evidenceRefs).slice(0, 6);
 
   return {
     band,
     independenceSignal,
     coachabilitySignal,
+    reasoningSignal,
+    executionSignal,
     notes,
+    evidenceTrace,
+  };
+}
+
+function buildCalibrationMatrix(input: {
+  overallScore: number;
+  evaluatedLevel: EvaluatedLevel;
+  recommendationBasis: RecommendationBasis;
+}): CalibrationMatrix {
+  return {
+    finalCall: input.recommendationBasis.band,
+    evaluatedLevel: input.evaluatedLevel.level,
+    overallScore: input.overallScore,
+    executionSignal: input.recommendationBasis.executionSignal,
+    reasoningSignal: input.recommendationBasis.reasoningSignal,
+    independenceSignal: input.recommendationBasis.independenceSignal,
+    coachabilitySignal: input.recommendationBasis.coachabilitySignal,
+    notes: input.recommendationBasis.notes,
   };
 }
 
@@ -1806,6 +1926,19 @@ function buildCounterfactualSummary(events: SessionEventLike[]): CounterfactualS
     shouldWaitBeforeIntervening: criticEvents.some((verdict) => verdict.shouldWaitBeforeIntervening === true),
   };
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

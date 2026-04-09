@@ -46,6 +46,7 @@ describe("assistant turn stream route", () => {
       events: [],
     });
     streamAssistantTurn.mockImplementation(async function* () {
+      yield { meta: { thinkingDelayMs: 420, action: "ask_followup", pressure: "neutral" } };
       yield { textDelta: "Walk me through one example. " };
       yield {
         final: {
@@ -74,6 +75,7 @@ describe("assistant turn stream route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(text).toContain("event: meta");
     expect(text).toContain("event: delta");
     expect(text).toContain("event: done");
   });

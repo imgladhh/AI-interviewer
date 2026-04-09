@@ -38,6 +38,12 @@ export type TrajectoryEstimate = {
   interruptionCost: "low" | "medium" | "high";
   evidenceGainIfAskNow: "high" | "medium" | "low";
   confidence: number;
+  weakSignalNotes?: string[];
+};
+
+type RecentEventLike = {
+  eventType: string;
+  payloadJson?: unknown;
 };
 
 export function estimateCandidateTrajectory(input: {
@@ -46,11 +52,14 @@ export function estimateCandidateTrajectory(input: {
   memory: MemoryLedger;
   latestExecutionRun?: ExecutionRunLike | null;
   flowState?: FlowState | null;
+  recentEvents?: RecentEventLike[];
   intent: IntentDecision;
 }): TrajectoryEstimate {
-  const { currentStage, signals, memory, latestExecutionRun, flowState, intent } = input;
+  const { currentStage, signals, memory, latestExecutionRun, flowState, recentEvents, intent } = input;
+  const editorTelemetry = readLatestEditorTelemetry(recentEvents);
+  const weakSignalNotes: string[] = [];
 
-  const candidateTrajectory =
+  let candidateTrajectory: TrajectoryEstimate["candidateTrajectory"] =
     memory.recentFailedRuns >= 2 || signals.progress === "stuck"
       ? latestExecutionRun && latestExecutionRun.status !== "PASSED"
         ? "collapsing"
@@ -62,6 +71,31 @@ export function estimateCandidateTrajectory(input: {
           : signals.progress === "done"
             ? "self_recovering"
             : "steady_progress";
+
+  if (
+    editorTelemetry?.activeCoding &&
+    editorTelemetry.struggleLevel === "high" &&
+    candidateTrajectory === "steady_progress" &&
+    !flowState?.codingBurst
+  ) {
+    candidateTrajectory = "plateauing";
+    weakSignalNotes.push("editor telemetry suggests heavy rewrite churn during active coding");
+  } else if (
+    editorTelemetry?.activeCoding &&
+    editorTelemetry.struggleLevel === "high" &&
+    candidateTrajectory === "plateauing"
+  ) {
+    candidateTrajectory = "stuck";
+    weakSignalNotes.push("editor telemetry suggests the candidate is getting stuck in rewrite loops");
+  } else if (
+    editorTelemetry?.activeCoding &&
+    editorTelemetry.struggleLevel === "medium" &&
+    candidateTrajectory === "steady_progress" &&
+    !flowState?.codingBurst
+  ) {
+    candidateTrajectory = "plateauing";
+    weakSignalNotes.push("editor telemetry suggests slower coding flow than the transcript alone shows");
+  }
 
   const expectedWithNoIntervention =
     candidateTrajectory === "steady_progress"
@@ -75,7 +109,9 @@ export function estimateCandidateTrajectory(input: {
             : "likely_fail";
 
   const interruptionCost =
-    flowState?.muteUntilPause || currentStage === "IMPLEMENTATION"
+    flowState?.muteUntilPause ||
+    currentStage === "IMPLEMENTATION" ||
+    (editorTelemetry?.activeCoding && editorTelemetry.editVelocity === "high")
       ? "high"
       : candidateTrajectory === "stuck" || candidateTrajectory === "collapsing"
         ? "low"
@@ -128,5 +164,38 @@ export function estimateCandidateTrajectory(input: {
     interruptionCost,
     evidenceGainIfAskNow,
     confidence: Math.max(0.45, Math.min(0.95, signals.confidence ?? 0.7)),
+    weakSignalNotes,
+  };
+}
+
+function readLatestEditorTelemetry(recentEvents?: RecentEventLike[]) {
+  const payload = [...(recentEvents ?? [])]
+    .reverse()
+    .find((event) => event.eventType === "EDITOR_ACTIVITY_RECORDED")?.payloadJson;
+
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const deletionRatio = typeof record.deletionRatio === "number" ? record.deletionRatio : 0;
+  const pauseMs = typeof record.pauseMs === "number" ? record.pauseMs : 0;
+  const editCount = typeof record.editCount === "number" ? record.editCount : 0;
+  const activeCoding = record.activeCoding === true;
+  const struggleLevel =
+    activeCoding && deletionRatio >= 0.3 && pauseMs >= 2200
+      ? "high"
+      : activeCoding && (deletionRatio >= 0.18 || pauseMs >= 1800)
+        ? "medium"
+        : "low";
+  const editVelocity = editCount >= 6 ? "high" : editCount >= 3 ? "medium" : "low";
+
+  return {
+    activeCoding,
+    deletionRatio,
+    pauseMs,
+    editCount,
+    struggleLevel,
+    editVelocity,
   };
 }

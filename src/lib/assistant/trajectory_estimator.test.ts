@@ -93,4 +93,49 @@ describe("estimateCandidateTrajectory", () => {
     expect(trajectory.interventionValue).toBe("high");
     expect(["ask_specific_followup", "give_rescue_hint"]).toContain(trajectory.bestIntervention);
   });
+
+  it("treats editor rewrite churn as a weak struggling signal", () => {
+    const ledger = buildMemoryLedger({
+      currentStage: "IMPLEMENTATION",
+      recentEvents: [],
+      signals: { ...baseSignals, readyToCode: true },
+      latestExecutionRun: null,
+    });
+
+    const trajectory = estimateCandidateTrajectory({
+      currentStage: "IMPLEMENTATION",
+      signals: { ...baseSignals, readyToCode: true },
+      memory: ledger,
+      latestExecutionRun: null,
+      recentEvents: [
+        {
+          eventType: "EDITOR_ACTIVITY_RECORDED",
+          payloadJson: {
+            activeCoding: true,
+            deletionRatio: 0.34,
+            pauseMs: 2600,
+            editCount: 7,
+          },
+        },
+      ],
+      flowState: {
+        codingBurst: false,
+        thinkingBurst: false,
+        muteUntilPause: false,
+        contextReestablishmentCost: "medium",
+      },
+      intent: {
+        intent: "guide",
+        targetSignal: "implementation",
+        reason: "Telemetry hints at some hesitation.",
+        expectedOutcome: "unlock_progress",
+        canDefer: true,
+        urgency: "medium",
+      },
+    });
+
+    expect(["plateauing", "stuck"]).toContain(trajectory.candidateTrajectory);
+    expect(trajectory.interruptionCost).toBe("high");
+    expect(trajectory.weakSignalNotes?.length).toBeGreaterThan(0);
+  });
 });

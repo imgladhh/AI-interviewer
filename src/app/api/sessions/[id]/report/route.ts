@@ -93,6 +93,7 @@ export async function POST(_: Request, { params }: RouteContext) {
     })),
     events: session.events,
     executionRuns: session.executionRuns.map((run) => ({
+      id: run.id,
       status: run.status,
       stdout: run.stdout,
       stderr: run.stderr,
@@ -224,6 +225,7 @@ export async function POST(_: Request, { params }: RouteContext) {
     { status: 201 },
   );
 }
+
 
 
 

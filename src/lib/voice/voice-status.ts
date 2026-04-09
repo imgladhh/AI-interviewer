@@ -18,3 +18,37 @@ export function describeVoiceState(state: BrowserVoiceState) {
       return "Unknown";
   }
 }
+
+export function describeRoomSystemState(input: {
+  voiceState: BrowserVoiceState;
+  isAssistantThinking: boolean;
+  assistantDraft: string;
+  isProviderPreviewing?: boolean;
+  awaitingMeasuredReply?: boolean;
+}) {
+  if (input.awaitingMeasuredReply) {
+    return "System: Deliberating";
+  }
+
+  if (input.assistantDraft) {
+    return "System: Streaming reply";
+  }
+
+  if (input.isAssistantThinking) {
+    return "System: Deciding";
+  }
+
+  if (input.voiceState === "speaking") {
+    return "System: Speaking";
+  }
+
+  if (input.voiceState === "processing" || input.isProviderPreviewing) {
+    return "System: Capturing answer";
+  }
+
+  if (input.voiceState === "listening") {
+    return "System: Listening";
+  }
+
+  return "System: Idle";
+}
