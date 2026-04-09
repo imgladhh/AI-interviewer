@@ -594,31 +594,42 @@ Success criteria:
 - the UI feels like a deliberate interview product rather than a debug console
 - deeper system reasoning remains visible for development and audit
 
-Phase 1 status:
-- `/report/[id]` now starts moving toward an executive-summary-first layout instead of dropping directly into dense detail
-- the top of the report now foregrounds:
+Status: `Completed`
+
+Priority 5 implementation summary:
+- `/report/[id]` now follows an executive-summary-first layout instead of opening on dense audit detail
+- the report header now foregrounds:
   - recommendation
   - evaluated level
   - recommendation basis
   - moments of truth
-- the report still preserves deeper candidate/interviewer state below, so product-facing readability improves without losing audit depth
-- stage replay now reads more like an interview storyline:
-  - each phase opens with a short plot summary
-  - evidence, checkpoints, interviewer decisions, and representative turns are nested under collapsible detail blocks
-- deeper report diagnostics are now pushed under a `Deep Diagnostics` fold so first-time readers see the product-facing summary before the audit-heavy state snapshots and replay timelines
-  - `/admin` now also starts with a compact executive summary for the current session posture:
-    - current stage
-    - latest decision
-    - policy archetype
-    - invariant override
-    - latest intent / trajectory
-    - critic timing / closure quality
-  - heavy admin detail is increasingly folded behind explicit sections such as:
-    - `Session State Timeline`
-    - `Raw Job Status JSON`
-    - `Unified Operations Feed`
+- stage replay now reads like an interview storyline:
+  - each stage begins with a short plot summary
+  - evidence, checkpoints, interviewer decisions, and representative turns sit behind collapsible detail blocks
+- deeper report diagnostics are now intentionally folded under `Deep Diagnostics`, so first-time readers see product-facing conclusions before audit-heavy state dumps
+- `/admin` now starts with a compact executive summary of current session posture, including:
+  - current stage
+  - latest decision
+  - policy archetype
+  - invariant override
+  - latest intent / trajectory
+  - critic timing / closure quality
+  - transcript truth posture
+- heavier admin detail is now pushed behind explicit sections such as:
+  - `Session State Timeline`
   - `Raw Job Status JSON`
   - `Unified Operations Feed`
+  - `Policy Regression Lab`
+- the interview room now gives clearer, lower-noise state feedback around:
+  - current stage
+  - AI source
+  - budget/cost posture
+  - voice state
+  - compact system state
+
+Exit criteria met:
+- `/report`, `/admin`, and the interview room now feel substantially more like a deliberate product surface than a raw debug console
+- critical reasoning and audit state remain available, but are visually secondary to the primary operating summary
 
 ## Milestone Guidance
 
@@ -870,6 +881,161 @@ These remain permanent system rules regardless of roadmap stage:
   - invariant override
   - committed vs pending truth boundaries
 - build and full test runs should stay green as a release gate
+
+### Next Phase Roadmap: Convergence Phase
+
+With `Priority 1-5` and `Stage 1-4` now completed, the next iteration is no longer about adding more interviewer behaviors. It is about converging the system into a stable, tunable, and fully explainable optimization engine.
+
+#### Phase 1: Decision Engine Convergence
+
+Priority: `P0`
+
+Core goal:
+- converge the current multi-module decision path into a single unified scoring surface
+
+Concrete work:
+- implement `UnifiedDecisionScore v1`:
+  - `Score(A) = Σ w_i(A) * S_i(A) + HardMask(A) - SoftPenalty(A)`
+  - require all normalized component scores to stay inside `[-1, 1]`
+  - require every decision to emit score decomposition
+- standardize action candidates into a single normalized set:
+  - `Probe`
+  - `Guide`
+  - `Unblock`
+  - `Advance`
+  - `Close`
+  - `Hold`
+- bind `DecisionResult.reason[]` directly to score decomposition
+- split constraints into:
+  - hard masks
+  - soft penalties
+- add decision stability / tie-breaking when the top two actions are too close
+
+Success criteria:
+- all decision paths converge through a single argmax model
+- `decision_engine` is no longer primarily governed by ad-hoc branching
+- `/admin` can explain the exact score decomposition behind any action
+
+#### Phase 2: Reward System
+
+Priority: `P1`
+
+Core goal:
+- let the system evaluate the quality of its own choices instead of only making them
+
+Concrete work:
+- implement `Reward v1` with:
+  - `EvidenceGain`
+  - `Redundancy`
+  - `BadInterruption`
+  - `FlowPreservation`
+  - `CleanClosure`
+- discretize evidence gain across:
+  - reasoning
+  - implementation
+  - test
+  - debugging
+  - tradeoff
+- add reward attribution per turn
+- maintain a traceable chain:
+  - `turn_id -> DecisionResult -> RewardResult`
+
+Success criteria:
+- every bad behavior can be mapped to a concrete reward penalty
+- the system can explain which decision created a downstream problem
+
+#### Phase 3: Temporal Dynamics
+
+Priority: `P1.5`
+
+Core goal:
+- stop the system from stalling, looping, or reopening closed paths
+
+Concrete work:
+- add time decay to probing need
+- strengthen flow-aware timing:
+  - interruption penalty rises during coding
+  - probe value rises during idle or stalled states
+- make closure irreversible as a hard invariant:
+  - once in `WRAP_UP`, probing or reopening is forbidden
+
+Success criteria:
+- interviews move forward naturally
+- the system does not get stuck in repetition loops
+- wrap-up stays closed once reached
+
+#### Phase 4: Policy as Weight Sets
+
+Priority: `P2`
+
+Core goal:
+- convert archetypes from stylistic labels into tunable score weights
+
+Concrete work:
+- parameterize policy into score weights
+- let `Candidate DNA` modulate those weights deterministically
+- compare policy behavior through score diffs on the same transcript
+
+Success criteria:
+- policy differences are visible in score composition, not just final wording
+- behavior differences remain explainable and replayable
+
+#### Phase 5: Policy Optimization Lab
+
+Priority: `P2.5`
+
+Core goal:
+- move from “manually tunable” to “optimizable with evidence”
+
+Concrete work:
+- strengthen the policy regression lab with:
+  - decision timelines
+  - score diffs
+  - reward diffs
+- add reward-driven policy tuning loops
+- expand golden scenarios:
+  - strong candidate
+  - stuck candidate
+  - overconfident wrong answer
+  - perfect flow
+
+Success criteria:
+- policy tuning is no longer intuition-only
+- policy changes can be evaluated against stable scenario sets
+
+#### Phase 6: Voice and UX Convergence
+
+Priority: `P3`
+
+Core goal:
+- polish delivery and UX without weakening committed truth or decision integrity
+
+Concrete work:
+- make thinking latency proportional to score complexity
+- continue semantic silence handling for think-aloud cues
+- keep TTS strongly bound to committed transcript output
+
+Success criteria:
+- no抢话 / double-voice / transcript mismatch regressions
+- voice and UX polish never override truth or observability
+
+### Global Guardrails
+
+- `Complexity Guard`: anything that cannot be mapped into the score model should not be admitted into the decision surface
+- `Idempotent Decision`: same input state should produce the same decision result
+- `Anti-Repetition`: already-answered targets should collapse to zero or masked-out value in scoring
+- `Budget Override`: when budget is exceeded, `Close` dominates the action space
+
+### Convergence Principle
+
+The next phase is not about making the interviewer merely “smarter.”
+
+It is about making the system:
+- stable
+- tunable
+- auditable
+- optimizable
+- replayable
 
 ### Follow-up TODOs
 

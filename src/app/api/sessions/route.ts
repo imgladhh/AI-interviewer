@@ -4,6 +4,65 @@ import { buildAppliedPromptContext, buildPersonaSnapshot } from "@/lib/persona/b
 import { fail, ok } from "@/lib/http";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { createSessionSchema } from "@/schemas/session";
+import { CompanyStyle } from "@prisma/client";
+import type { z } from "zod";
+
+type CreateSessionInput = z.infer<typeof createSessionSchema>;
+
+async function findQuestionForSession(input: CreateSessionInput) {
+  if (input.questionId) {
+    return prisma.question.findFirst({
+      where: {
+        id: input.questionId,
+        isActive: true,
+      },
+    });
+  }
+
+  const baseWhere = {
+    type: input.mode,
+    isActive: true,
+    ...(input.targetLevel ? { levelTarget: input.targetLevel } : {}),
+  };
+
+  if (input.companyStyle && input.companyStyle !== CompanyStyle.GENERIC) {
+    const companySpecific = await prisma.question.findMany({
+      where: {
+        ...baseWhere,
+        companyStyle: input.companyStyle,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    if (companySpecific.length > 0) {
+      return companySpecific[Math.floor(Math.random() * companySpecific.length)];
+    }
+
+    const genericFallback = await prisma.question.findMany({
+      where: {
+        ...baseWhere,
+        companyStyle: CompanyStyle.GENERIC,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    return genericFallback.length > 0
+      ? genericFallback[Math.floor(Math.random() * genericFallback.length)]
+      : null;
+  }
+
+  const candidates = await prisma.question.findMany({
+    where: {
+      ...baseWhere,
+      ...(input.companyStyle && input.companyStyle !== CompanyStyle.GENERIC
+        ? {}
+        : { companyStyle: CompanyStyle.GENERIC }),
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+}
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -39,16 +98,7 @@ export async function POST(request: Request) {
 
   const personaReady = interviewerProfile?.status === "READY";
 
-  const question = await prisma.question.findFirst({
-    where: {
-      type: input.mode,
-      isActive: true,
-      ...(input.companyStyle ? { companyStyle: input.companyStyle } : {}),
-      ...(input.difficulty ? { difficulty: input.difficulty } : {}),
-      ...(input.targetLevel ? { levelTarget: input.targetLevel } : {}),
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  const question = await findQuestionForSession(input);
 
   const session = await prisma.interviewSession.create({
     data: {

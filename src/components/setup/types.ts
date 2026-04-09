@@ -58,7 +58,6 @@ export type SetupFormState = {
   targetLevel: "NEW_GRAD" | "SDE1" | "SDE2" | "SENIOR" | "STAFF";
   selectedLanguage: string;
   companyStyle: "GENERIC" | "AMAZON" | "META" | "GOOGLE" | "STRIPE";
-  difficulty: "EASY" | "MEDIUM" | "HARD";
   voiceEnabled: boolean;
   lowCostMode: boolean;
   interviewerProfileUrl: string;

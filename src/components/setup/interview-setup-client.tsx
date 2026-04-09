@@ -109,7 +109,6 @@ const selectOptions = {
   targetLevel: ["NEW_GRAD", "SDE1", "SDE2", "SENIOR", "STAFF"] as const,
   selectedLanguage: ["Python", "Java", "C++", "JavaScript"] as const,
   companyStyle: ["GENERIC", "AMAZON", "META", "GOOGLE", "STRIPE"] as const,
-  difficulty: ["EASY", "MEDIUM", "HARD"] as const,
 };
 
 const initialForm: SetupFormState = {
@@ -117,7 +116,6 @@ const initialForm: SetupFormState = {
   targetLevel: "SDE2",
   selectedLanguage: "Python",
   companyStyle: "GENERIC",
-  difficulty: "MEDIUM",
   voiceEnabled: true,
   lowCostMode: true,
   interviewerProfileUrl: "",
@@ -297,15 +295,14 @@ export function InterviewSetupClient() {
     const response = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode: form.mode,
-        targetLevel: form.targetLevel,
-        selectedLanguage: form.selectedLanguage.toUpperCase(),
-        companyStyle: form.companyStyle,
-        difficulty: form.difficulty,
-        voiceEnabled: form.voiceEnabled,
-        lowCostMode: form.lowCostMode,
-        personaEnabled: personaMode === "tailored",
+        body: JSON.stringify({
+          mode: form.mode,
+          targetLevel: form.targetLevel,
+          selectedLanguage: form.selectedLanguage.toUpperCase(),
+          companyStyle: form.companyStyle,
+          voiceEnabled: form.voiceEnabled,
+          lowCostMode: form.lowCostMode,
+          personaEnabled: personaMode === "tailored",
         interviewerProfileId,
       }),
     });
@@ -372,20 +369,6 @@ export function InterviewSetupClient() {
               </select>
             </Field>
 
-            <Field label="Language">
-              <select
-                value={form.selectedLanguage}
-                onChange={(event) => updateField("selectedLanguage", event.target.value)}
-                style={inputStyle}
-              >
-                {selectOptions.selectedLanguage.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
             <Field label="Company Style">
               <select
                 value={form.companyStyle}
@@ -398,39 +381,6 @@ export function InterviewSetupClient() {
                   </option>
                 ))}
               </select>
-            </Field>
-
-            <Field label="Difficulty">
-              <select
-                value={form.difficulty}
-                onChange={(event) => updateField("difficulty", event.target.value as SetupFormState["difficulty"])}
-                style={inputStyle}
-              >
-                {selectOptions.difficulty.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Voice">
-              <label
-                style={{
-                  ...panelStyle,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  cursor: "pointer",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={form.voiceEnabled}
-                  onChange={(event) => updateField("voiceEnabled", event.target.checked)}
-                />
-                <span>{form.voiceEnabled ? "Voice enabled" : "Voice disabled"}</span>
-              </label>
             </Field>
 
             <Field label="Cost Mode">
@@ -451,6 +401,19 @@ export function InterviewSetupClient() {
                 <span>{form.lowCostMode ? "Low-cost mode on" : "Standard mode"}</span>
               </label>
             </Field>
+          </div>
+
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 14,
+              border: "1px solid var(--border)",
+              background: "rgba(255,255,255,0.78)",
+              color: "var(--muted)",
+              fontSize: 14,
+            }}
+          >
+            Language is chosen inside the interview room. Question selection now prefers company-tagged questions first and falls back to generic ones when needed.
           </div>
 
           <section style={panelStyle}>

@@ -142,12 +142,15 @@ const cardStyle = {
 const editorLanguageLabel = (language: string | null) => normalizeLanguage(language);
 
 export function InterviewRoomClient(props: InterviewRoomClientProps) {
-  const normalizedLanguage = normalizeLanguage(props.selectedLanguage);
-  const monacoLanguage = toMonacoLanguage(props.selectedLanguage);
+  const [selectedLanguage, setSelectedLanguage] = useState(props.selectedLanguage ?? "Python");
+  const normalizedLanguage = normalizeLanguage(selectedLanguage);
+  const monacoLanguage = toMonacoLanguage(selectedLanguage);
+  const [viewMode, setViewMode] = useState<"interview" | "debug">("interview");
+  const [problemPaneWidth, setProblemPaneWidth] = useState(720);
   const [transcripts, setTranscripts] = useState(props.initialTranscripts);
   const [events, setEvents] = useState(props.initialEvents);
   const [executionRuns, setExecutionRuns] = useState<ExecutionRun[]>([]);
-  const [editorCode, setEditorCode] = useState(() => getStarterCode(props.selectedLanguage, props.questionTitle));
+  const [editorCode, setEditorCode] = useState(() => getStarterCode(selectedLanguage, props.questionTitle));
   const [isPending, startTransition] = useTransition();
   const [isRunningCode, setIsRunningCode] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -193,6 +196,8 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const providerSpeechActiveRef = useRef(false);
   const lastEditorActivityAtRef = useRef<number>(0);
   const previousEditorLengthRef = useRef(editorCode.length);
+  const interviewWorkspaceRef = useRef<HTMLElement | null>(null);
+  const isDraggingSplitterRef = useRef(false);
   const assistantLeadInDelayMsRef = useRef(0);
   const assistantSpeechStartedRef = useRef(false);
   const lastEditorTelemetryPostedAtRef = useRef(0);
@@ -270,6 +275,16 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       clearInterval(interval);
     };
   }, [props.sessionId]);
+
+  useEffect(() => {
+    setEditorCode(getStarterCode(selectedLanguage, props.questionTitle));
+    setEditorStatus(
+      isRunnableLanguage(selectedLanguage)
+        ? `Code execution is ready for ${editorLanguageLabel(selectedLanguage)}.`
+        : "Editing is enabled. Local execution currently supports Python and JavaScript.",
+    );
+    previousEditorLengthRef.current = getStarterCode(selectedLanguage, props.questionTitle).length;
+  }, [props.questionTitle, selectedLanguage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -417,6 +432,32 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   }, [dedicatedSttConfigured, props.sessionId, supportsProviderPreview]);
 
   useEffect(() => {
+    function handleMouseMove(event: MouseEvent) {
+      if (!isDraggingSplitterRef.current || !interviewWorkspaceRef.current) {
+        return;
+      }
+
+      const bounds = interviewWorkspaceRef.current.getBoundingClientRect();
+      const minimumLeft = 420;
+      const minimumRight = 560;
+      const nextWidth = Math.min(Math.max(event.clientX - bounds.left, minimumLeft), bounds.width - minimumRight);
+      setProblemPaneWidth(nextWidth);
+    }
+
+    function handleMouseUp() {
+      isDraggingSplitterRef.current = false;
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
     void refreshVoiceDiagnostics();
   }, []);
 
@@ -480,6 +521,8 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   );
 
   const latestRun = executionRuns[0] ?? null;
+  const isDebugMode = viewMode === "debug";
+  const isInterviewMode = viewMode === "interview";
   const currentStage = useMemo(() => {
     if (events.length === 0 && transcripts.length === 0 && !latestRun) {
       return props.initialStage;
@@ -1208,7 +1251,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   async function runCode() {
     setIsRunningCode(true);
     setActionError(null);
-    setEditorStatus(`Running ${editorLanguageLabel(props.selectedLanguage)} in local sandbox...`);
+    setEditorStatus(`Running ${editorLanguageLabel(selectedLanguage)} in local sandbox...`);
 
     try {
       const response = await fetch(`/api/sessions/${props.sessionId}/code-runs`, {
@@ -1410,8 +1453,8 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   }
 
   return (
-    <main style={{ minHeight: "100vh", padding: 24 }}>
-      <div style={{ width: "min(1280px, 100%)", margin: "0 auto", display: "grid", gap: 18 }}>
+    <main style={{ minHeight: "100vh", padding: 16 }}>
+      <div style={{ width: "calc(100vw - 32px)", margin: "0 auto", display: "grid", gap: 18 }}>
         <header
           style={{
             ...cardStyle,
@@ -1426,12 +1469,12 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
             <p style={{ margin: 0, color: "var(--accent-strong)", fontWeight: 700 }}>INTERVIEW ROOM</p>
             <h1 style={{ margin: "6px 0 0" }}>{props.questionTitle}</h1>
           </div>
-          <div style={{ color: "var(--muted)" }}>
-            <div>Mode: {props.mode}</div>
-            <div>Language: {editorLanguageLabel(props.selectedLanguage)}</div>
-            <div>Level: {props.targetLevel ?? "Unspecified"}</div>
-            <div>Persona: {props.personaEnabled ? "Enabled" : "Generic"}</div>
+          <div style={{ color: "var(--muted)", display: "grid", gap: 6, justifyItems: "end" }}>
+            <div>
+              {props.mode} · {editorLanguageLabel(selectedLanguage)} · {props.targetLevel ?? "Unspecified"}
+            </div>
             <div>Stage: {describeCodingStage(currentStage)}</div>
+            <div>{props.personaEnabled ? "Persona-tailored" : "Generic interviewer"}</div>
           </div>
         </header>
 
@@ -1444,6 +1487,23 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
           }}
         >
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div
+              style={{
+                display: "inline-flex",
+                gap: 6,
+                padding: 4,
+                borderRadius: 999,
+                border: "1px solid var(--border)",
+                background: "rgba(255,255,255,0.72)",
+              }}
+            >
+              <button type="button" onClick={() => setViewMode("interview")} style={modeToggleButtonStyle(viewMode === "interview")}>
+                Interview mode
+              </button>
+              <button type="button" onClick={() => setViewMode("debug")} style={modeToggleButtonStyle(viewMode === "debug")}>
+                Debug mode
+              </button>
+            </div>
             <StatusPill label={describeVoiceState(voiceState)} tone={voiceTone(voiceState)} />
             <StatusPill
               label={describeRoomSystemState({
@@ -1465,16 +1525,100 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
           <span style={{ color: "var(--muted)", fontSize: 14 }}>{roomNotice}</span>
         </section>
 
-        <section style={{ display: "grid", gap: 18, gridTemplateColumns: "340px 1fr 360px" }}>
-          <aside
-            style={{
-              ...cardStyle,
-              padding: 20,
-              display: "grid",
-              gap: 18,
-              alignContent: "start",
-            }}
-          >
+        <section
+          ref={interviewWorkspaceRef}
+          style={{
+            display: "grid",
+            gap: isInterviewMode ? 0 : 18,
+            gridTemplateColumns: isDebugMode
+              ? "340px minmax(0, 1fr) 360px"
+              : `${problemPaneWidth}px 12px minmax(0, 1fr)`,
+            alignItems: "stretch",
+          }}
+        >
+          {isInterviewMode ? (
+            <aside
+              style={{
+                ...cardStyle,
+                padding: 24,
+                display: "grid",
+                gap: 16,
+                alignContent: "start",
+                minHeight: 860,
+              }}
+            >
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                  <div>
+                    <p style={{ margin: 0, color: "var(--accent-strong)", fontWeight: 700, letterSpacing: 0.6 }}>
+                      PROBLEM
+                    </p>
+                    <h2 style={{ margin: "6px 0 0" }}>{props.questionTitle}</h2>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <StatusPill label={props.mode} tone="neutral" />
+                    <StatusPill label={props.targetLevel ?? "Unspecified"} tone="neutral" />
+                    <StatusPill label={describeCodingStage(currentStage)} tone="info" />
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: 18,
+                    borderRadius: 18,
+                    border: "1px solid var(--border)",
+                    background: "var(--surface-alt)",
+                    display: "grid",
+                    gap: 14,
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>Question Description</strong>
+                    <div
+                      style={{
+                        color: "var(--text)",
+                        lineHeight: 1.7,
+                        whiteSpace: "pre-wrap",
+                        minHeight: 700,
+                        maxHeight: 700,
+                        overflowY: "auto",
+                        paddingRight: 4,
+                      }}
+                    >
+                      {props.questionPrompt}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          ) : null}
+
+          {isInterviewMode ? (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={() => {
+                isDraggingSplitterRef.current = true;
+              }}
+              style={{
+                cursor: "col-resize",
+                background: "linear-gradient(180deg, rgba(13,24,51,0.08), rgba(13,24,51,0.18), rgba(13,24,51,0.08))",
+                borderRadius: 999,
+                margin: "0 3px",
+                minHeight: 860,
+              }}
+            />
+          ) : null}
+
+          {isDebugMode ? (
+            <aside
+              style={{
+                ...cardStyle,
+                padding: 20,
+                display: "grid",
+                gap: 18,
+                alignContent: "start",
+              }}
+            >
             <div>
               <h2 style={{ marginTop: 0 }}>Prompt</h2>
               <p style={{ color: "var(--muted)", marginBottom: 0 }}>{props.questionPrompt}</p>
@@ -1506,7 +1650,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               >
                 <strong>Usage so far</strong>
                 <span style={{ color: "var(--muted)", fontSize: 14 }}>
-                  LLM calls: {usageSummary.llmCalls} 路 STT calls: {usageSummary.sttCalls}
+                  LLM calls: {usageSummary.llmCalls} · STT calls: {usageSummary.sttCalls}
                 </span>
                 <span style={{ color: "var(--muted)", fontSize: 14 }}>
                   Latest AI source: {lastAiSource ?? "none yet"}
@@ -1616,16 +1760,17 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                   </div>
                 ) : null}
                 {lastVoiceError ? <span style={{ color: "var(--danger)" }}>{lastVoiceError}</span> : null}
-                <div
-                  style={{
-                    display: "grid",
-                    gap: 8,
-                    padding: 12,
-                    borderRadius: 12,
-                    background: "var(--surface-alt)",
-                    border: "1px solid var(--border)",
-                  }}
-                >
+                {isDebugMode ? (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 8,
+                      padding: 12,
+                      borderRadius: 12,
+                      background: "var(--surface-alt)",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
                   <div
                     style={{
                       display: "flex",
@@ -1710,10 +1855,10 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                         <div key={device.deviceId || device.label} style={diagnosticHintStyle}>
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                             <strong>{device.label}</strong>
-                            <span style={{ color: device.suspectVirtual ? "#8a5a00" : "var(--muted)", fontSize: 13 }}>
-                              {device.isDefault ? "default" : "secondary"}
-                              {device.suspectVirtual ? " 鈥?possible virtual/bluetooth" : ""}
-                            </span>
+                                <span style={{ color: device.suspectVirtual ? "#8a5a00" : "var(--muted)", fontSize: 13 }}>
+                                  {device.isDefault ? "default" : "secondary"}
+                                  {device.suspectVirtual ? " · possible virtual/bluetooth" : ""}
+                                </span>
                           </div>
                         </div>
                       ))}
@@ -1733,52 +1878,57 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                       No obvious browser-side blockers detected.
                     </span>
                   )}
-                </div>
+                  </div>
+                ) : null}
               </div>
-              <button
-                style={actionButtonStyle}
-                disabled={isPending}
-                onClick={() =>
-                  runAction(async () => {
-                    await postEvent(SESSION_EVENT_TYPES.QUESTION_SHOWN, { surfacedInRoom: true });
-                    await speakAiPrompt(`Let's begin. Walk me through your approach for ${props.questionTitle}.`);
-                  })
-                }
-              >
-                Simulate AI Intro
-              </button>
-              <button
-                style={actionButtonStyle}
-                disabled={isPending}
-                onClick={() =>
-                  runAction(async () => {
-                    await handleCandidateMessage(
-                      "I would start by clarifying constraints and then think through a hash map based approach.",
-                    );
-                  })
-                }
-              >
-                Simulate Candidate Reply
-              </button>
-              <button
-                style={actionButtonStyle}
-                disabled={isPending || isAssistantThinking}
-                onClick={() => runAction(async () => requestAssistantTurn())}
-              >
-                {isAssistantThinking ? "AI Thinking..." : "Ask AI Follow-up"}
-              </button>
-              <button
-                style={actionButtonStyle}
-                disabled={isPending}
-                onClick={() =>
-                  runAction(async () => {
-                    await postEvent(SESSION_EVENT_TYPES.HINT_REQUESTED, { source: "room-controls" });
-                    await requestAssistantTurn();
-                  })
-                }
-              >
-                Request Hint
-              </button>
+              {isDebugMode ? (
+                <>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={isPending}
+                    onClick={() =>
+                      runAction(async () => {
+                        await postEvent(SESSION_EVENT_TYPES.QUESTION_SHOWN, { surfacedInRoom: true });
+                        await speakAiPrompt(`Let's begin. Walk me through your approach for ${props.questionTitle}.`);
+                      })
+                    }
+                  >
+                    Simulate AI Intro
+                  </button>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={isPending}
+                    onClick={() =>
+                      runAction(async () => {
+                        await handleCandidateMessage(
+                          "I would start by clarifying constraints and then think through a hash map based approach.",
+                        );
+                      })
+                    }
+                  >
+                    Simulate Candidate Reply
+                  </button>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={isPending || isAssistantThinking}
+                    onClick={() => runAction(async () => requestAssistantTurn())}
+                  >
+                    {isAssistantThinking ? "AI Thinking..." : "Ask AI Follow-up"}
+                  </button>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={isPending}
+                    onClick={() =>
+                      runAction(async () => {
+                        await postEvent(SESSION_EVENT_TYPES.HINT_REQUESTED, { source: "room-controls" });
+                        await requestAssistantTurn();
+                      })
+                    }
+                  >
+                    Request Hint
+                  </button>
+                </>
+              ) : null}
               <button
                 style={actionButtonStyle}
                 disabled={isGeneratingReport || isPending}
@@ -1789,24 +1939,27 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               <Link href={`/report/${props.sessionId}`} style={linkButtonStyle}>
                 View Full Report
               </Link>
-              <button
-                style={actionButtonStyle}
-                disabled={isPending}
-                onClick={() =>
-                  runAction(async () =>
-                    postEvent(SESSION_EVENT_TYPES.STAGE_ADVANCED, {
-                      previousStage: currentStage,
-                      stage: "APPROACH_DISCUSSION",
-                      source: "room-controls",
-                    }),
-                  )
-                }
-              >
-                Advance Stage
-              </button>
+              {isDebugMode ? (
+                <button
+                  style={actionButtonStyle}
+                  disabled={isPending}
+                  onClick={() =>
+                    runAction(async () =>
+                      postEvent(SESSION_EVENT_TYPES.STAGE_ADVANCED, {
+                        previousStage: currentStage,
+                        stage: "APPROACH_DISCUSSION",
+                        source: "room-controls",
+                      }),
+                    )
+                  }
+                >
+                  Advance Stage
+                </button>
+              ) : null}
               {actionError ? <span style={{ color: "var(--danger)" }}>{actionError}</span> : null}
             </div>
-          </aside>
+            </aside>
+          ) : null}
 
           <section
             style={{
@@ -1814,6 +1967,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               padding: 20,
               display: "grid",
               gap: 18,
+              minHeight: isInterviewMode ? 860 : undefined,
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -1822,22 +1976,83 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                 <div style={{ color: "var(--muted)", fontSize: 14 }}>{editorStatus}</div>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {isInterviewMode ? (
+                  <select
+                    value={selectedLanguage}
+                    onChange={(event) => setSelectedLanguage(event.target.value)}
+                    style={{ ...roomSelectStyle, width: 160 }}
+                  >
+                    {["Python", "Java", "C++", "JavaScript"].map((language) => (
+                      <option key={language} value={language}>
+                        {language}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <StatusPill label={editorLanguageLabel(selectedLanguage)} tone="neutral" />
+                )}
                 <button style={actionButtonStyle} disabled={isRunningCode} onClick={() => void runCode()}>
                   {isRunningCode ? "Running..." : "Run Code"}
                 </button>
               </div>
             </div>
 
+            {isInterviewMode ? (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 14,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface-alt)",
+                  display: "flex",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <strong style={{ fontSize: 14 }}>Voice Controls</strong>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={!voiceAvailability.speechRecognition || isPending}
+                    onClick={() => runAction(startListening)}
+                  >
+                    Start Mic
+                  </button>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={!voiceAvailability.speechRecognition || isPending}
+                    onMouseDown={() => {
+                      void startPushToTalk();
+                    }}
+                    onMouseUp={() => void stopListening()}
+                    onMouseLeave={() => void stopListening()}
+                  >
+                    Push to Talk
+                  </button>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={!voiceAvailability.speechRecognition || isPending}
+                    onClick={() => runAction(stopListening)}
+                  >
+                    Stop Mic
+                  </button>
+                </div>
+                <span style={{ color: "var(--muted)", fontSize: 14 }}>{roomNotice}</span>
+              </div>
+            ) : null}
+
             <div
               style={{
-                minHeight: 360,
+                minHeight: isInterviewMode ? 620 : 360,
                 borderRadius: 18,
                 border: "1px solid var(--border)",
                 overflow: "hidden",
               }}
             >
               <MonacoEditor
-                height="360px"
+                height={isInterviewMode ? "620px" : "360px"}
                 language={monacoLanguage}
                 theme="vs-dark"
                 value={editorCode}
@@ -1904,6 +2119,36 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               </div>
             </div>
 
+            {isInterviewMode ? (
+              <div
+                style={{
+                  padding: 16,
+                  borderRadius: 16,
+                  background: "#fff",
+                  border: "1px solid var(--border)",
+                  display: "flex",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    style={actionButtonStyle}
+                    disabled={isGeneratingReport || isPending}
+                    onClick={() => runAction(generateReport)}
+                  >
+                    {isGeneratingReport ? "Generating Report..." : "Generate Report"}
+                  </button>
+                  <Link href={`/report/${props.sessionId}`} style={linkButtonStyle}>
+                    View Full Report
+                  </Link>
+                </div>
+                {actionError ? <span style={{ color: "var(--danger)" }}>{actionError}</span> : null}
+              </div>
+            ) : null}
+
             <div
               style={{
                 padding: 16,
@@ -1961,15 +2206,16 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
             ) : null}
           </section>
 
-          <aside
-            style={{
-              ...cardStyle,
-              padding: 20,
-              display: "grid",
-              gap: 18,
-              alignContent: "start",
-            }}
-          >
+          {isDebugMode ? (
+            <aside
+              style={{
+                ...cardStyle,
+                padding: 20,
+                display: "grid",
+                gap: 18,
+                alignContent: "start",
+              }}
+            >
             <section style={{ display: "grid", gap: 10 }}>
               <h2 style={{ margin: 0 }}>Transcript</h2>
               <div style={{ display: "grid", gap: 10, maxHeight: 260, overflowY: "auto" }}>
@@ -2031,14 +2277,15 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                     <div key={run.id} style={timelineItemStyle}>
                       <strong>{run.status}</strong>
                       <span style={{ color: "var(--muted)", fontSize: 14 }}>
-                        {new Date(run.createdAt).toLocaleTimeString()} 路 {run.runtimeMs ?? 0}ms
+                        {new Date(run.createdAt).toLocaleTimeString()} · {run.runtimeMs ?? 0}ms
                       </span>
                     </div>
                   ))
                 )}
               </div>
             </section>
-          </aside>
+            </aside>
+          ) : null}
         </section>
       </div>
     </main>
@@ -2065,6 +2312,18 @@ function OutputBlock({ title, value }: { title: string; value: string | null }) 
       </pre>
     </div>
   );
+}
+
+function modeToggleButtonStyle(active: boolean) {
+  return {
+    border: "none",
+    borderRadius: 999,
+    padding: "8px 12px",
+    fontWeight: 700,
+    cursor: "pointer",
+    background: active ? "var(--accent)" : "transparent",
+    color: active ? "#fff" : "var(--text)",
+  } as const;
 }
 
 function ReportList({ title, items }: { title: string; items: string[] }) {
@@ -2137,6 +2396,15 @@ const smallButtonStyle = {
   background: "#fff",
   cursor: "pointer",
   fontSize: 13,
+} as const;
+
+const roomSelectStyle = {
+  width: "100%",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  padding: "10px 12px",
+  background: "#fff",
+  font: "inherit",
 } as const;
 
 const diagnosticHintStyle = {

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { InterviewRoomClient } from "@/components/interview/interview-room-client";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
+import { getQuestionPromptByTitle } from "@/lib/interview/question-bank";
 import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { resolveLowCostMode, summarizeUsageFromSessionEvents } from "@/lib/usage/cost";
@@ -80,7 +81,7 @@ export default async function InterviewRoomPage({ params }: InterviewRoomPagePro
     <InterviewRoomClient
       sessionId={session.id}
       questionTitle={session.question?.title ?? "Question loading"}
-      questionPrompt={session.question?.prompt ?? "No question selected yet."}
+      questionPrompt={getQuestionPromptByTitle(session.question?.title) ?? session.question?.prompt ?? "No question selected yet."}
       mode={session.mode}
       selectedLanguage={session.selectedLanguage}
       targetLevel={session.targetLevel}

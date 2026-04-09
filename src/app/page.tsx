@@ -45,7 +45,7 @@ export default function HomePage() {
               AI INTERVIEWER
             </p>
             <h1 style={{ margin: 0, fontSize: "clamp(2.4rem, 6vw, 4.5rem)", lineHeight: 1 }}>
-              Practice North American SDE interviews with a voice-first mock interviewer.
+              Mock Interview with AI
             </h1>
             <p style={{ margin: 0, color: "var(--muted)", fontSize: "1.1rem", maxWidth: 740 }}>
               Start with coding interviews today, optionally tailor the mock to a public interviewer profile,
@@ -57,6 +57,17 @@ export default function HomePage() {
             <Link href="/setup" style={buttonStyle}>
               Start Mock Interview
             </Link>
+            <Link
+              href="/questions"
+              style={{
+                ...buttonStyle,
+                background: "transparent",
+                color: "var(--text)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              Browse Question Bank
+            </Link>
           </div>
 
           <div
@@ -67,7 +78,7 @@ export default function HomePage() {
             }}
           >
             <article style={secondaryCard}>
-              <h2 style={{ marginTop: 0 }}>Voice-first interview flow</h2>
+              <h2 style={{ marginTop: 0 }}>Structured interview flow</h2>
               <p style={{ marginBottom: 0, color: "var(--muted)" }}>
                 Setup, persona preparation, and session creation are wired to API routes and a Prisma-backed data model.
               </p>
