@@ -62,6 +62,36 @@ describe("generateSessionReport", () => {
             },
           },
         },
+        {
+          eventType: "REWARD_RECORDED",
+          payloadJson: {
+            stage: "APPROACH_DISCUSSION",
+            reward: {
+              version: "v1",
+              total: 0.41,
+              components: {
+                evidenceGain: 0.4,
+                redundancy: 0.1,
+                badInterruption: 0,
+                flowPreservation: 0.1,
+                cleanClosure: 0,
+              },
+              penalties: [],
+            },
+          },
+        },
+        {
+          eventType: "SHADOW_POLICY_EVALUATED",
+          payloadJson: {
+            shadowPolicy: {
+              archetype: "bar_raiser",
+              action: "probe_tradeoff",
+              target: "tradeoff",
+              diff: ["action", "target"],
+              scoreDiff: [{ action: "Probe", delta: 0.44 }],
+            },
+          },
+        },
         { eventType: "HINT_SERVED", payloadJson: { hintLevel: "LIGHT", hintStyle: "APPROACH_NUDGE" } },
         { eventType: "CODE_RUN_COMPLETED", payloadJson: { status: "PASSED" } },
       ],
@@ -115,6 +145,10 @@ describe("generateSessionReport", () => {
     expect(((reportJson.recommendationBasis as Record<string, unknown>).executionSignal as string)).toMatch(/closed|mixed|unclosed/);
     expect(Array.isArray((reportJson.recommendationBasis as Record<string, unknown>).evidenceTrace)).toBe(true);
     expect((reportJson.calibrationMatrix as Record<string, unknown>).finalCall).toBeTruthy();
+    expect((reportJson.rewardSummary as Record<string, unknown>).averageTotal).toBeTruthy();
+    expect(Array.isArray((reportJson.rewardSummary as Record<string, unknown>).trend)).toBe(true);
+    expect(Array.isArray(reportJson.shadowPolicySnapshots as unknown[])).toBe(true);
+    expect((reportJson.shadowPolicySnapshots as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
   });
 
   it("groups replay evidence around stage, signals, decisions, and code runs", () => {

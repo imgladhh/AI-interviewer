@@ -299,6 +299,124 @@ describe("assistant turn route", () => {
       }),
     );
   });
+
+  it("records turn reward with trace metadata when a decision exists", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      mode: "CODING",
+      targetLevel: "SDE2",
+      selectedLanguage: "PYTHON",
+      endedAt: null,
+      question: { title: "Two Sum", prompt: "Return indices." },
+      interviewerContext: null,
+      interviewerProfile: null,
+      transcripts: [{ id: "u1", segmentIndex: 0, speaker: "USER", text: "Use a hash map.", isFinal: true }],
+      executionRuns: [],
+      events: [],
+    });
+    generateAssistantTurn.mockResolvedValue({
+      reply: "Can you justify the complexity with one concrete case?",
+      source: "fallback",
+      decision: {
+        action: "ask_followup",
+        target: "complexity",
+        urgency: "high",
+        interruptionCost: "low",
+      },
+    });
+    prisma.transcriptSegment.create.mockResolvedValue({
+      id: "seg-2",
+      text: "Can you justify the complexity with one concrete case?",
+      speaker: "AI",
+      segmentIndex: 1,
+    });
+    prisma.sessionEvent.create
+      .mockResolvedValueOnce({ id: "evt-decision", eventType: "DECISION_RECORDED" })
+      .mockResolvedValueOnce({ id: "evt-reward", eventType: "REWARD_RECORDED" })
+      .mockResolvedValue({ id: "evt-generic", eventType: "GENERIC" });
+
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
+    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(prisma.sessionEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "REWARD_RECORDED",
+          payloadJson: expect.objectContaining({
+            trace: expect.objectContaining({
+              transcriptSegmentId: "seg-2",
+              decisionEventId: "evt-decision",
+            }),
+            reward: expect.objectContaining({
+              version: "v1",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("records echo detection and echo recovery events when present in signals/decision", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      mode: "CODING",
+      targetLevel: "SDE2",
+      selectedLanguage: "PYTHON",
+      endedAt: null,
+      question: { title: "Two Sum", prompt: "Return indices." },
+      interviewerContext: null,
+      interviewerProfile: null,
+      transcripts: [{ id: "u1", segmentIndex: 0, speaker: "USER", text: "What is your complexity?", isFinal: true }],
+      executionRuns: [],
+      events: [],
+    });
+    generateAssistantTurn.mockResolvedValue({
+      reply: "Please answer in exactly two sentences.",
+      source: "fallback",
+      signals: {
+        echoLikely: true,
+        echoStrength: "high",
+        echoOverlapRatio: 0.92,
+      },
+      decision: {
+        action: "ask_for_clarification",
+        target: "reasoning",
+        echoRecoveryMode: "narrow_format",
+        echoRecoveryAttempt: 2,
+      },
+    });
+    prisma.transcriptSegment.create.mockResolvedValue({
+      id: "seg-echo",
+      text: "Please answer in exactly two sentences.",
+      speaker: "AI",
+      segmentIndex: 1,
+    });
+    prisma.sessionEvent.create.mockResolvedValue({ id: "evt-echo", eventType: "GENERIC" });
+
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
+    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(prisma.sessionEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CANDIDATE_ECHO_DETECTED",
+        }),
+      }),
+    );
+    expect(prisma.sessionEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "ECHO_RECOVERY_PROMPTED",
+        }),
+      }),
+    );
+  });
 });
 
 

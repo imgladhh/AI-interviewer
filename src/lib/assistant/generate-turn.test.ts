@@ -68,6 +68,7 @@ describe("generateAssistantTurn", () => {
     expect(result.reply).toMatch(/example|starting point/i);
     expect(result.candidateDna).toBeTruthy();
     expect(result.shadowPolicy).toBeTruthy();
+    expect(Array.isArray(result.shadowPolicy?.scoreDiff)).toBe(true);
   });
 
   it("asks for more specificity when the candidate reply is too short", async () => {

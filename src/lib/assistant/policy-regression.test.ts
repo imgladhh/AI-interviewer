@@ -1,5 +1,6 @@
 ﻿import { describe, expect, it } from "vitest";
 import {
+  derivePolicyTuningSuggestions,
   evaluatePolicyScenario,
   POLICY_REGRESSION_SCENARIOS,
   runPolicyRegressionLab,
@@ -17,6 +18,8 @@ describe("policy regression lab", () => {
     expect(collaborative.suggestedStage).toBe("IMPLEMENTATION");
     expect(barRaiser.action).toBe("probe_tradeoff");
     expect(barRaiser.target).toBe("tradeoff");
+    expect(typeof collaborative.totalScore).toBe("number");
+    expect(typeof barRaiser.totalScore).toBe("number");
   });
 
   it("keeps both archetypes in a focused debugging move when the candidate is stuck", () => {
@@ -60,10 +63,68 @@ describe("policy regression lab", () => {
 
   it("produces grouped strategy-lab output for the default archetypes", () => {
     const lab = runPolicyRegressionLab();
-    expect(lab).toHaveLength(5);
+    expect(lab).toHaveLength(10);
     expect(lab[0]?.results).toHaveLength(2);
     expect(lab[0]?.results.map((item) => item.archetype)).toEqual(["bar_raiser", "collaborative"]);
     expect(lab[0]?.divergentFields).toContain("action");
+    expect(lab[0]?.scoreSpread?.spread).toBeTypeOf("number");
+    expect(lab[0]?.rewardSpread?.spread).toBeTypeOf("number");
+    expect(lab[0]?.results.every((item) => item.scoreWeightProfile && typeof item.scoreWeightProfile.need === "number")).toBe(true);
+    expect(lab[0]?.results.every((item) => Array.isArray(item.decisionTimeline) && item.decisionTimeline.length >= 1)).toBe(true);
+    expect(lab[0]?.results.every((item) => typeof item.averageReward === "number")).toBe(true);
     expect(lab[1]?.summary).toMatch(/converge|diverge/i);
+  });
+
+  it("includes phase5 scenario fixtures for overconfident wrong answer and perfect flow", () => {
+    const ids = POLICY_REGRESSION_SCENARIOS.map((item) => item.id);
+    expect(ids).toContain("overconfident_wrong_answer");
+    expect(ids).toContain("perfect_flow");
+  });
+
+  it("derives reward-driven policy tuning suggestions from lab outputs", () => {
+    const lab = runPolicyRegressionLab();
+    const suggestions = derivePolicyTuningSuggestions(lab);
+
+    expect(suggestions.length).toBeGreaterThan(0);
+    expect(suggestions[0]?.title).toBeTruthy();
+    expect(Array.isArray(suggestions[0]?.recommendedAdjustments)).toBe(true);
+  });
+
+  it("forces echo recovery prompts instead of generic probing when the candidate repeats the question", () => {
+    const scenario = POLICY_REGRESSION_SCENARIOS.find((item) => item.id === "echo_recovery");
+    expect(scenario).toBeTruthy();
+
+    const collaborative = evaluatePolicyScenario(scenario!, "collaborative");
+    const barRaiser = evaluatePolicyScenario(scenario!, "bar_raiser");
+
+    expect(collaborative.action).toBe("ask_for_clarification");
+    expect(barRaiser.action).toBe("ask_for_clarification");
+    expect(collaborative.reason).toMatch(/echo|repeat/i);
+    expect(barRaiser.reason).toMatch(/echo|repeat/i);
+  });
+
+  it("boosts probing under idle+stalled conditions", () => {
+    const scenario = POLICY_REGRESSION_SCENARIOS.find((item) => item.id === "idle_stall_probe_boost");
+    expect(scenario).toBeTruthy();
+
+    const collaborative = evaluatePolicyScenario(scenario!, "collaborative");
+    const barRaiser = evaluatePolicyScenario(scenario!, "bar_raiser");
+
+    expect(["probe_correctness", "probe_tradeoff", "ask_for_reasoning", "ask_for_clarification"]).toContain(collaborative.action);
+    expect(["probe_correctness", "probe_tradeoff", "ask_for_reasoning", "ask_for_clarification"]).toContain(barRaiser.action);
+  });
+
+  it("keeps wrap-up irreversible and avoids reopening actions", () => {
+    const scenario = POLICY_REGRESSION_SCENARIOS.find((item) => item.id === "wrap_up_irreversible");
+    expect(scenario).toBeTruthy();
+
+    const collaborative = evaluatePolicyScenario(scenario!, "collaborative");
+    const barRaiser = evaluatePolicyScenario(scenario!, "bar_raiser");
+    const actions = [collaborative.action, barRaiser.action];
+
+    expect(actions).not.toContain("move_to_wrap_up");
+    expect(actions).not.toContain("ask_for_reasoning");
+    expect(actions).not.toContain("probe_correctness");
+    expect(actions).not.toContain("probe_tradeoff");
   });
 });

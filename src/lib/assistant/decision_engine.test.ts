@@ -877,6 +877,31 @@ describe("makeCandidateDecision", () => {
     expect(result.question).toMatch(/tiny example|state or output|reading your state correctly/i);
   });
 
+  it("switches to echo-recovery mode when the candidate repeats the interviewer question", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: {
+        ...basePolicy,
+        currentStage: "APPROACH_DISCUSSION",
+        nextStage: "APPROACH_DISCUSSION",
+        recommendedAction: "PROBE_APPROACH",
+      },
+      signals: {
+        ...baseSignals,
+        echoLikely: true,
+        echoStrength: "high",
+        echoOverlapRatio: 0.9,
+        reasoningDepth: "thin",
+        communication: "mixed",
+      },
+      recentEvents: [{ eventType: "CANDIDATE_ECHO_DETECTED" }],
+    });
+
+    expect(result.action).toBe("ask_for_clarification");
+    expect(result.echoRecoveryMode).toBeTruthy();
+    expect(result.question).toMatch(/exactly two sentences|format|directly/i);
+  });
+
   it("holds and listens when confidence is low but the candidate still has the floor", () => {
     const result = makeCandidateDecision({
       currentStage: "IMPLEMENTATION",
@@ -895,6 +920,127 @@ describe("makeCandidateDecision", () => {
 
     expect(result.action).toBe("hold_and_listen");
     expect(result.reason).toMatch(/confidence is low/i);
+  });
+
+  it("emits a unified decision score surface with decomposition", () => {
+    const result = makeCandidateDecision({
+      currentStage: "APPROACH_DISCUSSION",
+      policy: basePolicy,
+      signals: {
+        ...baseSignals,
+        readyToCode: true,
+        understanding: "clear",
+        algorithmChoice: "reasonable",
+        progress: "progressing",
+      },
+    });
+
+    expect(result.normalizedAction).toBeTruthy();
+    expect(typeof result.totalScore).toBe("number");
+    expect(Array.isArray(result.scoreBreakdown)).toBe(true);
+    expect(result.scoreBreakdown?.length).toBeGreaterThan(0);
+    expect(Array.isArray(result.candidateScores)).toBe(true);
+    expect(result.candidateScores?.length).toBe(6);
+    expect(result.scoreWeightProfile).toBeTruthy();
+    expect(typeof result.scoreWeightProfile?.need).toBe("number");
+    const finiteReasons = (result.scoreBreakdown ?? []).filter((item) => Number.isFinite(item.magnitude));
+    expect(finiteReasons.every((item) => Math.abs(item.magnitude) <= 1)).toBe(true);
+    const reasonTotal = finiteReasons.reduce((sum, item) => sum + item.magnitude, 0);
+    expect(Math.abs(reasonTotal - Number(result.totalScore ?? 0))).toBeLessThan(0.01);
+  });
+
+  it("hard-masks probing families once wrap-up is already in progress", () => {
+    const result = makeCandidateDecision({
+      currentStage: "WRAP_UP",
+      policy: {
+        ...basePolicy,
+        currentStage: "WRAP_UP",
+        nextStage: "WRAP_UP",
+        recommendedAction: "WRAP_UP",
+      },
+      signals: {
+        ...baseSignals,
+        progress: "done",
+      },
+    });
+
+    const probeScore = result.candidateScores?.find((item) => item.action === "Probe");
+    expect(probeScore?.hardMasked).toBe(true);
+  });
+
+  it("keeps stable advance-family choices on a strong pre-code path", () => {
+    const result = makeCandidateDecision({
+      currentStage: "PROBLEM_UNDERSTANDING",
+      policy: {
+        ...basePolicy,
+        currentStage: "PROBLEM_UNDERSTANDING",
+        nextStage: "PROBLEM_UNDERSTANDING",
+        recommendedAction: "CLARIFY",
+      },
+      signals: {
+        ...baseSignals,
+        understanding: "clear",
+        algorithmChoice: "reasonable",
+        progress: "progressing",
+        communication: "clear",
+        behavior: "structured",
+        confidence: 0.78,
+      },
+    });
+
+    expect(["encourage_and_continue", "move_stage"]).toContain(result.action);
+    expect(result.normalizedAction).toBe("Advance");
+    expect(typeof result.totalScore).toBe("number");
+  });
+
+  it("adds temporal probe decay after repeated recent probing", () => {
+    const result = makeCandidateDecision({
+      currentStage: "TESTING_AND_COMPLEXITY",
+      policy: {
+        ...basePolicy,
+        currentStage: "TESTING_AND_COMPLEXITY",
+        nextStage: "WRAP_UP",
+        recommendedAction: "VALIDATE_AND_TEST",
+      },
+      signals: {
+        ...baseSignals,
+        testingDiscipline: "partial",
+        complexityRigor: "partial",
+      },
+      recentEvents: [
+        { eventType: "DECISION_RECORDED", payloadJson: { decision: { action: "ask_for_test_case" } } },
+        { eventType: "DECISION_RECORDED", payloadJson: { decision: { action: "ask_for_complexity" } } },
+        { eventType: "DECISION_RECORDED", payloadJson: { decision: { action: "probe_tradeoff" } } },
+      ],
+    });
+
+    expect(Array.isArray(result.scoreBreakdown)).toBe(true);
+    expect((result.scoreBreakdown ?? []).some((item) => item.key === "temporal_probe_decay")).toBe(true);
+  });
+
+  it("enforces wrap-up irreversibility by masking advance/probe families", () => {
+    const result = makeCandidateDecision({
+      currentStage: "WRAP_UP",
+      policy: {
+        ...basePolicy,
+        currentStage: "WRAP_UP",
+        nextStage: "WRAP_UP",
+        recommendedAction: "WRAP_UP",
+      },
+      signals: {
+        ...baseSignals,
+        progress: "done",
+        testingDiscipline: "strong",
+        complexityRigor: "strong",
+      },
+      recentEvents: [
+        { eventType: "DECISION_RECORDED", payloadJson: { decision: { action: "move_to_wrap_up", target: "summary" } } },
+      ],
+      latestExecutionRun: { status: "PASSED", stdout: "ok" },
+    });
+
+    expect(result.normalizedAction).not.toBe("Advance");
+    expect(["close_topic", "end_interview", "hold_and_listen"]).toContain(result.action);
   });
 });
 

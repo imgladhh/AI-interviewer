@@ -48,6 +48,10 @@ export type CandidateSignalSnapshot = {
   reasoningDepth: CandidateReasoningDepthState;
   testingDiscipline: CandidateTestingDisciplineState;
   complexityRigor: CandidateComplexityRigorState;
+  echoLikely?: boolean;
+  echoStrength?: "low" | "medium" | "high";
+  echoOverlapRatio?: number;
+  echoReferenceQuestion?: string;
   confidence: number;
   evidence: string[];
   structuredEvidence: CandidateEvidenceItem[];
@@ -70,6 +74,7 @@ export function extractCandidateSignals(input: {
   const recentEvents = input.recentEvents ?? [];
   const evidence: string[] = [];
   const priorSignals = collectPriorSignalSnapshots(recentEvents);
+  const echoDetection = detectEchoResponse(input.recentTranscripts);
 
   const understanding = resolveUnderstandingState(normalizedUserText, input.currentStage, evidence);
   const progress = resolveProgressState(normalizedUserText, latestRun, recentEvents, evidence);
@@ -126,7 +131,15 @@ export function extractCandidateSignals(input: {
     reasoningDepth,
     testingDiscipline,
     complexityRigor,
+    echoLikely: echoDetection.echoLikely,
+    echoStrength: echoDetection.echoStrength,
   });
+
+  if (echoDetection.echoLikely) {
+    evidence.push(
+      `Candidate likely echoed the interviewer prompt (${echoDetection.echoStrength} confidence, overlap=${echoDetection.echoOverlapRatio.toFixed(2)}).`,
+    );
+  }
 
   return {
     understanding,
@@ -140,6 +153,10 @@ export function extractCandidateSignals(input: {
     reasoningDepth,
     testingDiscipline,
     complexityRigor,
+    echoLikely: echoDetection.echoLikely,
+    echoStrength: echoDetection.echoStrength,
+    echoOverlapRatio: echoDetection.echoOverlapRatio,
+    echoReferenceQuestion: echoDetection.referenceQuestion ?? undefined,
     confidence,
     evidence: dedupeEvidence(evidence).slice(0, 6),
     structuredEvidence,
@@ -835,7 +852,7 @@ function buildSignalObserverPrompt(
     `Recent candidate-state history:\n${priorSignalHistory || "none"}`,
     `Heuristic baseline: ${JSON.stringify(heuristic)}`,
     "Return JSON only with keys:",
-    "understanding, progress, communication, codeQuality, algorithmChoice, edgeCaseAwareness, behavior, readyToCode, reasoningDepth, testingDiscipline, complexityRigor, confidence, evidence, structuredEvidence, summary, trendSummary",
+    "understanding, progress, communication, codeQuality, algorithmChoice, edgeCaseAwareness, behavior, readyToCode, reasoningDepth, testingDiscipline, complexityRigor, echoLikely, echoStrength, echoOverlapRatio, confidence, evidence, structuredEvidence, summary, trendSummary",
     "Allowed values:",
     'understanding: "confused" | "partial" | "clear"',
     'progress: "stuck" | "progressing" | "done"',
@@ -848,6 +865,9 @@ function buildSignalObserverPrompt(
     'reasoningDepth: "thin" | "moderate" | "deep"',
     'testingDiscipline: "missing" | "partial" | "strong"',
     'complexityRigor: "missing" | "partial" | "strong"',
+    "echoLikely: boolean",
+    'echoStrength: "low" | "medium" | "high"',
+    "echoOverlapRatio: number between 0 and 1",
     "evidence must be a short array of strings, max 4 items.",
     "structuredEvidence must be an array of up to 4 objects with keys: area, issue, behavior, evidence, impact, fix.",
     "summary must be one concise sentence.",
@@ -884,6 +904,13 @@ function parseObservedSignals(
       reasoningDepth: coerceEnum(parsed.reasoningDepth, ["thin", "moderate", "deep"], heuristic.reasoningDepth),
       testingDiscipline: coerceEnum(parsed.testingDiscipline, ["missing", "partial", "strong"], heuristic.testingDiscipline),
       complexityRigor: coerceEnum(parsed.complexityRigor, ["missing", "partial", "strong"], heuristic.complexityRigor),
+      echoLikely: typeof parsed.echoLikely === "boolean" ? parsed.echoLikely : heuristic.echoLikely,
+      echoStrength: coerceOptionalEnum(parsed.echoStrength, ["low", "medium", "high"], heuristic.echoStrength),
+      echoOverlapRatio:
+        typeof parsed.echoOverlapRatio === "number"
+          ? Math.max(0, Math.min(1, Number(parsed.echoOverlapRatio.toFixed(2))))
+          : heuristic.echoOverlapRatio,
+      echoReferenceQuestion: heuristic.echoReferenceQuestion,
       confidence:
         typeof parsed.confidence === "number"
           ? Math.max(0.2, Math.min(0.95, Number(parsed.confidence.toFixed(2))))
@@ -930,6 +957,17 @@ function coerceEnum<T extends string>(value: unknown, allowed: readonly T[], fal
   return typeof value === "string" && allowed.includes(value as T) ? (value as T) : fallback;
 }
 
+function coerceOptionalEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T | undefined,
+) {
+  if (typeof value === "string" && allowed.includes(value as T)) {
+    return value as T;
+  }
+  return fallback;
+}
+
 function buildStructuredEvidence(input: {
   normalizedUserText: string;
   latestRun: ExecutionRunLike | null | undefined;
@@ -940,6 +978,8 @@ function buildStructuredEvidence(input: {
   reasoningDepth: CandidateReasoningDepthState;
   testingDiscipline: CandidateTestingDisciplineState;
   complexityRigor: CandidateComplexityRigorState;
+  echoLikely: boolean;
+  echoStrength: "low" | "medium" | "high";
 }) {
   const items: CandidateEvidenceItem[] = [];
   const mentionsInvariant = /\b(invariant|maintain|preserve|always true|after each step|before moving on)\b/.test(
@@ -1087,7 +1127,114 @@ function buildStructuredEvidence(input: {
     });
   }
 
+  if (input.echoLikely) {
+    items.push({
+      area: "reasoning",
+      issue: "The candidate echoed the interviewer question instead of giving a concrete answer.",
+      behavior:
+        input.echoStrength === "high"
+          ? "The latest candidate turn strongly mirrors the interviewer wording."
+          : "The latest candidate turn partially mirrors the interviewer wording.",
+      evidence:
+        input.echoStrength === "high"
+          ? "The response overlap with the interviewer question is high and introduces little new technical content."
+          : "The response repeats significant interviewer phrasing and adds limited answer-specific detail.",
+      impact: "Echo turns consume interview time without adding evaluable evidence.",
+      fix: "Answer in a forced format: pseudocode step, one test case, and final complexity in concise bullets.",
+    });
+  }
+
   return items.slice(0, 4);
+}
+
+function detectEchoResponse(transcripts: TranscriptLike[]): {
+  echoLikely: boolean;
+  echoStrength: "low" | "medium" | "high";
+  echoOverlapRatio: number;
+  referenceQuestion: string | null;
+} {
+  const lastUserIndex = findLastIndex(transcripts, (segment) => segment.speaker === "USER");
+  if (lastUserIndex < 0) {
+    return {
+      echoLikely: false,
+      echoStrength: "low",
+      echoOverlapRatio: 0,
+      referenceQuestion: null as string | null,
+    };
+  }
+
+  const lastAiIndex = findLastIndex(
+    transcripts.slice(0, lastUserIndex),
+    (segment) => segment.speaker === "AI",
+  );
+  if (lastAiIndex < 0) {
+    return {
+      echoLikely: false,
+      echoStrength: "low",
+      echoOverlapRatio: 0,
+      referenceQuestion: null as string | null,
+    };
+  }
+
+  const aiText = normalizeEchoText(transcripts[lastAiIndex]?.text ?? "");
+  const userText = normalizeEchoText(transcripts[lastUserIndex]?.text ?? "");
+  if (!aiText || !userText) {
+    return {
+      echoLikely: false,
+      echoStrength: "low",
+      echoOverlapRatio: 0,
+      referenceQuestion: null as string | null,
+    };
+  }
+
+  const aiTokens = aiText.split(" ").filter(Boolean);
+  const userTokens = userText.split(" ").filter(Boolean);
+  if (aiTokens.length < 5 || userTokens.length < 4) {
+    return {
+      echoLikely: false,
+      echoStrength: "low" as const,
+      echoOverlapRatio: 0,
+      referenceQuestion: transcripts[lastAiIndex]?.text ?? null,
+    };
+  }
+
+  const aiSet = new Set(aiTokens);
+  let overlapCount = 0;
+  for (const token of userTokens) {
+    if (aiSet.has(token)) {
+      overlapCount += 1;
+    }
+  }
+  const overlapRatio = overlapCount / Math.max(1, userTokens.length);
+  const introducesNewContentRatio =
+    userTokens.filter((token) => !aiSet.has(token)).length / Math.max(1, userTokens.length);
+  const echoLikely = overlapRatio >= 0.72 && introducesNewContentRatio <= 0.35;
+  const echoStrength: "low" | "medium" | "high" =
+    overlapRatio >= 0.85 ? "high" : overlapRatio >= 0.72 ? "medium" : "low";
+
+  return {
+    echoLikely,
+    echoStrength: echoLikely ? echoStrength : "low",
+    echoOverlapRatio: Number(overlapRatio.toFixed(2)),
+    referenceQuestion: transcripts[lastAiIndex]?.text ?? null,
+  };
+}
+
+function normalizeEchoText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[`"'.,!?;:()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findLastIndex<T>(list: T[], predicate: (item: T) => boolean) {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (predicate(list[i] as T)) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 function normalizeStructuredEvidenceItem(value: unknown): CandidateEvidenceItem | null {

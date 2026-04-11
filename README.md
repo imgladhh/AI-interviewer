@@ -26,6 +26,11 @@ This repo now has a working MVP-plus skeleton with:
 
 ## Recent Progress
 
+- Closed `Phase 5: Policy Optimization Lab`:
+  - policy regression now runs deterministic multi-turn micro-simulations with decision/reward timelines
+  - scenario-level comparison includes both score spread and reward spread
+  - added golden scenarios for `overconfident_wrong_answer` and `perfect_flow`
+  - `/admin` policy lab now shows reward gaps plus reward-driven tuning suggestions
 - Added stronger coding interview policy orchestration:
   - current stage is derived from transcripts, session events, and the latest code run
   - assistant turns receive explicit stage context plus policy context
@@ -911,6 +916,27 @@ Concrete work:
   - soft penalties
 - add decision stability / tie-breaking when the top two actions are too close
 
+Phase 1 status:
+- `UnifiedDecisionScore v1` is now wired into `decision_engine.ts` behind the existing proposal path, so every decision emits:
+  - a normalized action family
+  - total score
+  - score decomposition
+  - candidate score surface
+  - tie-break metadata when needed
+- hard masks and soft penalties are now explicit in score decomposition instead of remaining implicit in branching only
+- normalized action families now converge through one candidate set:
+  - `Probe`
+  - `Guide`
+  - `Unblock`
+  - `Advance`
+  - `Close`
+  - `Hold`
+- a stability threshold now preserves the current proposal family when the score edge is too small, reducing action jitter while the score model is still converging
+- `/admin` and `/report` now surface unified score decomposition, candidate score surface, and tie-break context for the latest interviewer decision
+- phase outcome:
+  - `Phase 1 (v1)` is considered complete for this roadmap cycle
+  - next focus shifts to `Phase 2: Reward System` for turn-level attribution and optimization loops
+
 Success criteria:
 - all decision paths converge through a single argmax model
 - `decision_engine` is no longer primarily governed by ad-hoc branching
@@ -940,6 +966,42 @@ Concrete work:
 - maintain a traceable chain:
   - `turn_id -> DecisionResult -> RewardResult`
 
+Status: `Completed`
+
+Phase 2 implementation summary:
+- added `Reward v1` scoring in `src/lib/assistant/reward.ts` with:
+  - `EvidenceGain`
+  - `Redundancy`
+  - `BadInterruption`
+  - `FlowPreservation`
+  - `CleanClosure`
+- evidence gain is now discretized across:
+  - reasoning
+  - implementation
+  - test
+  - debugging
+  - tradeoff
+- assistant-turn and assistant-turn/stream now emit `REWARD_RECORDED` events when a decision exists
+- reward events now carry trace metadata linking:
+  - `transcriptSegmentId`
+  - `decisionEventId`
+- reward diagnostics are surfaced in:
+  - `/admin` event descriptions and session timeline
+  - `/report` evidence timeline and session reward summary/trend
+- echo/non-answer handling is now integrated into the control path:
+  - candidate echo detection in signal extraction
+  - deterministic echo recovery prompts in decision logic
+  - replayable events:
+    - `CANDIDATE_ECHO_DETECTED`
+    - `ECHO_RECOVERY_PROMPTED`
+- policy regression now includes an `echo_recovery` scenario so the behavior is locked into scenario-based checks
+
+Exit criteria met:
+- bad behaviors now map to concrete penalties (for example repeated targets, interruption timing mistakes, and echo ignored cases)
+- the system can trace downstream quality via:
+  - `turn transcript -> decision event -> reward event`
+  - replay-visible reward components and penalties in `/admin` and `/report`
+
 Success criteria:
 - every bad behavior can be mapped to a concrete reward penalty
 - the system can explain which decision created a downstream problem
@@ -959,10 +1021,34 @@ Concrete work:
 - make closure irreversible as a hard invariant:
   - once in `WRAP_UP`, probing or reopening is forbidden
 
+Status: `Completed`
+
+Phase 3 implementation summary:
+- unified scoring now applies temporal probe decay after repeated recent probing streaks
+- unified scoring now applies stronger interruption penalties during coding/debugging flow for non-hold actions
+- unified scoring now increases probe value in idle + stalled/plateaued windows
+- wrap-up irreversibility is hardened at scoring level by hard-masking not only `Probe/Guide/Unblock` but also `Advance` families once in `WRAP_UP`
+- policy regression coverage now includes:
+  - `idle_stall_probe_boost`
+  - `wrap_up_irreversible`
+- temporal diagnostics are now attached to decision payloads:
+  - `temporalProbeStreak`
+  - `temporalProbeDecay`
+  - `temporalIdleLikely`
+  - `temporalIdleProbeBoost`
+  - `temporalCodingInterruptionPenalty`
+- `/admin` and `/report` now surface temporal decision signals, so timing behavior can be audited instead of inferred
+
 Success criteria:
 - interviews move forward naturally
 - the system does not get stuck in repetition loops
 - wrap-up stays closed once reached
+
+Exit criteria met:
+- repeated probing pressure now decays deterministically across recent probe streaks
+- interruption-heavy actions are penalized more aggressively during active coding/debugging flow
+- idle/stalled windows now raise probe value to prevent silent stalling loops
+- wrap-up closure is treated as irreversible at the unified scoring layer
 
 #### Phase 4: Policy as Weight Sets
 
@@ -975,6 +1061,24 @@ Concrete work:
 - parameterize policy into score weights
 - let `Candidate DNA` modulate those weights deterministically
 - compare policy behavior through score diffs on the same transcript
+
+Status: `Completed`
+
+Phase 4 implementation summary:
+- policy presets now include explicit decision-score weight sets (`scoreWeights`) per archetype in `policy-config`
+- unified decision scoring now consumes those weights for:
+  - core score components (`need`, `timing`, `value`, `closure`)
+  - temporal terms (`probe decay`, `idle probe boost`, `coding interruption penalty`)
+  - action-family bias and proposal-bias scaling
+- candidate DNA policy adaptation now deterministically modulates score weights in guided/challenging modes
+- shadow-policy evaluation now emits score-diff payloads (actual vs shadow action-family scores), and `/report` + `/admin` expose those diffs for inspection
+- policy regression lab now includes scenario-level score spread and per-archetype weight profile visibility for calibration sweeps
+- report generation now includes replayable shadow-policy snapshot history (with top score deltas), not only the latest point-in-time payload
+- latest decision views in `/admin` and `/report` now expose weight-profile metadata (core weights + dominant action bias + temporal weight knobs)
+
+Exit criteria met:
+- policy differences are visible in score composition, not just final wording
+- behavior differences are explainable and replayable from both latest state and timeline snapshots
 
 Success criteria:
 - policy differences are visible in score composition, not just final wording
@@ -998,6 +1102,34 @@ Concrete work:
   - stuck candidate
   - overconfident wrong answer
   - perfect flow
+
+Status: `Completed`
+
+Phase 5 implementation summary:
+- policy regression lab now runs deterministic multi-turn micro-simulations for each archetype
+- each result now includes a decision timeline with:
+  - turn
+  - action/target
+  - total score
+  - reward total
+  - reward penalties
+- scenario-level comparison now includes both:
+  - score spread
+  - reward spread
+- policy lab now includes reward-driven tuning suggestions derived from penalty hotspots
+- golden scenario set now explicitly includes:
+  - `overconfident_wrong_answer`
+  - `perfect_flow`
+- `/admin` policy lab now surfaces:
+  - average reward
+  - cumulative reward
+  - reward gap-from-best
+  - per-archetype decision timeline cards
+  - policy tuning suggestions with concrete weight-adjustment directions
+
+Exit criteria met:
+- policy tuning is no longer intuition-only because score/reward deltas and penalties are surfaced together
+- policy changes can be evaluated against stable scenario sets with deterministic multi-turn outputs
 
 Success criteria:
 - policy tuning is no longer intuition-only
@@ -1037,6 +1169,145 @@ It is about making the system:
 - optimizable
 - replayable
 
+### Generalization and Future Interview Modes
+
+The current system generalizes well at the control-plane level, but not yet at the task-semantics level.
+
+Practical interpretation:
+- the interviewer OS is reusable
+- the interview content model is still primarily optimized for algorithmic coding interviews
+
+#### What Already Generalizes Well
+
+These layers are strong candidates for reuse across future interview modes:
+- `Truth Engine`
+  - committed vs pending transcript boundaries
+  - correction chains
+  - committed-only downstream reads
+- `Memory / Ledger`
+  - evidence collection
+  - answered targets
+  - unresolved issues
+- `Intent / Trajectory`
+  - interviewer intent
+  - candidate trajectory
+  - flow / interruption reasoning
+- `Policy / Invariants`
+  - policy archetypes
+  - invariant overrides
+  - budget / anti-repetition / flow preservation
+- `Critic / Admin / Report`
+  - explainability
+  - replayability
+  - decision audit trails
+  - evidence-backed reporting
+- `Voice / Delivery`
+  - committed transcript alignment
+  - silence logic
+  - think-aloud protection
+
+In short:
+- the orchestration layer is portable
+- the interview-mode layer is not yet fully portable
+
+#### What Is Still Coding-Interview Specific
+
+These layers currently assume algorithmic problem-solving and would need adaptation for new interview types:
+- `signal_extractor`
+  - currently biased toward correctness, complexity, implementation, testing, and debugging
+- `pass_conditions`
+  - currently shaped around coding flow:
+    - implementation
+    - testing
+    - wrap-up
+- `rubric`
+  - currently strongest for:
+    - correctness
+    - complexity
+    - communication
+    - independence / coachability inside coding tasks
+- `editor / execution / starter code`
+  - currently assumes code writing and code execution as the primary workspace
+- `question bank schema`
+  - currently built around algorithmic problems and coding-oriented metadata
+
+#### If We Expand to System Design
+
+Likely reusable:
+- truth boundaries
+- policy / invariants
+- intent / trajectory
+- critic
+- snapshot / report / admin infrastructure
+
+Likely new or heavily adapted:
+- stage model
+  - clarify
+  - scope
+  - architecture
+  - deep dive
+  - bottlenecks
+  - tradeoffs
+  - wrap-up
+- signal model
+  - requirements coverage
+  - scale assumptions
+  - component decomposition
+  - bottleneck detection
+  - failure-mode reasoning
+- pass conditions
+  - requirements complete
+  - architecture coherent
+  - bottlenecks discussed
+  - tradeoffs justified
+- rubric
+  - architecture quality
+  - scalability reasoning
+  - operational thinking
+  - communication under ambiguity
+- room UI / workspace
+  - diagram-first or outline-first
+  - not code-editor-first
+
+#### If We Expand to ML System Design
+
+Everything above for system design still applies, plus ML-specific semantic layers:
+- data pipeline reasoning
+- feature freshness / training-serving consistency
+- offline vs online evaluation
+- model serving / latency / cost tradeoffs
+- drift / monitoring / retraining strategy
+- infra and product tradeoffs for ML systems
+
+That means ML system design should be treated as its own interview-mode adapter, not as a small variation of algorithmic coding mode.
+
+#### Expansion Principle
+
+Future interview modes should reuse:
+- truth
+- policy
+- intent
+- trajectory
+- critic
+- snapshots
+- report/admin infrastructure
+
+But they should define their own:
+- stage model
+- signal extractor
+- pass conditions
+- rubric
+- workspace / room UX
+
+#### Working Conclusion
+
+Current status:
+- platform generalization: strong
+- task-model generalization: partial
+
+So future expansion should not rewrite the interviewer OS.
+It should add a new mode adapter on top of the existing control plane.
+
 ### Follow-up TODOs
 
 - `Wrap-up closure cleanliness`
@@ -1046,6 +1317,26 @@ It is about making the system:
   - status:
     - `candidateDeclaredDone` / `implementationAlreadyDone` / `finalWrapUpDelivered` now feed memory + decision logic
     - regression coverage added so implementation done + summary done closes cleanly
+- `Code-implementation probe trigger strengthening`
+  - increase deterministic `Probe` priority when code-level risk signals appear, such as:
+    - execution failures
+    - missing boundary-case coverage
+    - mismatch between claimed complexity and actual implementation pattern
+  - add an advance/close guard so stage progression is blocked until at least one concrete implementation-focused follow-up has been asked when those signals are present
+  - status:
+    - pending
+- `Echo / question-repeat handling`
+  - when the candidate mostly repeats the interviewer question, classify the turn as `echo_or_non_answer` instead of treating it as neutral progress
+  - require an immediate recovery action:
+    - restate expected answer contract in one concise sentence
+    - force a concrete prompt shape (`give pseudocode`, `walk one test case`, or `state time-space complexity`)
+    - if repeated again, escalate pressure and narrow answer format
+  - log explicit events for replay and policy tuning:
+    - `CANDIDATE_ECHO_DETECTED`
+    - `ECHO_RECOVERY_PROMPTED`
+  - status:
+    - completed in baseline form (`echo detection + constrained recovery prompts + replay events`)
+    - keep tuning edge cases where candidates partially answer while repeating interviewer wording
 
 
 

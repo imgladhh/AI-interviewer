@@ -78,7 +78,7 @@ export type SessionSummary = {
 
 export type SessionTimelineItem = {
   id: string;
-  kind: "stage" | "signal" | "decision" | "intent" | "trajectory" | "critic" | "hint" | "code_run" | "transcript";
+  kind: "stage" | "signal" | "decision" | "reward" | "intent" | "trajectory" | "critic" | "hint" | "code_run" | "transcript";
   at: string;
   title: string;
   summary: string;
@@ -86,6 +86,11 @@ export type SessionTimelineItem = {
   urgency?: string | null;
   interruptionCost?: string | null;
   batchGroup?: string | null;
+  temporalProbeStreak?: number | null;
+  temporalProbeDecay?: number | null;
+  temporalIdleLikely?: boolean | null;
+  temporalIdleProbeBoost?: number | null;
+  temporalCodingInterruptionPenalty?: number | null;
   answeredTargets?: string[];
   collectedEvidence?: string[];
   unresolvedIssues?: string[];
@@ -104,6 +109,11 @@ export type SessionTimelineItem = {
   policyAdaptationReason?: string | null;
   blockedByInvariant?: string | null;
   decisionPathway?: string[];
+  normalizedAction?: string | null;
+  totalScore?: number | null;
+  tieBreaker?: string | null;
+  scoreBreakdown?: Array<{ key?: string; magnitude?: number; kind?: string; detail?: string }>;
+  candidateScores?: Array<{ action?: string; totalScore?: number; hardMasked?: boolean }>;
   justificationWhyNow?: string | null;
   justificationWhyThisAction?: string | null;
   supportingSignals?: string[];
@@ -398,10 +408,13 @@ function buildSessionTimeline(
         "CANDIDATE_TRANSCRIPT_REFINED",
         "SIGNAL_SNAPSHOT_RECORDED",
         "DECISION_RECORDED",
+        "REWARD_RECORDED",
         "INTENT_SNAPSHOT_RECORDED",
         "TRAJECTORY_SNAPSHOT_RECORDED",
         "CANDIDATE_DNA_RECORDED",
         "SHADOW_POLICY_EVALUATED",
+        "CANDIDATE_ECHO_DETECTED",
+        "ECHO_RECOVERY_PROMPTED",
         "CRITIC_VERDICT_RECORDED",
         "HINT_SERVED",
         "CODE_RUN_COMPLETED",
@@ -497,12 +510,43 @@ function buildSessionTimeline(
           urgency: stringValue(decision.urgency),
           interruptionCost: stringValue(decision.interruptionCost),
           batchGroup: stringValue(decision.batchGroup),
+          temporalProbeStreak: typeof decision.temporalProbeStreak === "number" ? decision.temporalProbeStreak : null,
+          temporalProbeDecay: typeof decision.temporalProbeDecay === "number" ? decision.temporalProbeDecay : null,
+          temporalIdleLikely: typeof decision.temporalIdleLikely === "boolean" ? decision.temporalIdleLikely : null,
+          temporalIdleProbeBoost:
+            typeof decision.temporalIdleProbeBoost === "number" ? decision.temporalIdleProbeBoost : null,
+          temporalCodingInterruptionPenalty:
+            typeof decision.temporalCodingInterruptionPenalty === "number"
+              ? decision.temporalCodingInterruptionPenalty
+              : null,
           policyArchetype: stringValue(decision.policyArchetype),
           policyMode: stringValue(decision.policyMode),
           policyAdaptationReason: stringValue(decision.policyAdaptationReason),
           blockedByInvariant: stringValue(decision.blockedByInvariant),
           decisionPathway: Array.isArray(decision.decisionPathway)
             ? decision.decisionPathway.filter((item): item is string => typeof item === "string")
+            : [],
+          normalizedAction: stringValue(decision.normalizedAction),
+          totalScore: typeof decision.totalScore === "number" ? decision.totalScore : null,
+          tieBreaker: stringValue(decision.tieBreaker),
+          scoreBreakdown: Array.isArray(decision.scoreBreakdown)
+            ? decision.scoreBreakdown
+                .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+                .map((item) => ({
+                  key: stringValue(item.key) ?? undefined,
+                  magnitude: typeof item.magnitude === "number" ? item.magnitude : undefined,
+                  kind: stringValue(item.kind) ?? undefined,
+                  detail: stringValue(item.detail) ?? undefined,
+                }))
+            : [],
+          candidateScores: Array.isArray(decision.candidateScores)
+            ? decision.candidateScores
+                .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+                .map((item) => ({
+                  action: stringValue(item.action) ?? undefined,
+                  totalScore: typeof item.totalScore === "number" ? item.totalScore : undefined,
+                  hardMasked: item.hardMasked === true,
+                }))
             : [],
           justificationWhyNow: stringValue(decision.justificationWhyNow),
           justificationWhyThisAction: stringValue(decision.justificationWhyThisAction),
@@ -512,6 +556,20 @@ function buildSessionTimeline(
           evidenceFocus: stringValue(decision.specificIssue) ?? stringValue(decision.target),
           answeredTargets: [],
           collectedEvidence: [],
+          payload,
+        };
+      }
+
+      if (event.eventType === "REWARD_RECORDED") {
+        const reward = asRecord(payload.reward);
+        const components = asRecord(reward.components);
+        const total = typeof reward.total === "number" ? reward.total.toFixed(2) : "n/a";
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "reward" as const,
+          at: event.eventTime.toISOString(),
+          title: "Turn reward",
+          summary: `total=${total}, evidence=${stringOrFallback(components.evidenceGain, "0")}, redundancy=${stringOrFallback(components.redundancy, "0")}`,
           payload,
         };
       }
@@ -537,6 +595,28 @@ function buildSessionTimeline(
                   score: typeof item.score === "number" ? item.score : undefined,
                 }))
             : [],
+          payload,
+        };
+      }
+
+      if (event.eventType === "CANDIDATE_ECHO_DETECTED") {
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "signal" as const,
+          at: event.eventTime.toISOString(),
+          title: "Candidate echo detected",
+          summary: `echo=${stringOrFallback(payload.echoStrength, "unknown")} overlap=${stringOrFallback(payload.echoOverlapRatio, "0")}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "ECHO_RECOVERY_PROMPTED") {
+        return {
+          id: `${event.eventType}-${event.eventTime.toISOString()}`,
+          kind: "decision" as const,
+          at: event.eventTime.toISOString(),
+          title: "Echo recovery prompted",
+          summary: `${stringOrFallback(payload.mode, "unknown")} attempt ${stringOrFallback(payload.attempt, "1")}`,
           payload,
         };
       }
@@ -725,6 +805,7 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
 
   if (eventType === "DECISION_RECORDED") {
     const decision = asRecord(payload.decision);
+    const scoreWeightProfile = asRecord(decision.scoreWeightProfile);
     const timing = [
       stringValue(decision.urgency) ? `urgency=${stringValue(decision.urgency)}` : null,
       stringValue(decision.interruptionCost)
@@ -734,10 +815,30 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
       stringValue(decision.policyArchetype) ? `policy=${stringValue(decision.policyArchetype)}` : null,
       stringValue(decision.policyMode) ? `mode=${stringValue(decision.policyMode)}` : null,
       stringValue(decision.blockedByInvariant) ? `blocked=${stringValue(decision.blockedByInvariant)}` : null,
+      typeof decision.temporalProbeStreak === "number" ? `probe_streak=${decision.temporalProbeStreak}` : null,
+      typeof decision.temporalProbeDecay === "number" ? `probe_decay=${decision.temporalProbeDecay}` : null,
+      decision.temporalIdleLikely === true ? "idle=true" : null,
+      typeof decision.temporalIdleProbeBoost === "number" ? `idle_probe_boost=${decision.temporalIdleProbeBoost}` : null,
+      typeof decision.temporalCodingInterruptionPenalty === "number"
+        ? `coding_interrupt_penalty=${decision.temporalCodingInterruptionPenalty}`
+        : null,
+      stringValue(scoreWeightProfile.dominantActionBias)
+        ? `weight_bias=${stringValue(scoreWeightProfile.dominantActionBias)}`
+        : null,
     ]
       .filter(Boolean)
       .join(", ");
     return `Interviewer decision: ${stringOrFallback(decision.action, "unknown action")} toward ${stringOrFallback(decision.target, "unknown target")}${timing ? ` (${timing})` : ""}.`;
+  }
+
+  if (eventType === "REWARD_RECORDED") {
+    const reward = asRecord(payload.reward);
+    const components = asRecord(reward.components);
+    const total = typeof reward.total === "number" ? reward.total.toFixed(2) : "n/a";
+    const penalties = Array.isArray(reward.penalties)
+      ? reward.penalties.filter((item): item is string => typeof item === "string")
+      : [];
+    return `Reward v1 recorded: total=${total}, evidence=${stringOrFallback(components.evidenceGain, "0")}, redundancy=${stringOrFallback(components.redundancy, "0")}, interruption=${stringOrFallback(components.badInterruption, "0")}${penalties.length > 0 ? `, penalties=${penalties.join("|")}` : ""}.`;
   }
 
   if (eventType === "INTENT_SNAPSHOT_RECORDED") {
@@ -749,6 +850,14 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
           .filter((item): item is string => typeof item === "string")
       : [];
     return `Interviewer intent: ${stringOrFallback(intent.intent, "unknown intent")} targeting ${stringOrFallback(intent.targetSignal, "general signal")} to ${stringOrFallback(intent.expectedOutcome, "collect signal")}${competing.length > 0 ? `. Alternatives considered: ${competing.join(", ")}` : ""}.`;
+  }
+
+  if (eventType === "CANDIDATE_ECHO_DETECTED") {
+    return `Candidate echo detected: overlap=${stringOrFallback(payload.echoOverlapRatio, "0")}, strength=${stringOrFallback(payload.echoStrength, "unknown")}.`;
+  }
+
+  if (eventType === "ECHO_RECOVERY_PROMPTED") {
+    return `Echo recovery prompted with ${stringOrFallback(payload.mode, "unknown")} (attempt ${stringOrFallback(payload.attempt, "1")}).`;
   }
 
   if (eventType === "TRAJECTORY_SNAPSHOT_RECORDED") {
@@ -768,7 +877,18 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
     const archetype = stringOrFallback(shadow.archetype, "unknown");
     const action = stringOrFallback(shadow.action, "unknown");
     const diff = Array.isArray(shadow.diff) ? shadow.diff.join(", ") : "none";
-    return `Shadow policy evaluated: ${archetype} would choose ${action}; diff=${diff}.`;
+    const topScoreDiff = Array.isArray(shadow.scoreDiff) && shadow.scoreDiff.length > 0
+      ? shadow.scoreDiff
+          .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+          .slice(0, 1)
+          .map((item) => {
+            const action = stringValue(item.action) ?? "unknown";
+            const delta = typeof item.delta === "number" ? item.delta.toFixed(2) : "n/a";
+            return `${action}:${delta}`;
+          })
+          .join(", ")
+      : null;
+    return `Shadow policy evaluated: ${archetype} would choose ${action}; diff=${diff}${topScoreDiff ? `; score_delta=${topScoreDiff}` : ""}.`;
   }
 
   if (eventType === "CRITIC_VERDICT_RECORDED") {

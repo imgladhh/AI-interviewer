@@ -286,6 +286,27 @@ describe("extractCandidateSignals", () => {
 
     expect(snapshot.confidence).toBeLessThan(0.5);
   });
+
+  it("detects echo-like candidate turns when the user mostly repeats the interviewer question", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "AI",
+          text: "What is your time and space complexity, and which tradeoff did you choose?",
+        },
+        {
+          speaker: "USER",
+          text: "What is your time and space complexity and which tradeoff did you choose?",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.echoLikely).toBe(true);
+    expect(snapshot.echoStrength).toMatch(/medium|high/);
+    expect(snapshot.structuredEvidence.some((item) => /echoed the interviewer question/i.test(item.issue))).toBe(true);
+  });
 });
 
 

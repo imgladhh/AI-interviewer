@@ -2,6 +2,7 @@
 import { fail, ok } from "@/lib/http";
 import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { generateAssistantTurn } from "@/lib/assistant/generate-turn";
+import { evaluateTurnReward } from "@/lib/assistant/reward";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { enforceSessionBudgetLimit } from "@/lib/session/budget-enforcement";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
@@ -150,6 +151,8 @@ export async function POST(_: Request, { params }: RouteContext) {
   });
 
   const events = [];
+  let decisionEventId: string | null = null;
+  let rewardResult: ReturnType<typeof evaluateTurnReward> | null = null;
 
   if (turn.signals) {
     const signalEvent = await prisma.sessionEvent.create({
@@ -164,6 +167,25 @@ export async function POST(_: Request, { params }: RouteContext) {
       },
     });
     events.push(signalEvent);
+
+    const signalPayload =
+      typeof turn.signals === "object" && turn.signals !== null ? (turn.signals as Record<string, unknown>) : {};
+    if (signalPayload.echoLikely === true) {
+      const echoEvent = await prisma.sessionEvent.create({
+        data: {
+          sessionId: id,
+          eventType: SESSION_EVENT_TYPES.CANDIDATE_ECHO_DETECTED,
+          payloadJson: {
+            stage: currentStage,
+            source: turn.source,
+            echoStrength: signalPayload.echoStrength ?? null,
+            echoOverlapRatio: signalPayload.echoOverlapRatio ?? null,
+            referenceQuestion: signalPayload.echoReferenceQuestion ?? null,
+          },
+        },
+      });
+      events.push(echoEvent);
+    }
   }
 
   if (turn.decision) {
@@ -179,6 +201,26 @@ export async function POST(_: Request, { params }: RouteContext) {
       },
     });
     events.push(decisionEvent);
+    decisionEventId = decisionEvent.id;
+
+    const decisionPayload =
+      typeof turn.decision === "object" && turn.decision !== null ? (turn.decision as Record<string, unknown>) : {};
+    if (typeof decisionPayload.echoRecoveryMode === "string") {
+      const echoRecoveryEvent = await prisma.sessionEvent.create({
+        data: {
+          sessionId: id,
+          eventType: SESSION_EVENT_TYPES.ECHO_RECOVERY_PROMPTED,
+          payloadJson: {
+            stage: currentStage,
+            source: turn.source,
+            mode: decisionPayload.echoRecoveryMode,
+            attempt: decisionPayload.echoRecoveryAttempt ?? null,
+            target: decisionPayload.target ?? null,
+          },
+        },
+      });
+      events.push(echoRecoveryEvent);
+    }
   }
 
   if (turn.intent) {
@@ -256,6 +298,34 @@ export async function POST(_: Request, { params }: RouteContext) {
     events.push(criticEvent);
   }
 
+  if (turn.decision) {
+    rewardResult = evaluateTurnReward({
+      stage: currentStage,
+      decision: turn.decision,
+      criticVerdict: turn.criticVerdict ?? null,
+      recentEvents: session.events.map((event) => ({
+        eventType: event.eventType,
+        payloadJson: event.payloadJson,
+      })),
+    });
+    const rewardEvent = await prisma.sessionEvent.create({
+      data: {
+        sessionId: id,
+        eventType: SESSION_EVENT_TYPES.REWARD_RECORDED,
+        payloadJson: {
+          stage: currentStage,
+          source: turn.source,
+          reward: rewardResult,
+          trace: {
+            transcriptSegmentId: transcript.id,
+            decisionEventId,
+          },
+        },
+      },
+    });
+    events.push(rewardEvent);
+  }
+
   await persistSessionSnapshots({
     sessionId: id,
     stage: currentStage,
@@ -283,6 +353,7 @@ export async function POST(_: Request, { params }: RouteContext) {
           intent: turn.intent ?? null,
           trajectory: turn.trajectory ?? null,
           criticVerdict: turn.criticVerdict ?? null,
+          reward: rewardResult,
         },
       },
   });
@@ -370,6 +441,7 @@ export async function POST(_: Request, { params }: RouteContext) {
       intent: turn.intent ?? null,
       trajectory: turn.trajectory ?? null,
       criticVerdict: turn.criticVerdict ?? null,
+      reward: rewardResult,
       providerFailure: turn.providerFailure ?? null,
     },
   });

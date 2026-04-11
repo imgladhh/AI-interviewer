@@ -2,6 +2,7 @@
 import { fail } from "@/lib/http";
 import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { streamAssistantTurn } from "@/lib/assistant/generate-turn";
+import { evaluateTurnReward } from "@/lib/assistant/reward";
 import { deriveCurrentCodingStage } from "@/lib/assistant/stages";
 import { enforceSessionBudgetLimit } from "@/lib/session/budget-enforcement";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
@@ -234,6 +235,8 @@ export async function POST(request: Request, { params }: RouteContext) {
           eventTime?: Date;
           payloadJson?: unknown;
         }> = [];
+        let decisionEventId: string | null = null;
+        let rewardResult: ReturnType<typeof evaluateTurnReward> | null = null;
 
         if (finalTurn.signals) {
           const signalEvent = await prisma.sessionEvent.create({
@@ -248,6 +251,27 @@ export async function POST(request: Request, { params }: RouteContext) {
             },
           });
           events.push(signalEvent);
+
+          const signalPayload =
+            typeof finalTurn.signals === "object" && finalTurn.signals !== null
+              ? (finalTurn.signals as Record<string, unknown>)
+              : {};
+          if (signalPayload.echoLikely === true) {
+            const echoEvent = await prisma.sessionEvent.create({
+              data: {
+                sessionId: id,
+                eventType: SESSION_EVENT_TYPES.CANDIDATE_ECHO_DETECTED,
+                payloadJson: {
+                  stage: currentStage,
+                  source: finalTurn.source,
+                  echoStrength: signalPayload.echoStrength ?? null,
+                  echoOverlapRatio: signalPayload.echoOverlapRatio ?? null,
+                  referenceQuestion: signalPayload.echoReferenceQuestion ?? null,
+                },
+              },
+            });
+            events.push(echoEvent);
+          }
         }
 
         if (finalTurn.decision) {
@@ -263,6 +287,28 @@ export async function POST(request: Request, { params }: RouteContext) {
             },
           });
           events.push(decisionEvent);
+          decisionEventId = decisionEvent.id;
+
+          const decisionPayload =
+            typeof finalTurn.decision === "object" && finalTurn.decision !== null
+              ? (finalTurn.decision as Record<string, unknown>)
+              : {};
+          if (typeof decisionPayload.echoRecoveryMode === "string") {
+            const echoRecoveryEvent = await prisma.sessionEvent.create({
+              data: {
+                sessionId: id,
+                eventType: SESSION_EVENT_TYPES.ECHO_RECOVERY_PROMPTED,
+                payloadJson: {
+                  stage: currentStage,
+                  source: finalTurn.source,
+                  mode: decisionPayload.echoRecoveryMode,
+                  attempt: decisionPayload.echoRecoveryAttempt ?? null,
+                  target: decisionPayload.target ?? null,
+                },
+              },
+            });
+            events.push(echoRecoveryEvent);
+          }
         }
 
         if (finalTurn.intent) {
@@ -340,6 +386,34 @@ export async function POST(request: Request, { params }: RouteContext) {
           events.push(criticEvent);
         }
 
+        if (finalTurn.decision) {
+          rewardResult = evaluateTurnReward({
+            stage: currentStage,
+            decision: finalTurn.decision,
+            criticVerdict: finalTurn.criticVerdict ?? null,
+            recentEvents: session.events.map((event) => ({
+              eventType: event.eventType,
+              payloadJson: event.payloadJson,
+            })),
+          });
+          const rewardEvent = await prisma.sessionEvent.create({
+            data: {
+              sessionId: id,
+              eventType: SESSION_EVENT_TYPES.REWARD_RECORDED,
+              payloadJson: {
+                stage: currentStage,
+                source: finalTurn.source,
+                reward: rewardResult,
+                trace: {
+                  transcriptSegmentId: transcript.id,
+                  decisionEventId,
+                },
+              },
+            },
+          });
+          events.push(rewardEvent);
+        }
+
         await persistSessionSnapshots({
           sessionId: id,
           stage: currentStage,
@@ -367,6 +441,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 intent: finalTurn.intent ?? null,
                 trajectory: finalTurn.trajectory ?? null,
                 providerFailure: finalTurn.providerFailure ?? null,
+                reward: rewardResult,
               },
             },
         });
@@ -456,6 +531,7 @@ export async function POST(request: Request, { params }: RouteContext) {
                 intent: finalTurn.intent ?? null,
                 trajectory: finalTurn.trajectory ?? null,
                 criticVerdict: finalTurn.criticVerdict ?? null,
+                reward: rewardResult,
                 providerFailure: finalTurn.providerFailure ?? null,
               },
             })}\n\n`,

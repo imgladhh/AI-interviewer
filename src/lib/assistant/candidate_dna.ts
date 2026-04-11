@@ -209,6 +209,26 @@ export function adaptPolicyToCandidateDna(
           maxHintLevel: Math.min(3, policyConfig.hints.maxHintLevel + 1),
           rescueModeBias: clamp01(policyConfig.hints.rescueModeBias + 0.2),
         },
+        scoreWeights: {
+          ...policyConfig.scoreWeights,
+          need: clampWeight(policyConfig.scoreWeights.need - 0.08),
+          timing: clampWeight(policyConfig.scoreWeights.timing + 0.1),
+          value: clampWeight(policyConfig.scoreWeights.value - 0.08),
+          closure: clampWeight(policyConfig.scoreWeights.closure + 0.02),
+          proposalBias: clampWeight(policyConfig.scoreWeights.proposalBias + 0.08),
+          temporalProbeDecay: clampWeight(policyConfig.scoreWeights.temporalProbeDecay + 0.1),
+          temporalIdleProbeBoost: clampWeight(policyConfig.scoreWeights.temporalIdleProbeBoost - 0.08),
+          temporalCodingInterruptionPenalty: clampWeight(
+            policyConfig.scoreWeights.temporalCodingInterruptionPenalty + 0.12,
+          ),
+          actionBias: {
+            ...policyConfig.scoreWeights.actionBias,
+            Probe: clampActionBias(policyConfig.scoreWeights.actionBias.Probe - 0.08),
+            Guide: clampActionBias(policyConfig.scoreWeights.actionBias.Guide + 0.08),
+            Unblock: clampActionBias(policyConfig.scoreWeights.actionBias.Unblock + 0.06),
+            Hold: clampActionBias(policyConfig.scoreWeights.actionBias.Hold + 0.05),
+          },
+        },
       },
     };
   }
@@ -239,6 +259,33 @@ export function adaptPolicyToCandidateDna(
         maxHintLevel: Math.max(1, policyConfig.hints.maxHintLevel - 1),
         rescueModeBias: clamp01(policyConfig.hints.rescueModeBias - 0.18),
       },
+      scoreWeights: {
+        ...policyConfig.scoreWeights,
+        need: clampWeight(policyConfig.scoreWeights.need + 0.08),
+        timing: clampWeight(policyConfig.scoreWeights.timing - 0.08),
+        value: clampWeight(policyConfig.scoreWeights.value + 0.12),
+        closure: clampWeight(policyConfig.scoreWeights.closure + 0.05),
+        proposalBias: clampWeight(policyConfig.scoreWeights.proposalBias - 0.06),
+        temporalProbeDecay: clampWeight(policyConfig.scoreWeights.temporalProbeDecay - 0.08),
+        temporalIdleProbeBoost: clampWeight(policyConfig.scoreWeights.temporalIdleProbeBoost + 0.08),
+        temporalCodingInterruptionPenalty: clampWeight(
+          policyConfig.scoreWeights.temporalCodingInterruptionPenalty - 0.1,
+        ),
+        actionBias: {
+          ...policyConfig.scoreWeights.actionBias,
+          Probe: clampActionBias(policyConfig.scoreWeights.actionBias.Probe + 0.08),
+          Advance: clampActionBias(policyConfig.scoreWeights.actionBias.Advance + 0.04),
+          Hold: clampActionBias(policyConfig.scoreWeights.actionBias.Hold - 0.06),
+        },
+      },
     },
   };
+}
+
+function clampWeight(value: number) {
+  return Math.max(0.65, Math.min(1.35, value));
+}
+
+function clampActionBias(value: number) {
+  return Math.max(-0.25, Math.min(0.25, value));
 }

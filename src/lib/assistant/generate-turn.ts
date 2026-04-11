@@ -112,6 +112,12 @@ type ShadowPolicyEvaluation = {
   timing?: CandidateDecision["timing"];
   reason: string;
   diff: Array<"action" | "target" | "pressure" | "timing">;
+  scoreDiff?: Array<{
+    action: string;
+    actualScore: number;
+    shadowScore: number;
+    delta: number;
+  }>;
 };
 
 const PROVIDER_COOLDOWN_MS = 90_000;
@@ -1946,7 +1952,37 @@ function evaluateShadowPolicy(
     timing: shadowDecision.timing,
     reason: shadowDecision.reason,
     diff,
+    scoreDiff: buildScoreDiff(actualDecision, shadowDecision),
   };
+}
+
+function buildScoreDiff(
+  actualDecision: CandidateDecision,
+  shadowDecision: CandidateDecision,
+) {
+  const toMap = (decision: CandidateDecision) =>
+    new Map(
+      (decision.candidateScores ?? [])
+        .filter((item) => typeof item.action === "string" && typeof item.totalScore === "number")
+        .map((item) => [String(item.action), Number(item.totalScore)] as const),
+    );
+  const actual = toMap(actualDecision);
+  const shadow = toMap(shadowDecision);
+  const allActions = [...new Set([...actual.keys(), ...shadow.keys()])];
+
+  return allActions
+    .map((action) => {
+      const actualScore = actual.get(action) ?? 0;
+      const shadowScore = shadow.get(action) ?? 0;
+      return {
+        action,
+        actualScore: Number(actualScore.toFixed(2)),
+        shadowScore: Number(shadowScore.toFixed(2)),
+        delta: Number((actualScore - shadowScore).toFixed(2)),
+      };
+    })
+    .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+    .slice(0, 6);
 }
 
 async function applyCriticPass(

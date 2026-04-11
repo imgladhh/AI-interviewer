@@ -195,6 +195,26 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/blocked=flow_preservation/i);
   });
 
+  it("describes reward events in a readable way", () => {
+    const description = buildSessionEventDescription("REWARD_RECORDED", {
+      reward: {
+        total: 0.42,
+        components: {
+          evidenceGain: 0.4,
+          redundancy: 0.1,
+          badInterruption: 0,
+          flowPreservation: 0.1,
+          cleanClosure: 0,
+        },
+        penalties: ["repeated_target"],
+      },
+    });
+
+    expect(description).toMatch(/reward v1 recorded/i);
+    expect(description).toMatch(/total=0.42/i);
+    expect(description).toMatch(/penalties=repeated_target/i);
+  });
+
   it("mentions provider fallback details for AI replies", () => {
     const description = buildSessionEventDescription("AI_SPOKE", {
       source: "fallback",
@@ -282,6 +302,36 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/trajectory estimate/i);
     expect(description).toMatch(/steady_progress/i);
     expect(description).toMatch(/interruption=high/i);
+  });
+
+  it("includes shadow-policy score delta hints when available", () => {
+    const description = buildSessionEventDescription("SHADOW_POLICY_EVALUATED", {
+      shadowPolicy: {
+        archetype: "bar_raiser",
+        action: "probe_tradeoff",
+        diff: ["action"],
+        scoreDiff: [{ action: "Probe", delta: 0.41 }],
+      },
+    });
+
+    expect(description).toMatch(/score_delta/i);
+    expect(description).toMatch(/Probe:0.41/);
+  });
+
+  it("describes echo detection and recovery events", () => {
+    const detected = buildSessionEventDescription("CANDIDATE_ECHO_DETECTED", {
+      echoStrength: "high",
+      echoOverlapRatio: 0.91,
+    });
+    const recovered = buildSessionEventDescription("ECHO_RECOVERY_PROMPTED", {
+      mode: "narrow_format",
+      attempt: 2,
+    });
+
+    expect(detected).toMatch(/echo detected/i);
+    expect(detected).toMatch(/0.91/i);
+    expect(recovered).toMatch(/echo recovery prompted/i);
+    expect(recovered).toMatch(/attempt 2/i);
   });
 
   it("surfaces auto-captured evidence in critic descriptions", () => {

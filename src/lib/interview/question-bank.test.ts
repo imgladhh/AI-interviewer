@@ -3,7 +3,7 @@ import { QUESTION_BANK, getQuestionPromptByTitle } from "@/lib/interview/questio
 
 describe("question bank", () => {
   it("contains a meaningful curated set of questions", () => {
-    expect(QUESTION_BANK.length).toBeGreaterThanOrEqual(100);
+    expect(QUESTION_BANK.length).toBeGreaterThanOrEqual(300);
   });
 
   it("uses unique slugs", () => {

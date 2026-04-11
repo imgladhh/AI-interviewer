@@ -64,6 +64,14 @@ export type CandidateDecisionAction =
   | "probe_tradeoff"
   | "hold_and_listen";
 
+export type UnifiedDecisionAction =
+  | "Probe"
+  | "Guide"
+  | "Unblock"
+  | "Advance"
+  | "Close"
+  | "Hold";
+
 export type CandidateDecisionTarget =
   | "understanding"
   | "approach"
@@ -79,6 +87,7 @@ export type CandidateDecisionTarget =
 
 export type CandidateDecision = {
   action: CandidateDecisionAction;
+  normalizedAction?: UnifiedDecisionAction;
   target: CandidateDecisionTarget;
   intent?: InterviewerIntent;
   intentReason?: string;
@@ -97,6 +106,19 @@ export type CandidateDecision = {
   policyMode?: "persona_default" | "guided" | "balanced" | "challenging";
   policyAdaptationReason?: string;
   decisionPathway?: string[];
+  totalScore?: number;
+  scoreBreakdown?: Array<{
+    key: string;
+    magnitude: number;
+    kind: "signal" | "hard_mask" | "soft_penalty" | "tie_breaker";
+    detail: string;
+  }>;
+  candidateScores?: Array<{
+    action: UnifiedDecisionAction;
+    totalScore: number;
+    hardMasked?: boolean;
+  }>;
+  tieBreaker?: string;
   justificationWhyNow?: string;
   justificationWhyThisAction?: string;
   justificationWhyNotAlternatives?: string[];
@@ -112,9 +134,28 @@ export type CandidateDecision = {
   evidenceImportance?: EvidenceImportance;
   batchable?: boolean;
   batchGroup?: string;
+  temporalProbeStreak?: number;
+  temporalProbeDecay?: number;
+  temporalIdleLikely?: boolean;
+  temporalIdleProbeBoost?: number;
+  temporalCodingInterruptionPenalty?: number;
+  scoreWeightProfile?: {
+    need: number;
+    timing: number;
+    value: number;
+    closure: number;
+    proposalBias: number;
+    temporalProbeDecay: number;
+    temporalIdleProbeBoost: number;
+    temporalCodingInterruptionPenalty: number;
+    dominantActionBias: string;
+    actionBiasSpread: number;
+  };
   question: string;
   reason: string;
   confidence: number;
+  echoRecoveryMode?: "restate_contract" | "constrained_prompt" | "narrow_format";
+  echoRecoveryAttempt?: number;
   targetCodeLine?: string;
   specificIssue?: string;
   expectedAnswer?: string;
@@ -152,7 +193,7 @@ export function makeCandidateDecision(input: {
   policy: CodingInterviewPolicy;
   policyConfig?: PolicyConfig;
   signals: CandidateSignalSnapshot;
-  recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>;
+  recentEvents?: Array<{ eventType: string; eventTime?: Date | string; payloadJson?: unknown }>;
   latestExecutionRun?: ExecutionRunLike | null;
   intent?: IntentDecision;
   trajectory?: TrajectoryEstimate;
@@ -230,7 +271,7 @@ export function makeCandidateDecision(input: {
       resolvedIntent.intent === "close"
         ? false
         : !(resolvedTrajectory.interruptionCost === "high" && resolvedTrajectory.evidenceGainIfAskNow === "low");
-    return {
+    const enrichedDecision: CandidateDecision = {
       ...decision,
       intent: resolvedIntent.intent,
       intentReason: resolvedIntent.reason,
@@ -259,7 +300,60 @@ export function makeCandidateDecision(input: {
       missingPassConditions: relevantPassAssessment.missing,
       passConditionTopic: relevantPassAssessment.topic,
     };
+    return applyUnifiedDecisionScore(enrichedDecision, {
+      currentStage,
+      signals,
+      memory: ledger,
+      recentEvents: input.recentEvents ?? [],
+      latestExecutionRun,
+      intent: resolvedIntent,
+      trajectory: resolvedTrajectory,
+      passAssessment,
+      policyConfig,
+    });
   };
+
+  const recentEchoEvents = countRecentEventType(input.recentEvents ?? [], "CANDIDATE_ECHO_DETECTED");
+  const echoRecoveryAttempt = Math.min(2, recentEchoEvents);
+  if (signals.echoLikely) {
+    if (echoRecoveryAttempt >= 1) {
+      return attachIntentTrajectory({
+        action: "ask_for_clarification",
+        target: "reasoning",
+        question:
+          "Please answer directly in exactly two sentences: sentence 1 states your algorithm and why it works; sentence 2 states time and space complexity.",
+        reason:
+          "The candidate appears to be repeating the interviewer question, so the interviewer should force a narrow answer format and escalate pressure after repeated echo turns.",
+        confidence: 0.9,
+        echoRecoveryMode: "narrow_format",
+        echoRecoveryAttempt: echoRecoveryAttempt + 1,
+        targetCodeLine: "one concrete algorithm choice and one explicit complexity statement",
+        specificIssue: "Candidate response echoed interviewer wording instead of providing a direct answer.",
+        expectedAnswer:
+          "Two sentences only: one concise algorithm explanation and one explicit time/space complexity line.",
+        suggestedStage: currentStage,
+        policyAction: policy.recommendedAction,
+      });
+    }
+
+    return attachIntentTrajectory({
+      action: "ask_for_clarification",
+      target: "reasoning",
+      question:
+        "You repeated my question. Give a concrete answer in this format: (1) pseudocode in 2-3 steps, (2) one edge-case test with expected output, (3) time and space complexity.",
+      reason:
+        "The latest candidate turn looks like an echo/non-answer, so the interviewer should restate the answer contract and force a concrete response shape.",
+      confidence: 0.86,
+      echoRecoveryMode: "constrained_prompt",
+      echoRecoveryAttempt: echoRecoveryAttempt + 1,
+      targetCodeLine: "the next concrete pseudocode steps and one edge-case expected output",
+      specificIssue: "Candidate response echoed interviewer prompt without adding evaluable evidence.",
+      expectedAnswer:
+        "A constrained three-part answer: pseudocode steps, one boundary test with expected output, and explicit complexity.",
+      suggestedStage: currentStage,
+      policyAction: policy.recommendedAction,
+    });
+  }
 
   if (
     !latestExecutionRun &&
@@ -1269,6 +1363,449 @@ export function makeCandidateDecision(input: {
   });
 }
 
+type UnifiedScoreContext = {
+  currentStage: CodingInterviewStage;
+  signals: CandidateSignalSnapshot;
+  memory: ReturnType<typeof buildMemoryLedger>;
+  recentEvents: Array<{ eventType: string; eventTime?: Date | string; payloadJson?: unknown }>;
+  latestExecutionRun?: ExecutionRunLike | null;
+  intent: IntentDecision;
+  trajectory: TrajectoryEstimate;
+  passAssessment: ReturnType<typeof assessPassConditions>;
+  policyConfig?: PolicyConfig;
+};
+
+type UnifiedScoreReason = NonNullable<CandidateDecision["scoreBreakdown"]>[number];
+
+function applyUnifiedDecisionScore(
+  decision: CandidateDecision,
+  context: UnifiedScoreContext,
+): CandidateDecision {
+  const proposalFamily = mapDecisionToUnifiedAction(decision.action);
+  const scoreWeights = resolveScoreWeights(context);
+  const temporal = assessTemporalDynamics(context);
+  const scoreTable = buildUnifiedDecisionScores(proposalFamily, context, decision.target);
+  const sorted = [...scoreTable].sort((left, right) => right.totalScore - left.totalScore);
+  const best = sorted[0];
+  const second = sorted[1];
+  const proposalScore = scoreTable.find((item) => item.action === proposalFamily) ?? best;
+  const epsilon = 0.12;
+  const convergenceThreshold = 0.45;
+
+  const tieBreaker =
+    best && second && Math.abs(best.totalScore - second.totalScore) < epsilon
+      ? buildUnifiedTieBreaker(best.action, second.action, proposalFamily, context)
+      : undefined;
+
+  const rawWinner = tieBreaker ? resolveTieBreakerFamily(tieBreaker, proposalFamily, best.action, second?.action) : best.action;
+  const shouldKeepProposal =
+    rawWinner !== proposalFamily &&
+    Number.isFinite(proposalScore.totalScore) &&
+    Number.isFinite(best.totalScore) &&
+    best.totalScore - proposalScore.totalScore < convergenceThreshold;
+  const chosenFamily = shouldKeepProposal ? proposalFamily : rawWinner;
+  const chosenScore = scoreTable.find((item) => item.action === chosenFamily) ?? best;
+  const familyAlignedDecision = adaptDecisionToUnifiedAction(decision, chosenFamily, context.currentStage);
+  const effectiveTieBreaker = shouldKeepProposal
+    ? `The unified score difference stayed below ${convergenceThreshold.toFixed(2)}, so the engine preserved the current proposal family (${proposalFamily}) for stability.`
+    : tieBreaker;
+
+  return {
+    ...familyAlignedDecision,
+    normalizedAction: chosenFamily,
+    totalScore: chosenScore.totalScore,
+    scoreBreakdown: effectiveTieBreaker
+      ? [...chosenScore.reasons, { key: "tie_breaker", magnitude: 0, kind: "tie_breaker", detail: effectiveTieBreaker }]
+      : chosenScore.reasons,
+    candidateScores: sorted.map((item) => ({
+      action: item.action,
+      totalScore: item.totalScore,
+      hardMasked: item.hardMasked,
+    })),
+    tieBreaker: effectiveTieBreaker,
+    reason:
+      chosenFamily === proposalFamily
+        ? decision.reason
+        : summarizeScoreReasons(chosenFamily, chosenScore.reasons, effectiveTieBreaker),
+    temporalProbeStreak: temporal.recentProbeStreak,
+    temporalProbeDecay: temporal.probeNeedDecay,
+    temporalIdleLikely: temporal.idleLikely,
+    temporalIdleProbeBoost: temporal.idleProbeBoost,
+    temporalCodingInterruptionPenalty: temporal.codingInterruptionPenalty,
+    scoreWeightProfile: buildScoreWeightProfile(scoreWeights),
+  };
+}
+
+function buildUnifiedDecisionScores(
+  proposalFamily: UnifiedDecisionAction,
+  context: UnifiedScoreContext,
+  target: CandidateDecisionTarget,
+) {
+  const families: UnifiedDecisionAction[] = ["Probe", "Guide", "Unblock", "Advance", "Close", "Hold"];
+  return families.map((family) => scoreUnifiedAction(family, proposalFamily, context, target));
+}
+
+function scoreUnifiedAction(
+  action: UnifiedDecisionAction,
+  proposalFamily: UnifiedDecisionAction,
+  context: UnifiedScoreContext,
+  target: CandidateDecisionTarget,
+) {
+  const reasons: UnifiedScoreReason[] = [];
+  let total = 0;
+  let hardMasked = false;
+  const temporal = assessTemporalDynamics(context);
+  const scoreWeights = resolveScoreWeights(context);
+
+  const addSignal = (key: string, magnitude: number, detail: string) => {
+    const normalized = clampScore(magnitude);
+    total += normalized;
+    reasons.push({ key, magnitude: normalized, kind: "signal", detail });
+  };
+
+  const addPenalty = (key: string, magnitude: number, detail: string) => {
+    const normalized = clampScore(Math.abs(magnitude));
+    total -= normalized;
+    reasons.push({ key, magnitude: -normalized, kind: "soft_penalty", detail });
+  };
+
+  const hardMask = (key: string, detail: string) => {
+    hardMasked = true;
+    total = Number.NEGATIVE_INFINITY;
+    reasons.push({ key, magnitude: Number.NEGATIVE_INFINITY, kind: "hard_mask", detail });
+  };
+
+  if (
+    context.currentStage === "WRAP_UP" &&
+    (action === "Probe" || action === "Guide" || action === "Unblock" || action === "Advance")
+  ) {
+    hardMask("wrap_up_closed", "Wrap-up is irreversible, so probing or reopening paths are forbidden.");
+  }
+
+  if (
+    !hardMasked &&
+    context.memory.answeredTargets.includes(target) &&
+    action === "Probe"
+  ) {
+    hardMask("anti_repetition", "The target already has sufficient evidence, so repeated probing is blocked.");
+  }
+
+  if (
+    !hardMasked &&
+    context.trajectory.candidateTrajectory === "steady_progress" &&
+    (context.currentStage === "IMPLEMENTATION" || context.currentStage === "DEBUGGING") &&
+    action !== "Hold"
+  ) {
+    addPenalty("flow_preservation", 0.6, "The candidate is in active coding flow, so interruption-heavy actions are penalized.");
+  }
+
+  if (!hardMasked) {
+    addSignal(
+      "need",
+      scoreNeed(action, context) * scoreWeights.need,
+      "Need score derived from candidate trajectory, execution state, and unresolved evidence pressure.",
+    );
+    addSignal(
+      "timing",
+      scoreTiming(action, context) * scoreWeights.timing,
+      "Timing score derived from interruption cost and current stage flow.",
+    );
+    addSignal(
+      "value",
+      scoreValue(action, context) * scoreWeights.value,
+      "Value score derived from expected evidence gain and answered-target saturation.",
+    );
+    addSignal(
+      "closure",
+      scoreClosure(action, context) * scoreWeights.closure,
+      "Closure score derived from wrap-up state, closure candidacy, and pass completion.",
+    );
+
+    if (proposalFamily === action) {
+      addSignal(
+        "proposal_bias",
+        0.18 * scoreWeights.proposalBias,
+        "The current policy proposal is slightly favored to keep the first convergence pass stable.",
+      );
+    }
+
+    const actionBias = scoreWeights.actionBias[action];
+    if (Math.abs(actionBias) >= 0.01) {
+      addSignal(
+        "policy_action_bias",
+        actionBias,
+        "Policy weight set applies deterministic action-family bias for this archetype/mode.",
+      );
+    }
+
+    if (action === "Unblock" && context.intent.intent !== "unblock" && context.trajectory.interventionValue !== "high") {
+      addPenalty("premature_rescue", 0.28, "Rescue is penalized when the trajectory does not show strong need for intervention.");
+    }
+
+    if (action === "Close" && context.intent.intent !== "close" && context.currentStage !== "WRAP_UP") {
+      addPenalty("premature_close", 0.3, "Closing is penalized before the topic is clearly saturated.");
+    }
+
+    if (action === "Probe" && temporal.probeNeedDecay > 0) {
+      addPenalty(
+        "temporal_probe_decay",
+        temporal.probeNeedDecay * scoreWeights.temporalProbeDecay,
+        `Probe need decays after repeated recent probing (streak=${temporal.recentProbeStreak}).`,
+      );
+    }
+
+    if (action === "Probe" && temporal.idleProbeBoost > 0) {
+      addSignal(
+        "temporal_idle_probe_boost",
+        temporal.idleProbeBoost * scoreWeights.temporalIdleProbeBoost,
+        "Probe value rises when the candidate appears idle/stalled and evidence collection has cooled.",
+      );
+    }
+
+    if (action !== "Hold" && temporal.codingInterruptionPenalty > 0) {
+      addPenalty(
+        "temporal_coding_interrupt_penalty",
+        temporal.codingInterruptionPenalty * scoreWeights.temporalCodingInterruptionPenalty,
+        "Interruption penalty rises during active coding/debugging flow to preserve momentum.",
+      );
+    }
+  }
+
+  return { action, totalScore: hardMasked ? Number.NEGATIVE_INFINITY : total, reasons, hardMasked };
+}
+
+function scoreNeed(action: UnifiedDecisionAction, context: UnifiedScoreContext) {
+  const latestRunFailed =
+    context.latestExecutionRun?.status === "FAILED" ||
+    context.latestExecutionRun?.status === "ERROR" ||
+    context.latestExecutionRun?.status === "TIMEOUT";
+
+  switch (action) {
+    case "Probe":
+      return latestRunFailed || context.signals.reasoningDepth === "thin" ? 0.7 : 0.15;
+    case "Guide":
+      return context.signals.communication === "unclear" || context.signals.confidence < 0.55 ? 0.65 : 0.2;
+    case "Unblock":
+      return context.trajectory.candidateTrajectory === "stuck" || context.trajectory.candidateTrajectory === "collapsing" ? 0.9 : 0.1;
+    case "Advance":
+      return context.intent.intent === "advance" ? 0.8 : context.signals.readyToCode ? 0.45 : -0.1;
+    case "Close":
+      return context.intent.intent === "close" ? 0.95 : context.currentStage === "WRAP_UP" ? 0.8 : -0.25;
+    case "Hold":
+      return context.trajectory.candidateTrajectory === "steady_progress" || context.trajectory.candidateTrajectory === "self_recovering" ? 0.85 : 0.1;
+  }
+}
+
+function scoreTiming(action: UnifiedDecisionAction, context: UnifiedScoreContext) {
+  const interruption = context.trajectory.interruptionCost;
+  if (action === "Hold") {
+    return interruption === "high" ? 0.9 : interruption === "medium" ? 0.5 : 0.15;
+  }
+
+  if (action === "Close") {
+    return context.currentStage === "WRAP_UP" ? 0.7 : interruption === "low" ? 0.2 : -0.1;
+  }
+
+  if (interruption === "high") {
+    return -0.7;
+  }
+
+  if (interruption === "medium") {
+    return -0.15;
+  }
+
+  return 0.4;
+}
+
+function scoreValue(action: UnifiedDecisionAction, context: UnifiedScoreContext) {
+  const gain = context.trajectory.evidenceGainIfAskNow;
+  const answeredCount = context.memory.answeredTargets.length;
+
+  switch (action) {
+    case "Probe":
+      return gain === "high" ? 0.75 : gain === "medium" ? 0.35 : -0.4;
+    case "Guide":
+      return gain === "low" ? -0.1 : 0.35;
+    case "Unblock":
+      return context.trajectory.interventionValue === "high" ? 0.7 : 0.15;
+    case "Advance":
+      return answeredCount > 0 && gain === "low" ? 0.55 : 0.2;
+    case "Close":
+      return gain === "low" ? 0.75 : -0.25;
+    case "Hold":
+      return context.trajectory.expectedWithNoIntervention === "will_finish" ? 0.8 : 0.1;
+  }
+}
+
+function scoreClosure(action: UnifiedDecisionAction, context: UnifiedScoreContext) {
+  const closureReady =
+    context.intent.intent === "close" ||
+    context.currentStage === "WRAP_UP" ||
+    context.passAssessment.wrapUp.complete;
+
+  switch (action) {
+    case "Close":
+      return closureReady ? 1 : -0.5;
+    case "Advance":
+      return closureReady ? 0.25 : 0.4;
+    case "Hold":
+      return closureReady ? -0.15 : 0.15;
+    case "Probe":
+    case "Guide":
+    case "Unblock":
+      return closureReady ? -0.55 : 0.05;
+  }
+}
+
+function clampScore(value: number) {
+  return Math.max(-1, Math.min(1, value));
+}
+
+function mapDecisionToUnifiedAction(action: CandidateDecisionAction): UnifiedDecisionAction {
+  switch (action) {
+    case "probe_correctness":
+    case "probe_tradeoff":
+    case "ask_for_complexity":
+    case "ask_for_test_case":
+    case "ask_for_reasoning":
+      return "Probe";
+    case "ask_followup":
+    case "ask_for_clarification":
+      return "Guide";
+    case "give_hint":
+    case "ask_for_debug_plan":
+      return "Unblock";
+    case "move_stage":
+    case "encourage_and_continue":
+    case "move_to_wrap_up":
+      return "Advance";
+    case "close_topic":
+    case "end_interview":
+      return "Close";
+    case "hold_and_listen":
+    default:
+      return "Hold";
+  }
+}
+
+function buildUnifiedTieBreaker(
+  best: UnifiedDecisionAction,
+  second: UnifiedDecisionAction | undefined,
+  proposalFamily: UnifiedDecisionAction,
+  context: UnifiedScoreContext,
+) {
+  if (!second) {
+    return `Prefer ${best} because it is the only viable action.`;
+  }
+
+  if (best === proposalFamily || second === proposalFamily) {
+    return `Scores were near-equal, so the engine preferred the current proposal family (${proposalFamily}) for stability.`;
+  }
+
+  if (context.trajectory.interruptionCost === "high") {
+    return "Scores were near-equal, so the engine preferred the lower-interruption path.";
+  }
+
+  return "Scores were near-equal, so the engine fell back to the deterministic action-family ordering.";
+}
+
+function resolveTieBreakerFamily(
+  tieBreaker: string,
+  proposalFamily: UnifiedDecisionAction,
+  best: UnifiedDecisionAction,
+  second?: UnifiedDecisionAction,
+): UnifiedDecisionAction {
+  if (tieBreaker.includes(proposalFamily)) {
+    return proposalFamily;
+  }
+
+  const ordering: UnifiedDecisionAction[] = ["Close", "Hold", "Advance", "Unblock", "Guide", "Probe"];
+  const candidates = [best, second].filter((item): item is UnifiedDecisionAction => Boolean(item));
+  return candidates.sort((left, right) => ordering.indexOf(left) - ordering.indexOf(right))[0] ?? best;
+}
+
+function adaptDecisionToUnifiedAction(
+  decision: CandidateDecision,
+  family: UnifiedDecisionAction,
+  currentStage: CodingInterviewStage,
+): CandidateDecision {
+  if (mapDecisionToUnifiedAction(decision.action) === family) {
+    return decision;
+  }
+
+  switch (family) {
+    case "Hold":
+      return {
+        ...decision,
+        action: "hold_and_listen",
+        question: "Keep going. I want to preserve your flow for another beat before I narrow this down.",
+      };
+    case "Close":
+      return {
+        ...decision,
+        action: currentStage === "WRAP_UP" ? "end_interview" : "close_topic",
+        target: "summary",
+        question:
+          currentStage === "WRAP_UP"
+            ? "That covers this question well. We are done here."
+            : "You have covered the important evidence for this topic. Let us close it here and move on.",
+        suggestedStage: currentStage === "WRAP_UP" ? "WRAP_UP" : decision.suggestedStage,
+      };
+    case "Advance":
+      return {
+        ...decision,
+        action: currentStage === "WRAP_UP" ? "move_to_wrap_up" : "encourage_and_continue",
+        target: currentStage === "WRAP_UP" ? "summary" : "implementation",
+        question:
+          currentStage === "WRAP_UP"
+            ? "Give me one concise wrap-up, then we will close this question."
+            : "You have enough evidence on this point. Go ahead and keep moving with the implementation.",
+        suggestedStage: currentStage === "WRAP_UP" ? "WRAP_UP" : "IMPLEMENTATION",
+      };
+    case "Unblock":
+      return {
+        ...decision,
+        action: currentStage === "IMPLEMENTATION" || currentStage === "DEBUGGING" ? "ask_for_debug_plan" : "give_hint",
+        target: currentStage === "IMPLEMENTATION" || currentStage === "DEBUGGING" ? "debugging" : "implementation",
+        question:
+          currentStage === "IMPLEMENTATION" || currentStage === "DEBUGGING"
+            ? "Pause and give me the smallest debugging plan you would use to recover this path."
+            : "Take a smaller step. What is the one piece of state or branch you should focus on next?",
+      };
+    case "Guide":
+      return {
+        ...decision,
+        action: "ask_for_clarification",
+        target: decision.target === "summary" ? "reasoning" : decision.target,
+        question: "Clarify the next step once more, but keep it concrete and tied to one small example.",
+      };
+    case "Probe":
+      return {
+        ...decision,
+        action: "ask_for_reasoning",
+        target: decision.target === "summary" ? "reasoning" : decision.target,
+        question: "Pressure-test that step once: what exact invariant, branch, or tradeoff makes you confident it still holds?",
+      };
+  }
+}
+
+function summarizeScoreReasons(
+  family: UnifiedDecisionAction,
+  reasons: UnifiedScoreReason[],
+  tieBreaker?: string,
+) {
+  const topReasons = reasons
+    .filter((reason) => Number.isFinite(reason.magnitude))
+    .sort((left, right) => Math.abs(right.magnitude) - Math.abs(left.magnitude))
+    .slice(0, 2)
+    .map((reason) => reason.detail);
+
+  const explanation = topReasons.join(" ");
+  return tieBreaker
+    ? `Unified score selected ${family}. ${explanation} ${tieBreaker}`.trim()
+    : `Unified score selected ${family}. ${explanation}`.trim();
+}
+
 function looksImproving(trendSummary?: string) {
   if (!trendSummary) {
     return false;
@@ -1464,6 +2001,161 @@ function detectRecentImplementationReadiness(
           signals.progress === "progressing")
       );
     });
+}
+
+function countRecentEventType(
+  recentEvents: Array<{ eventType: string; eventTime?: Date | string; payloadJson?: unknown }>,
+  eventType: string,
+) {
+  return recentEvents.filter((event) => event.eventType === eventType).length;
+}
+
+function assessTemporalDynamics(context: UnifiedScoreContext) {
+  const decisionEvents = context.recentEvents.filter((event) => event.eventType === "DECISION_RECORDED");
+  const recentDecisions = decisionEvents
+    .slice(-6)
+    .map((event) => {
+      const payload =
+        typeof event.payloadJson === "object" && event.payloadJson !== null
+          ? (event.payloadJson as Record<string, unknown>)
+          : {};
+      const decision =
+        typeof payload.decision === "object" && payload.decision !== null
+          ? (payload.decision as Record<string, unknown>)
+          : {};
+      return typeof decision.action === "string" ? decision.action : null;
+    })
+    .filter((action): action is string => Boolean(action));
+  const isProbeAction = (action: string) =>
+    action === "probe_correctness" ||
+    action === "probe_tradeoff" ||
+    action === "ask_for_reasoning" ||
+    action === "ask_for_test_case" ||
+    action === "ask_for_complexity";
+  const recentProbeStreak = countTrailing(recentDecisions, isProbeAction);
+  const latestEvidenceGainLow = context.trajectory.evidenceGainIfAskNow === "low";
+  const probeNeedDecay = Math.min(
+    0.55,
+    recentProbeStreak >= 2
+      ? 0.2 + (recentProbeStreak - 2) * 0.08 + (latestEvidenceGainLow ? 0.1 : 0)
+      : 0,
+  );
+
+  const latestEventMs = findLatestEventTimeMs(context.recentEvents);
+  const lastCandidateActivityMs = findLatestEventTimeMs(
+    context.recentEvents.filter(
+      (event) =>
+        event.eventType === "CANDIDATE_SPOKE" ||
+        event.eventType === "CODE_RUN_COMPLETED" ||
+        event.eventType === "EDITOR_ACTIVITY_RECORDED" ||
+        event.eventType === "SIGNAL_SNAPSHOT_RECORDED",
+    ),
+  );
+  const idleMs =
+    latestEventMs !== null && lastCandidateActivityMs !== null
+      ? Math.max(0, latestEventMs - lastCandidateActivityMs)
+      : null;
+  const idleLikely = idleMs !== null && idleMs >= 90_000;
+  const stalled =
+    context.trajectory.candidateTrajectory === "stuck" || context.trajectory.candidateTrajectory === "collapsing";
+  const plateaued = context.trajectory.candidateTrajectory === "plateauing";
+  const idleProbeBoost = idleLikely ? (stalled ? 0.35 : plateaued ? 0.22 : 0.12) : 0;
+
+  const isCodingFlowStage = context.currentStage === "IMPLEMENTATION" || context.currentStage === "DEBUGGING";
+  const interruption = context.trajectory.interruptionCost;
+  const codingInterruptionPenalty = isCodingFlowStage
+    ? interruption === "high"
+      ? 0.28
+      : interruption === "medium"
+        ? 0.14
+        : 0.06
+    : 0;
+
+  return {
+    recentProbeStreak,
+    probeNeedDecay: round2(probeNeedDecay),
+    idleLikely,
+    idleProbeBoost: round2(idleProbeBoost),
+    codingInterruptionPenalty: round2(codingInterruptionPenalty),
+  };
+}
+
+function findLatestEventTimeMs(
+  events: Array<{ eventType: string; eventTime?: Date | string; payloadJson?: unknown }>,
+) {
+  const times = events
+    .map((event) => {
+      if (!event.eventTime) {
+        return null;
+      }
+      const time = new Date(event.eventTime).getTime();
+      return Number.isFinite(time) ? time : null;
+    })
+    .filter((value): value is number => value !== null);
+  if (times.length === 0) {
+    return null;
+  }
+  return Math.max(...times);
+}
+
+function countTrailing<T>(items: T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (!predicate(items[index] as T)) {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function resolveScoreWeights(context: UnifiedScoreContext) {
+  const configured = context.policyConfig?.scoreWeights;
+  return configured ?? {
+    need: 1,
+    timing: 1,
+    value: 1,
+    closure: 1,
+    proposalBias: 1,
+    temporalProbeDecay: 1,
+    temporalIdleProbeBoost: 1,
+    temporalCodingInterruptionPenalty: 1,
+    actionBias: {
+      Probe: 0,
+      Guide: 0,
+      Unblock: 0,
+      Advance: 0,
+      Close: 0,
+      Hold: 0,
+    },
+  };
+}
+
+function buildScoreWeightProfile(scoreWeights: ReturnType<typeof resolveScoreWeights>) {
+  const actionBiasEntries = Object.entries(scoreWeights.actionBias) as Array<[UnifiedDecisionAction, number]>;
+  const dominantBias = actionBiasEntries
+    .slice()
+    .sort((left, right) => Math.abs(right[1]) - Math.abs(left[1]))[0] ?? ["Probe", 0];
+  const actionBiasValues = actionBiasEntries.map((entry) => entry[1]);
+  const actionBiasSpread =
+    actionBiasValues.length > 0 ? Math.max(...actionBiasValues) - Math.min(...actionBiasValues) : 0;
+
+  return {
+    need: round2(scoreWeights.need),
+    timing: round2(scoreWeights.timing),
+    value: round2(scoreWeights.value),
+    closure: round2(scoreWeights.closure),
+    proposalBias: round2(scoreWeights.proposalBias),
+    temporalProbeDecay: round2(scoreWeights.temporalProbeDecay),
+    temporalIdleProbeBoost: round2(scoreWeights.temporalIdleProbeBoost),
+    temporalCodingInterruptionPenalty: round2(scoreWeights.temporalCodingInterruptionPenalty),
+    dominantActionBias: `${dominantBias[0]}:${round2(dominantBias[1])}`,
+    actionBiasSpread: round2(actionBiasSpread),
+  };
 }
 
 

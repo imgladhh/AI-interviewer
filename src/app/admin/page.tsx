@@ -1,6 +1,6 @@
 ﻿import Link from "next/link";
 import { buildUnifiedOpsFeed, getAdminProfileDetail, listAdminProfiles, type OpsFeedScope } from "@/lib/admin/ops";
-import { runPolicyRegressionLab } from "@/lib/assistant/policy-regression";
+import { derivePolicyTuningSuggestions, runPolicyRegressionLab } from "@/lib/assistant/policy-regression";
 
 type AdminPageProps = {
   searchParams?: Promise<{
@@ -19,6 +19,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
   const detail = activeProfileId ? await getAdminProfileDetail(activeProfileId) : null;
   const feed = buildUnifiedOpsFeed(detail, scope);
   const policyLab = runPolicyRegressionLab();
+  const tuningSuggestions = derivePolicyTuningSuggestions(policyLab);
 
   return (
     <main style={{ minHeight: "100vh", padding: 24 }}>
@@ -435,6 +436,18 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                   }
                                 />
                                 <MetricCard
+                                  label="Unified Action"
+                                  value={String(detail.sessionSummary.latestDecision.normalizedAction ?? "unknown")}
+                                />
+                                <MetricCard
+                                  label="Total Score"
+                                  value={
+                                    typeof detail.sessionSummary.latestDecision.totalScore === "number"
+                                      ? detail.sessionSummary.latestDecision.totalScore.toFixed(2)
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
                                   label="Pressure"
                                   value={String(detail.sessionSummary.latestDecision.pressure ?? "unknown")}
                                 />
@@ -475,6 +488,34 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 <MetricCard
                                   label="Policy Mode"
                                   value={String(detail.sessionSummary.latestDecision.policyMode ?? "unknown")}
+                                />
+                                <MetricCard
+                                  label="Weight N/T/V/C"
+                                  value={
+                                    detail.sessionSummary.latestDecision.scoreWeightProfile
+                                      ? `${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "need")?.toFixed(2) ?? "n/a"} / ${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "timing")?.toFixed(2) ?? "n/a"} / ${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "value")?.toFixed(2) ?? "n/a"} / ${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "closure")?.toFixed(2) ?? "n/a"}`
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Dominant Action Bias"
+                                  value={stringField(detail.sessionSummary.latestDecision.scoreWeightProfile, "dominantActionBias") ?? "unknown"}
+                                />
+                                <MetricCard
+                                  label="Action Bias Spread"
+                                  value={
+                                    typeof numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "actionBiasSpread") === "number"
+                                      ? Number(numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "actionBiasSpread")).toFixed(2)
+                                      : "unknown"
+                                  }
+                                />
+                                <MetricCard
+                                  label="Temporal Weights"
+                                  value={
+                                    detail.sessionSummary.latestDecision.scoreWeightProfile
+                                      ? `${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "temporalProbeDecay")?.toFixed(2) ?? "n/a"} / ${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "temporalIdleProbeBoost")?.toFixed(2) ?? "n/a"} / ${numberField(detail.sessionSummary.latestDecision.scoreWeightProfile, "temporalCodingInterruptionPenalty")?.toFixed(2) ?? "n/a"}`
+                                      : "unknown"
+                                  }
                                 />
                                 <MetricCard
                                   label="Blocked By Invariant"
@@ -543,6 +584,45 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                                 <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
                                   <strong>Why Now</strong>
                                   <div style={panelStyle}>{String(detail.sessionSummary.latestDecision.justificationWhyNow)}</div>
+                                </div>
+                              ) : null}
+                              {Array.isArray(detail.sessionSummary.latestDecision.scoreBreakdown) &&
+                              detail.sessionSummary.latestDecision.scoreBreakdown.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Score Breakdown</strong>
+                                  <div style={{ ...panelStyle, display: "grid", gap: 8 }}>
+                                    {detail.sessionSummary.latestDecision.scoreBreakdown.map((item, index) => (
+                                      <div key={`admin-score-breakdown-${index}`} style={{ display: "grid", gap: 2 }}>
+                                        <div style={{ fontWeight: 600 }}>
+                                          {String(item.key ?? "score")} · {typeof item.magnitude === "number" ? item.magnitude.toFixed(2) : "n/a"}
+                                        </div>
+                                        <div style={{ color: "var(--muted-foreground)" }}>{String(item.detail ?? "")}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              {Array.isArray(detail.sessionSummary.latestDecision.candidateScores) &&
+                              detail.sessionSummary.latestDecision.candidateScores.length > 0 ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Candidate Score Surface</strong>
+                                  <div style={{ ...panelStyle, display: "grid", gap: 6 }}>
+                                    {detail.sessionSummary.latestDecision.candidateScores.map((item, index) => (
+                                      <div key={`admin-candidate-score-${index}`} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                        <span>{String(item.action ?? "unknown")}</span>
+                                        <span>
+                                          {typeof item.totalScore === "number" ? item.totalScore.toFixed(2) : "n/a"}
+                                          {item.hardMasked ? " (masked)" : ""}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              {detail.sessionSummary.latestDecision.tieBreaker ? (
+                                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                                  <strong>Tie-breaker</strong>
+                                  <div style={panelStyle}>{String(detail.sessionSummary.latestDecision.tieBreaker)}</div>
                                 </div>
                               ) : null}
                               {detail.sessionSummary.latestDecision.justificationWhyThisAction ? (
@@ -1017,6 +1097,22 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     Golden scenarios rendered through multiple archetypes so policy differences stay visible and testable.
                   </p>
                 </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <strong>Policy Tuning Suggestions</strong>
+                  {tuningSuggestions.map((suggestion) => (
+                    <div key={suggestion.id} style={panelStyle}>
+                      <strong>{suggestion.title}</strong>
+                      <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>{suggestion.rationale}</p>
+                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                        {suggestion.recommendedAdjustments.map((item, index) => (
+                          <div key={`${suggestion.id}-adj-${index}`} style={panelStyle}>
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
 
                 <div style={{ display: "grid", gap: 14 }}>
                   {policyLab.map((scenario) => (
@@ -1032,6 +1128,16 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         <span style={{ color: "var(--muted)" }}>
                           {scenario.summary}
                         </span>
+                        {scenario.scoreSpread ? (
+                          <span style={{ color: "var(--muted)" }}>
+                            score spread={scenario.scoreSpread.spread.toFixed(2)} ({scenario.scoreSpread.bestArchetype} best, {scenario.scoreSpread.weakestArchetype} weakest)
+                          </span>
+                        ) : null}
+                        {scenario.rewardSpread ? (
+                          <span style={{ color: "var(--muted)" }}>
+                            reward spread={scenario.rewardSpread.spread.toFixed(2)} ({scenario.rewardSpread.bestArchetype} best, {scenario.rewardSpread.weakestArchetype} weakest)
+                          </span>
+                        ) : null}
                       </div>
 
                       {scenario.divergentFields.length > 0 ? (
@@ -1059,10 +1165,48 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                               {result.target ? <Badge tone="neutral">target: {result.target}</Badge> : null}
                             </div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                              {typeof result.totalScore === "number" ? <Badge tone="info">score: {result.totalScore.toFixed(2)}</Badge> : null}
+                              {typeof result.scoreGapFromBest === "number" ? <Badge tone="neutral">gap: {result.scoreGapFromBest.toFixed(2)}</Badge> : null}
+                              {typeof result.averageReward === "number" ? <Badge tone="info">avg reward: {result.averageReward.toFixed(2)}</Badge> : null}
+                              {typeof result.rewardGapFromBest === "number" ? <Badge tone="neutral">reward gap: {result.rewardGapFromBest.toFixed(2)}</Badge> : null}
+                              {typeof result.cumulativeReward === "number" ? <Badge tone="neutral">cum reward: {result.cumulativeReward.toFixed(2)}</Badge> : null}
                               {result.pressure ? <Badge tone="info">pressure: {result.pressure}</Badge> : null}
                               {result.timing ? <Badge tone="neutral">timing: {result.timing}</Badge> : null}
                               {result.suggestedStage ? <Badge tone="neutral">stage: {result.suggestedStage}</Badge> : null}
                             </div>
+                            {result.scoreWeightProfile ? (
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                                <Badge tone="neutral">w(n/t/v/c): {result.scoreWeightProfile.need.toFixed(2)}/{result.scoreWeightProfile.timing.toFixed(2)}/{result.scoreWeightProfile.value.toFixed(2)}/{result.scoreWeightProfile.closure.toFixed(2)}</Badge>
+                                <Badge tone="info">bias: {result.scoreWeightProfile.dominantActionBias}</Badge>
+                              </div>
+                            ) : null}
+                            {Array.isArray(result.decisionTimeline) && result.decisionTimeline.length > 0 ? (
+                              <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+                                <strong>Decision Timeline</strong>
+                                <div style={{ display: "grid", gap: 8 }}>
+                                  {result.decisionTimeline.map((turn) => (
+                                    <div key={`${scenario.scenarioId}-${result.archetype}-turn-${turn.turn}`} style={panelStyle}>
+                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                        <Badge tone="neutral">turn {turn.turn}</Badge>
+                                        <Badge tone="info">{turn.action}</Badge>
+                                        <Badge tone="neutral">target: {turn.target}</Badge>
+                                        {typeof turn.totalScore === "number" ? <Badge tone="info">score {turn.totalScore.toFixed(2)}</Badge> : null}
+                                        {typeof turn.rewardTotal === "number" ? <Badge tone="neutral">reward {turn.rewardTotal.toFixed(2)}</Badge> : null}
+                                      </div>
+                                      {Array.isArray(turn.rewardPenalties) && turn.rewardPenalties.length > 0 ? (
+                                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                                          {turn.rewardPenalties.map((penalty) => (
+                                            <Badge key={`${scenario.scenarioId}-${result.archetype}-penalty-${turn.turn}-${penalty}`} tone="warning">
+                                              {penalty}
+                                            </Badge>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
                             {result.decisionPathway && result.decisionPathway.length > 0 ? (
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                                 {result.decisionPathway.map((step) => (
@@ -1368,6 +1512,23 @@ function asPercent(vector: unknown, key: string) {
   const value = (vector as Record<string, unknown>)[key];
   return typeof value === "number" ? `${Math.round(value * 100)}%` : "unknown";
 }
+
+function numberField(value: unknown, key: string) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === "number" ? candidate : null;
+}
+
+function stringField(value: unknown, key: string) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === "string" ? candidate : null;
+}
+
 
 
 

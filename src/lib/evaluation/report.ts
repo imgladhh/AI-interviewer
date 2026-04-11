@@ -113,10 +113,24 @@ type CandidateSignalSummary = {
 
 type CandidateDecisionSummary = {
   action?: string;
+  normalizedAction?: string;
   target?: string;
   question?: string;
   reason?: string;
   confidence?: number;
+  totalScore?: number;
+  tieBreaker?: string;
+  scoreBreakdown?: Array<{
+    key?: string;
+    magnitude?: number;
+    kind?: string;
+    detail?: string;
+  }>;
+  candidateScores?: Array<{
+    action?: string;
+    totalScore?: number;
+    hardMasked?: boolean;
+  }>;
   targetCodeLine?: string;
   specificIssue?: string;
   expectedAnswer?: string;
@@ -124,6 +138,27 @@ type CandidateDecisionSummary = {
   hintStyle?: string;
   hintLevel?: string;
   policyAction?: string;
+  policyMode?: string;
+  policyArchetype?: string;
+  policyAdaptationReason?: string;
+  decisionPathway?: string[];
+  temporalProbeStreak?: number;
+  temporalProbeDecay?: number;
+  temporalIdleLikely?: boolean;
+  temporalIdleProbeBoost?: number;
+  temporalCodingInterruptionPenalty?: number;
+  scoreWeightProfile?: {
+    need?: number;
+    timing?: number;
+    value?: number;
+    closure?: number;
+    proposalBias?: number;
+    temporalProbeDecay?: number;
+    temporalIdleProbeBoost?: number;
+    temporalCodingInterruptionPenalty?: number;
+    dominantActionBias?: string;
+    actionBiasSpread?: number;
+  };
 };
 
 type HintSummary = HintLedger & {
@@ -230,6 +265,18 @@ type RecommendationBasis = {
   evidenceTrace: RubricSummaryItem["evidenceRefs"];
 };
 
+type ShadowPolicySnapshot = {
+  at: string | null;
+  archetype: string | null;
+  action: string | null;
+  target: string | null;
+  diff: string[];
+  topScoreDelta: {
+    action: string | null;
+    delta: number;
+  } | null;
+};
+
 type CalibrationMatrix = {
   finalCall: RecommendationBand;
   evaluatedLevel: EvaluatedLevel["level"];
@@ -239,6 +286,23 @@ type CalibrationMatrix = {
   independenceSignal: RecommendationBasis["independenceSignal"];
   coachabilitySignal: RecommendationBasis["coachabilitySignal"];
   notes: string[];
+};
+
+type RewardSummary = {
+  totalTurns: number;
+  averageTotal: number;
+  latestTotal: number | null;
+  positiveTurns: number;
+  negativeTurns: number;
+  averageComponents: {
+    evidenceGain: number;
+    redundancy: number;
+    badInterruption: number;
+    flowPreservation: number;
+    cleanClosure: number;
+  };
+  topPenalties: Array<{ penalty: string; count: number }>;
+  trend: Array<{ index: number; total: number; stage: string | null }>;
 };
 
 export type GeneratedSessionReport = {
@@ -277,6 +341,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const latestTrajectory = findLatestTrajectorySnapshot(input.trajectorySnapshots ?? []);
   const latestCandidateDna = findLatestEventPayload(input.events, "CANDIDATE_DNA_RECORDED", "candidateDna");
   const latestShadowPolicy = findLatestEventPayload(input.events, "SHADOW_POLICY_EVALUATED", "shadowPolicy");
+  const shadowPolicySnapshots = buildShadowPolicySnapshots(input.events);
   const hintRequestedCount = input.events.filter((event) => event.eventType === "HINT_REQUESTED").length;
   const hintServedCount = input.events.filter((event) => event.eventType === "HINT_SERVED").length;
   const hintLedger = buildHintingLedger(input.events);
@@ -364,6 +429,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     evaluatedLevel,
     recommendationBasis,
   });
+  const rewardSummary = buildRewardSummary(input.events);
   const overallSummary = buildOverallSummary({
     recommendation,
     evaluatedLevel,
@@ -424,6 +490,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       latestTrajectory,
       latestCandidateDna,
       latestShadowPolicy,
+      shadowPolicySnapshots,
       stageReplay,
       stageSections,
       evidenceTrace,
@@ -444,6 +511,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       recommendationBand: recommendationBasis.band,
       recommendationBasis,
       calibrationMatrix,
+      rewardSummary,
       recommendationRationale: buildRecommendationRationale({
         recommendation,
         evaluatedLevel,
@@ -1063,6 +1131,83 @@ function buildRubricEvidenceRefs(input: {
   return refs;
 }
 
+function buildRewardSummary(events: SessionEventLike[]): RewardSummary | null {
+  const rewardEvents = events
+    .filter((event) => event.eventType === "REWARD_RECORDED")
+    .map((event) => asRecord(asRecord(event.payloadJson).reward))
+    .filter((reward) => typeof reward.total === "number");
+
+  if (rewardEvents.length === 0) {
+    return null;
+  }
+
+  const sumTotal = rewardEvents.reduce((sum, reward) => sum + (reward.total as number), 0);
+  const positiveTurns = rewardEvents.filter((reward) => (reward.total as number) > 0).length;
+  const negativeTurns = rewardEvents.filter((reward) => (reward.total as number) < 0).length;
+  const penaltyCounts = new Map<string, number>();
+  for (const reward of rewardEvents) {
+    const penalties = Array.isArray(reward.penalties)
+      ? reward.penalties.filter((item): item is string => typeof item === "string")
+      : [];
+    for (const penalty of penalties) {
+      penaltyCounts.set(penalty, (penaltyCounts.get(penalty) ?? 0) + 1);
+    }
+  }
+
+  const componentTotals = rewardEvents.reduce<{
+    evidenceGain: number;
+    redundancy: number;
+    badInterruption: number;
+    flowPreservation: number;
+    cleanClosure: number;
+  }>(
+    (acc, reward) => {
+      const components = asRecord(reward.components);
+      acc.evidenceGain += numberValue(components.evidenceGain);
+      acc.redundancy += numberValue(components.redundancy);
+      acc.badInterruption += numberValue(components.badInterruption);
+      acc.flowPreservation += numberValue(components.flowPreservation);
+      acc.cleanClosure += numberValue(components.cleanClosure);
+      return acc;
+    },
+    { evidenceGain: 0, redundancy: 0, badInterruption: 0, flowPreservation: 0, cleanClosure: 0 },
+  );
+
+  const trend = events
+    .filter((event) => event.eventType === "REWARD_RECORDED")
+    .slice(-5)
+    .map((event, index) => {
+      const payload = asRecord(event.payloadJson);
+      const reward = asRecord(payload.reward);
+      return {
+        index: index + 1,
+        total: typeof reward.total === "number" ? Number(reward.total.toFixed(2)) : 0,
+        stage: stringValue(payload.stage),
+      };
+    });
+
+  const count = rewardEvents.length;
+  return {
+    totalTurns: count,
+    averageTotal: Number((sumTotal / count).toFixed(2)),
+    latestTotal: Number(((rewardEvents.at(-1)?.total as number) ?? 0).toFixed(2)),
+    positiveTurns,
+    negativeTurns,
+    averageComponents: {
+      evidenceGain: Number((componentTotals.evidenceGain / count).toFixed(2)),
+      redundancy: Number((componentTotals.redundancy / count).toFixed(2)),
+      badInterruption: Number((componentTotals.badInterruption / count).toFixed(2)),
+      flowPreservation: Number((componentTotals.flowPreservation / count).toFixed(2)),
+      cleanClosure: Number((componentTotals.cleanClosure / count).toFixed(2)),
+    },
+    topPenalties: [...penaltyCounts.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 5)
+      .map(([penalty, count]) => ({ penalty, count })),
+    trend,
+  };
+}
+
 function buildRubricSummary(
   dimensions: DimensionScore[],
   latestSignal: CandidateSignalSummary | null,
@@ -1658,6 +1803,44 @@ function findLatestEventPayload(
   return asRecord(asRecord(latestEvent.payloadJson)[field]);
 }
 
+function buildShadowPolicySnapshots(events: SessionEventLike[]): ShadowPolicySnapshot[] {
+  return events
+    .filter((event) => event.eventType === "SHADOW_POLICY_EVALUATED")
+    .slice(-8)
+    .map((event) => {
+      const payload = asRecord(event.payloadJson);
+      const shadow = asRecord(payload.shadowPolicy);
+      const scoreDiff = Array.isArray(shadow.scoreDiff)
+        ? shadow.scoreDiff.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+        : [];
+      const top = scoreDiff
+        .map((item) => ({
+          action: stringValue(item.action),
+          delta: typeof item.delta === "number" ? item.delta : Number.NaN,
+        }))
+        .filter((item) => Number.isFinite(item.delta))
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))[0];
+      const diff = Array.isArray(shadow.diff)
+        ? shadow.diff.filter((item): item is string => typeof item === "string")
+        : [];
+
+      return {
+        at: event.eventTime ? new Date(event.eventTime).toISOString() : null,
+        archetype: stringValue(shadow.archetype),
+        action: stringValue(shadow.action),
+        target: stringValue(shadow.target),
+        diff,
+        topScoreDelta: top
+          ? {
+              action: top.action,
+              delta: Number(top.delta.toFixed(2)),
+            }
+          : null,
+      };
+    })
+    .reverse();
+}
+
 function buildSnapshotTimeline(
   kind: "intent" | "trajectory",
   rows: Array<{
@@ -1709,6 +1892,10 @@ function stringValue(value: unknown) {
     return String(value);
   }
   return null;
+}
+
+function numberValue(value: unknown) {
+  return typeof value === "number" ? value : 0;
 }
 
 function truncate(value: string, maxLength: number) {
@@ -1802,7 +1989,11 @@ function buildEvidenceTrace(input: {
   counterfactualSummary: CounterfactualSummary;
 }) {
   const timelineEvidence = input.events
-    .filter((event) => ["STAGE_ADVANCED", "HINT_SERVED", "CODE_RUN_COMPLETED", "DECISION_RECORDED"].includes(event.eventType))
+    .filter((event) =>
+      ["STAGE_ADVANCED", "HINT_SERVED", "CODE_RUN_COMPLETED", "DECISION_RECORDED", "REWARD_RECORDED"].includes(
+        event.eventType,
+      ),
+    )
     .slice(-8)
     .map((event) => buildEvidencePoint(event));
 
@@ -1891,6 +2082,11 @@ function buildEvidencePoint(event: SessionEventLike) {
   if (event.eventType === "DECISION_RECORDED") {
     const decision = asRecord(payload.decision);
     return `${prefix}Interviewer targeted ${stringValue(decision.target) ?? "unknown"} with ${stringValue(decision.action) ?? "unknown action"}.`;
+  }
+  if (event.eventType === "REWARD_RECORDED") {
+    const reward = asRecord(payload.reward);
+    const total = typeof reward.total === "number" ? reward.total.toFixed(2) : "n/a";
+    return `${prefix}Reward v1 scored this turn at ${total}.`;
   }
 
   return `${prefix}${event.eventType.toLowerCase().replaceAll("_", " ")}.`;

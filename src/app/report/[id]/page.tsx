@@ -55,6 +55,7 @@ type CandidateState = {
 
 type LatestDecision = {
   action?: string;
+  normalizedAction?: string;
   target?: string;
   pressure?: string;
   urgency?: string;
@@ -63,6 +64,19 @@ type LatestDecision = {
   question?: string;
   reason?: string;
   confidence?: number;
+  totalScore?: number;
+  tieBreaker?: string;
+  scoreBreakdown?: Array<{
+    key?: string;
+    magnitude?: number;
+    kind?: string;
+    detail?: string;
+  }>;
+  candidateScores?: Array<{
+    action?: string;
+    totalScore?: number;
+    hardMasked?: boolean;
+  }>;
   targetCodeLine?: string;
   specificIssue?: string;
   expectedAnswer?: string;
@@ -70,6 +84,27 @@ type LatestDecision = {
   hintStyle?: string;
   hintLevel?: string;
   policyAction?: string;
+  policyMode?: string;
+  policyArchetype?: string;
+  policyAdaptationReason?: string;
+  decisionPathway?: string[];
+  temporalProbeStreak?: number;
+  temporalProbeDecay?: number;
+  temporalIdleLikely?: boolean;
+  temporalIdleProbeBoost?: number;
+  temporalCodingInterruptionPenalty?: number;
+  scoreWeightProfile?: {
+    need?: number;
+    timing?: number;
+    value?: number;
+    closure?: number;
+    proposalBias?: number;
+    temporalProbeDecay?: number;
+    temporalIdleProbeBoost?: number;
+    temporalCodingInterruptionPenalty?: number;
+    dominantActionBias?: string;
+    actionBiasSpread?: number;
+  };
 };
 
 type StageReplayGroup = {
@@ -127,6 +162,22 @@ type ReportJson = {
     userTurns?: number;
     aiTurns?: number;
   };
+  rewardSummary?: {
+    totalTurns?: number;
+    averageTotal?: number;
+    latestTotal?: number | null;
+    positiveTurns?: number;
+    negativeTurns?: number;
+    averageComponents?: {
+      evidenceGain?: number;
+      redundancy?: number;
+      badInterruption?: number;
+      flowPreservation?: number;
+      cleanClosure?: number;
+    };
+    topPenalties?: Array<{ penalty?: string; count?: number }>;
+    trend?: Array<{ index?: number; total?: number; stage?: string | null }>;
+  };
   dimensions?: Dimension[];
   strengths?: string[];
   weaknesses?: string[];
@@ -180,8 +231,25 @@ type ReportJson = {
     pressure?: string;
     timing?: string;
     diff?: string[];
+    scoreDiff?: Array<{
+      action?: string;
+      actualScore?: number;
+      shadowScore?: number;
+      delta?: number;
+    }>;
     reason?: string;
   } | null;
+  shadowPolicySnapshots?: Array<{
+    at?: string | null;
+    archetype?: string | null;
+    action?: string | null;
+    target?: string | null;
+    diff?: string[];
+    topScoreDelta?: {
+      action?: string | null;
+      delta?: number;
+    } | null;
+  }>;
   sessionCritic?: SessionCriticSummary | null;
   stageReplay?: StageReplayGroup[];
   intentTimeline?: Array<{ createdAt?: string; stage?: string | null; payload?: Record<string, unknown> }>;
@@ -229,7 +297,7 @@ type ReplayItem = {
 
 type CandidateStateTimelineItem = {
   id: string;
-  kind: "stage" | "signal" | "decision" | "intent" | "trajectory" | "hint" | "code_run";
+  kind: "stage" | "signal" | "decision" | "reward" | "intent" | "trajectory" | "hint" | "code_run";
   time: string;
   sortTime: number;
   title: string;
@@ -691,6 +759,14 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 value={`${reportJson.transcriptSummary?.userTurns ?? 0} user / ${reportJson.transcriptSummary?.aiTurns ?? 0} AI`}
               />
               <MetricRow
+                label="Reward Avg"
+                value={typeof reportJson.rewardSummary?.averageTotal === "number" ? reportJson.rewardSummary.averageTotal.toFixed(2) : "n/a"}
+              />
+              <MetricRow
+                label="Reward Latest"
+                value={typeof reportJson.rewardSummary?.latestTotal === "number" ? reportJson.rewardSummary.latestTotal.toFixed(2) : "n/a"}
+              />
+              <MetricRow
                 label="Transcript Truth"
                 value={`${transcriptTruth.activeCommittedCount} active / ${transcriptTruth.supersededCount} superseded / ${transcriptTruth.pendingCount} pending`}
               />
@@ -703,6 +779,12 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                 label="Shadow Policy"
                 value={stringValue(reportJson.latestShadowPolicy?.archetype) ?? "unknown"}
               />
+              {Array.isArray(reportJson.rewardSummary?.topPenalties) && reportJson.rewardSummary.topPenalties.length > 0 ? (
+                <MetricRow
+                  label="Top Reward Penalty"
+                  value={`${reportJson.rewardSummary.topPenalties[0]?.penalty ?? "none"} (${reportJson.rewardSummary.topPenalties[0]?.count ?? 0})`}
+                />
+              ) : null}
             </div>
           </article>
         </section>
@@ -806,10 +888,42 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
             {reportJson.latestDecision ? (
               <div style={{ display: "grid", gap: 10 }}>
                 <MetricRow label="Action" value={reportJson.latestDecision.action ?? "unknown"} />
+                <MetricRow
+                  label="Unified Action"
+                  value={String(reportJson.latestDecision.normalizedAction ?? "unknown")}
+                />
                 <MetricRow label="Target" value={reportJson.latestDecision.target ?? "unknown"} />
                 <MetricRow label="Policy Action" value={reportJson.latestDecision.policyAction ?? "unknown"} />
                 <MetricRow label="Policy Mode" value={String((reportJson.latestDecision as Record<string, unknown>).policyMode ?? "unknown")} />
                 <MetricRow label="Policy Archetype" value={String((reportJson.latestDecision as Record<string, unknown>).policyArchetype ?? "unknown")} />
+                <MetricRow
+                  label="Weights (N/T/V/C)"
+                  value={
+                    reportJson.latestDecision.scoreWeightProfile
+                      ? `${typeof reportJson.latestDecision.scoreWeightProfile.need === "number" ? reportJson.latestDecision.scoreWeightProfile.need.toFixed(2) : "n/a"} / ${typeof reportJson.latestDecision.scoreWeightProfile.timing === "number" ? reportJson.latestDecision.scoreWeightProfile.timing.toFixed(2) : "n/a"} / ${typeof reportJson.latestDecision.scoreWeightProfile.value === "number" ? reportJson.latestDecision.scoreWeightProfile.value.toFixed(2) : "n/a"} / ${typeof reportJson.latestDecision.scoreWeightProfile.closure === "number" ? reportJson.latestDecision.scoreWeightProfile.closure.toFixed(2) : "n/a"}`
+                      : "unknown"
+                  }
+                />
+                <MetricRow
+                  label="Dominant Action Bias"
+                  value={String(reportJson.latestDecision.scoreWeightProfile?.dominantActionBias ?? "unknown")}
+                />
+                <MetricRow
+                  label="Action Bias Spread"
+                  value={
+                    typeof reportJson.latestDecision.scoreWeightProfile?.actionBiasSpread === "number"
+                      ? reportJson.latestDecision.scoreWeightProfile.actionBiasSpread.toFixed(2)
+                      : "unknown"
+                  }
+                />
+                <MetricRow
+                  label="Total Score"
+                  value={
+                    typeof reportJson.latestDecision.totalScore === "number"
+                      ? reportJson.latestDecision.totalScore.toFixed(2)
+                      : "unknown"
+                  }
+                />
                 <MetricRow
                   label="Decision Confidence"
                   value={
@@ -835,6 +949,30 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                   label="Interruption Cost"
                   value={String(latestCritic?.interruptionCost ?? reportJson.latestDecision.interruptionCost ?? "unknown")}
                 />
+                <MetricRow
+                  label="Temporal Probe Streak"
+                  value={
+                    typeof reportJson.latestDecision.temporalProbeStreak === "number"
+                      ? String(reportJson.latestDecision.temporalProbeStreak)
+                      : "unknown"
+                  }
+                />
+                <MetricRow
+                  label="Temporal Probe Decay"
+                  value={
+                    typeof reportJson.latestDecision.temporalProbeDecay === "number"
+                      ? reportJson.latestDecision.temporalProbeDecay.toFixed(2)
+                      : "unknown"
+                  }
+                />
+                <MetricRow
+                  label="Temporal Idle Boost"
+                  value={
+                    typeof reportJson.latestDecision.temporalIdleProbeBoost === "number"
+                      ? `${reportJson.latestDecision.temporalIdleProbeBoost.toFixed(2)} (${reportJson.latestDecision.temporalIdleLikely ? "idle" : "not-idle"})`
+                      : "unknown"
+                  }
+                />
                 <div style={listItemStyle}>
                   <strong>Question</strong>
                   <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.question ?? "No question captured."}</p>
@@ -859,6 +997,48 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                         <span key={`report-decision-path-${index}`} style={stagePillStyle}>{String(step)}</span>
                       ))}
                     </div>
+                  </div>
+                ) : null}
+                {Array.isArray(reportJson.latestDecision.scoreBreakdown) && reportJson.latestDecision.scoreBreakdown.length > 0 ? (
+                  <div style={listItemStyle}>
+                    <strong>Score breakdown</strong>
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      {reportJson.latestDecision.scoreBreakdown.map((item, index) => (
+                        <div key={`report-score-breakdown-${index}`} style={listItemStyle}>
+                          <strong>{item.key ?? "score_component"}</strong>
+                          <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                            {item.kind ?? "signal"} · {typeof item.magnitude === "number" ? item.magnitude.toFixed(2) : "n/a"}
+                          </p>
+                          {item.detail ? (
+                            <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{item.detail}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {Array.isArray(reportJson.latestDecision.candidateScores) && reportJson.latestDecision.candidateScores.length > 0 ? (
+                  <div style={listItemStyle}>
+                    <strong>Candidate score surface</strong>
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      {reportJson.latestDecision.candidateScores.map((item, index) => (
+                        <div key={`report-candidate-score-${index}`} style={listItemStyle}>
+                          <strong>{item.action ?? "action"}</strong>
+                          <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                            Score: {typeof item.totalScore === "number" ? item.totalScore.toFixed(2) : "n/a"}
+                          </p>
+                          {item.hardMasked ? (
+                            <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>Hard masked by a non-negotiable guardrail.</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {reportJson.latestDecision.tieBreaker ? (
+                  <div style={listItemStyle}>
+                    <strong>Tie-breaker</strong>
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{reportJson.latestDecision.tieBreaker}</p>
                   </div>
                 ) : null}
                 {reportJson.latestDecision.specificIssue ? (
@@ -1054,10 +1234,47 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                     </div>
                   </div>
                 ) : null}
+                {Array.isArray(reportJson.latestShadowPolicy.scoreDiff) && reportJson.latestShadowPolicy.scoreDiff.length > 0 ? (
+                  <div style={listItemStyle}>
+                    <strong>Score diff (actual - shadow)</strong>
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      {reportJson.latestShadowPolicy.scoreDiff.map((item, index) => (
+                        <div key={`report-shadow-score-diff-${index}`} style={listItemStyle}>
+                          <strong>{String(item.action ?? "unknown")}</strong>
+                          <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                            actual={typeof item.actualScore === "number" ? item.actualScore.toFixed(2) : "n/a"} / shadow=
+                            {typeof item.shadowScore === "number" ? item.shadowScore.toFixed(2) : "n/a"} / delta=
+                            {typeof item.delta === "number" ? item.delta.toFixed(2) : "n/a"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {stringValue(reportJson.latestShadowPolicy.reason) ? (
                   <div style={listItemStyle}>
                     <strong>Reason</strong>
                     <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>{stringValue(reportJson.latestShadowPolicy.reason)}</p>
+                  </div>
+                ) : null}
+                {Array.isArray(reportJson.shadowPolicySnapshots) && reportJson.shadowPolicySnapshots.length > 0 ? (
+                  <div style={listItemStyle}>
+                    <strong>Recent Shadow Policy Snapshots</strong>
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      {reportJson.shadowPolicySnapshots.slice(0, 5).map((item, index) => (
+                        <div key={`report-shadow-snapshot-${index}`} style={listItemStyle}>
+                          <strong>{item.archetype ?? "shadow"} {"->"} {item.action ?? "unknown"}</strong>
+                          <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                            {item.at ? new Date(item.at).toLocaleString() : "time unknown"} | target={item.target ?? "unknown"} | diff={(item.diff ?? []).join(", ") || "none"}
+                          </p>
+                          {item.topScoreDelta ? (
+                            <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                              top delta: {item.topScoreDelta.action ?? "unknown"} {typeof item.topScoreDelta.delta === "number" ? item.topScoreDelta.delta.toFixed(2) : "n/a"}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1564,6 +1781,18 @@ function buildReplayItems(input: {
       });
     }
 
+    if (event.eventType === "REWARD_RECORDED") {
+      const reward = asRecord(payload.reward);
+      items.push({
+        id: event.id,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Turn Reward",
+        description: `Reward total=${typeof reward.total === "number" ? reward.total.toFixed(2) : "n/a"} (${stringValue(payload.stage) ?? "unknown stage"}).`,
+        tone: "info",
+      });
+    }
+
     if (event.eventType === "HINT_SERVED") {
       items.push({
         id: event.id,
@@ -1583,6 +1812,28 @@ function buildReplayItems(input: {
         title: "Final Feedback Generated",
         description: `Recommendation ${stringValue(payload.recommendation) ?? input.reportJson.recommendation ?? "unknown"} with overall score ${stringValue(payload.overallScore) ?? String(input.reportJson.overallScore ?? "unknown")}.`,
         tone: "success",
+      });
+    }
+
+    if (event.eventType === "CANDIDATE_ECHO_DETECTED") {
+      items.push({
+        id: event.id,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Candidate Echo Detected",
+        description: `echo=${stringValue(payload.echoStrength) ?? "unknown"} overlap=${stringValue(payload.echoOverlapRatio) ?? "0"}`,
+        tone: "warning",
+      });
+    }
+
+    if (event.eventType === "ECHO_RECOVERY_PROMPTED") {
+      items.push({
+        id: event.id,
+        time: event.eventTime.toLocaleTimeString(),
+        sortTime: event.eventTime.getTime(),
+        title: "Echo Recovery Prompt",
+        description: `mode=${stringValue(payload.mode) ?? "unknown"}, attempt=${stringValue(payload.attempt) ?? "1"}`,
+        tone: "info",
       });
     }
   }
@@ -1629,6 +1880,9 @@ function buildCandidateStateTimeline(
         "INTENT_SNAPSHOT_RECORDED",
         "TRAJECTORY_SNAPSHOT_RECORDED",
         "CRITIC_VERDICT_RECORDED",
+        "REWARD_RECORDED",
+        "CANDIDATE_ECHO_DETECTED",
+        "ECHO_RECOVERY_PROMPTED",
         "HINT_SERVED",
         "CODE_RUN_COMPLETED",
       ].includes(event.eventType),
@@ -1758,6 +2012,43 @@ function buildCandidateStateTimeline(
           sortTime: event.eventTime.getTime(),
           title: "Hint served",
           summary: `${stringValue(payload.hintLevel) ?? "LIGHT"} ${stringValue(payload.hintStyle) ?? "hint"}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "REWARD_RECORDED") {
+        const reward = asRecord(payload.reward);
+        return {
+          id: event.id,
+          kind: "reward" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Turn reward",
+          summary: `total=${typeof reward.total === "number" ? reward.total.toFixed(2) : "n/a"}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "CANDIDATE_ECHO_DETECTED") {
+        return {
+          id: event.id,
+          kind: "signal" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Candidate echo detected",
+          summary: `echo=${stringValue(payload.echoStrength) ?? "unknown"} overlap=${stringValue(payload.echoOverlapRatio) ?? "0"}`,
+          payload,
+        };
+      }
+
+      if (event.eventType === "ECHO_RECOVERY_PROMPTED") {
+        return {
+          id: event.id,
+          kind: "decision" as const,
+          time: event.eventTime.toLocaleTimeString(),
+          sortTime: event.eventTime.getTime(),
+          title: "Echo recovery prompted",
+          summary: `${stringValue(payload.mode) ?? "unknown"} attempt ${stringValue(payload.attempt) ?? "1"}`,
           payload,
         };
       }
