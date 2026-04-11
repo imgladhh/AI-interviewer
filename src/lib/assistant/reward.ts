@@ -8,6 +8,7 @@ type RewardInput = {
   decision: unknown;
   criticVerdict?: unknown;
   recentEvents: SessionEventLike[];
+  originTurnId?: string | null;
 };
 
 type RewardAxis = "reasoning" | "implementation" | "test" | "debugging" | "tradeoff";
@@ -21,8 +22,25 @@ export type RewardResult = {
     badInterruption: number;
     flowPreservation: number;
     cleanClosure: number;
+    riskIdentified: number;
+    tradeoffDepth: number;
+    handwavePenalty: number;
   };
   evidenceGainByAxis: Record<RewardAxis, number>;
+  designEvidenceTypes: Array<"requirement" | "capacity" | "tradeoff" | "spof" | "bottleneck" | "handwave">;
+  attribution: {
+    originTurnId: string | null;
+    breakdown: {
+      evidenceGain: number;
+      redundancy: number;
+      badInterruption: number;
+      flowPreservation: number;
+      cleanClosure: number;
+      riskIdentified: number;
+      tradeoffDepth: number;
+      handwavePenalty: number;
+    };
+  };
   penalties: string[];
 };
 
@@ -37,6 +55,7 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
   const penalties: string[] = [];
   const recentEchoCount = input.recentEvents.filter((event) => event.eventType === "CANDIDATE_ECHO_DETECTED").length;
   const echoRecoveryMode = normalize(stringValue(decision.echoRecoveryMode));
+  const systemDesignActionType = normalize(stringValue(decision.systemDesignActionType));
 
   const evidenceGainByAxis = scoreEvidenceAxes(target);
   const evidenceGain = round2(
@@ -103,13 +122,58 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
   }
   cleanClosure = clamp(cleanClosure, -1, 1);
 
+  const isSystemDesignReward =
+    Boolean(systemDesignActionType) ||
+    hasAny(target ?? "", ["requirement", "capacity", "spof", "bottleneck"]);
+
+  let riskIdentified = 0;
+  let tradeoffDepth = 0;
+  let handwavePenalty = 0;
+  const designEvidenceTypes = new Set<"requirement" | "capacity" | "tradeoff" | "spof" | "bottleneck" | "handwave">();
+
+  if (isSystemDesignReward) {
+    if (hasAny(target ?? "", ["spof", "bottleneck", "correctness"]) || hasAny(action ?? "", ["challenge", "zoom"])) {
+      riskIdentified = 0.35;
+      if (hasAny(target ?? "", ["spof"])) {
+        designEvidenceTypes.add("spof");
+      } else {
+        designEvidenceTypes.add("bottleneck");
+      }
+    }
+
+    if (hasAny(target ?? "", ["tradeoff"]) || hasAny(action ?? "", ["probe_tradeoff"])) {
+      tradeoffDepth = 0.35;
+      designEvidenceTypes.add("tradeoff");
+    }
+
+    if (hasAny(target ?? "", ["requirement", "understanding"])) {
+      designEvidenceTypes.add("requirement");
+    }
+    if (hasAny(target ?? "", ["capacity"])) {
+      designEvidenceTypes.add("capacity");
+    }
+
+    const looksHandwavey =
+      action === "encourage_and_continue" ||
+      (action === "hold_and_listen" && urgency === "high") ||
+      (target === "approach" && !hasAny(action ?? "", ["probe", "ask_for_clarification"]));
+    if (looksHandwavey) {
+      handwavePenalty = -0.3;
+      penalties.push("handwave_detected");
+      designEvidenceTypes.add("handwave");
+    }
+  }
+
   const total = clamp(
     round2(
       evidenceGain * 0.45 +
         redundancy * 0.2 +
         badInterruption * 0.15 +
         flowPreservation * 0.1 +
-        cleanClosure * 0.1,
+        cleanClosure * 0.1 +
+        riskIdentified * 0.08 +
+        tradeoffDepth * 0.08 +
+        handwavePenalty * 0.08,
     ),
     -1,
     1,
@@ -124,8 +188,25 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
       badInterruption: round2(badInterruption),
       flowPreservation: round2(flowPreservation),
       cleanClosure: round2(cleanClosure),
+      riskIdentified: round2(riskIdentified),
+      tradeoffDepth: round2(tradeoffDepth),
+      handwavePenalty: round2(handwavePenalty),
     },
     evidenceGainByAxis,
+    designEvidenceTypes: [...designEvidenceTypes],
+    attribution: {
+      originTurnId: input.originTurnId ?? null,
+      breakdown: {
+        evidenceGain: round2(evidenceGain),
+        redundancy: round2(redundancy),
+        badInterruption: round2(badInterruption),
+        flowPreservation: round2(flowPreservation),
+        cleanClosure: round2(cleanClosure),
+        riskIdentified: round2(riskIdentified),
+        tradeoffDepth: round2(tradeoffDepth),
+        handwavePenalty: round2(handwavePenalty),
+      },
+    },
     penalties,
   };
 }

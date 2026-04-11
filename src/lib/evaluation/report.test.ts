@@ -147,6 +147,10 @@ describe("generateSessionReport", () => {
     expect((reportJson.calibrationMatrix as Record<string, unknown>).finalCall).toBeTruthy();
     expect((reportJson.rewardSummary as Record<string, unknown>).averageTotal).toBeTruthy();
     expect(Array.isArray((reportJson.rewardSummary as Record<string, unknown>).trend)).toBe(true);
+    expect(
+      Array.isArray((reportJson.rewardSummary as Record<string, unknown>).designEvidenceTypeCounts),
+    ).toBe(true);
+    expect(Array.isArray((reportJson.rewardSummary as Record<string, unknown>).attributions)).toBe(true);
     expect(Array.isArray(reportJson.shadowPolicySnapshots as unknown[])).toBe(true);
     expect((reportJson.shadowPolicySnapshots as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
   });

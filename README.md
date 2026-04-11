@@ -26,11 +26,17 @@ This repo now has a working MVP-plus skeleton with:
 
 ## Recent Progress
 
-- System design interviewer `Phase 0/1/2` is now completed in the current roadmap.
-- Stage control is mode-aware, and system design now includes API contract gating + on-demand capacity gating.
+- System design interviewer `Phase 0/1/2/3` is completed, and `Phase 4` reward/report groundwork is now landed.
+- Stage control is mode-aware, and system design includes API contract gating + on-demand capacity gating.
 - Design signals (`requirements/capacity/tradeoff/SPOF/bottleneck`) are extracted with evidence refs and visible in admin snapshots.
+- System design decision path is now separated from coding decision flow to avoid regressions while still reusing shared conversation-quality controls.
 - Full detailed log of recent changes moved to:
   - [docs/changelog/2026-04-11-progress-archive.md](docs/changelog/2026-04-11-progress-archive.md)
+
+## Known Limits (Short-Term)
+
+- System design signal detection still relies on heuristic text patterns for some cases (for example nuanced handwave detection).
+- System design reward/scoring is now wired into report attribution, but still uses heuristic components and should be calibrated with more real transcripts.
 
 ## Latest Interviewer Quality Upgrades
 

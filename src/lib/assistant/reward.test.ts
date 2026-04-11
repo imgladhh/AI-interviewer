@@ -79,4 +79,24 @@ describe("evaluateTurnReward", () => {
     expect(reward.penalties).toContain("echo_ignored");
     expect(reward.components.flowPreservation).toBeLessThanOrEqual(0);
   });
+
+  it("adds system design reward components and attribution metadata", () => {
+    const reward = evaluateTurnReward({
+      stage: "DEEP_DIVE",
+      decision: {
+        action: "probe_tradeoff",
+        target: "tradeoff",
+        systemDesignActionType: "PROBE_TRADEOFF",
+        urgency: "high",
+      },
+      recentEvents: [],
+      originTurnId: "seg-sd-1",
+    });
+
+    expect(reward.components.tradeoffDepth).toBeGreaterThan(0);
+    expect(Array.isArray(reward.designEvidenceTypes)).toBe(true);
+    expect(reward.designEvidenceTypes).toContain("tradeoff");
+    expect(reward.attribution.originTurnId).toBe("seg-sd-1");
+    expect(typeof reward.attribution.breakdown.tradeoffDepth).toBe("number");
+  });
 });

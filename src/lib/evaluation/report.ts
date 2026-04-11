@@ -300,7 +300,25 @@ type RewardSummary = {
     badInterruption: number;
     flowPreservation: number;
     cleanClosure: number;
+    riskIdentified: number;
+    tradeoffDepth: number;
+    handwavePenalty: number;
   };
+  designEvidenceTypeCounts: Array<{ type: string; count: number }>;
+  attributions: Array<{
+    originTurnId: string | null;
+    total: number;
+    breakdown: {
+      evidenceGain: number;
+      redundancy: number;
+      badInterruption: number;
+      flowPreservation: number;
+      cleanClosure: number;
+      riskIdentified: number;
+      tradeoffDepth: number;
+      handwavePenalty: number;
+    };
+  }>;
   topPenalties: Array<{ penalty: string; count: number }>;
   trend: Array<{ index: number; total: number; stage: string | null }>;
 };
@@ -1160,6 +1178,9 @@ function buildRewardSummary(events: SessionEventLike[]): RewardSummary | null {
     badInterruption: number;
     flowPreservation: number;
     cleanClosure: number;
+    riskIdentified: number;
+    tradeoffDepth: number;
+    handwavePenalty: number;
   }>(
     (acc, reward) => {
       const components = asRecord(reward.components);
@@ -1168,10 +1189,56 @@ function buildRewardSummary(events: SessionEventLike[]): RewardSummary | null {
       acc.badInterruption += numberValue(components.badInterruption);
       acc.flowPreservation += numberValue(components.flowPreservation);
       acc.cleanClosure += numberValue(components.cleanClosure);
+      acc.riskIdentified += numberValue(components.riskIdentified);
+      acc.tradeoffDepth += numberValue(components.tradeoffDepth);
+      acc.handwavePenalty += numberValue(components.handwavePenalty);
       return acc;
     },
-    { evidenceGain: 0, redundancy: 0, badInterruption: 0, flowPreservation: 0, cleanClosure: 0 },
+    {
+      evidenceGain: 0,
+      redundancy: 0,
+      badInterruption: 0,
+      flowPreservation: 0,
+      cleanClosure: 0,
+      riskIdentified: 0,
+      tradeoffDepth: 0,
+      handwavePenalty: 0,
+    },
   );
+
+  const designEvidenceTypeCounts = new Map<string, number>();
+  for (const reward of rewardEvents) {
+    const types = Array.isArray(reward.designEvidenceTypes)
+      ? reward.designEvidenceTypes.filter((item): item is string => typeof item === "string")
+      : [];
+    for (const type of types) {
+      designEvidenceTypeCounts.set(type, (designEvidenceTypeCounts.get(type) ?? 0) + 1);
+    }
+  }
+
+  const attributions = events
+    .filter((event) => event.eventType === "REWARD_RECORDED")
+    .slice(-8)
+    .map((event) => {
+      const payload = asRecord(event.payloadJson);
+      const reward = asRecord(payload.reward);
+      const attribution = asRecord(reward.attribution);
+      const breakdown = asRecord(attribution.breakdown);
+      return {
+        originTurnId: stringValue(attribution.originTurnId),
+        total: typeof reward.total === "number" ? Number(reward.total.toFixed(2)) : 0,
+        breakdown: {
+          evidenceGain: Number(numberValue(breakdown.evidenceGain).toFixed(2)),
+          redundancy: Number(numberValue(breakdown.redundancy).toFixed(2)),
+          badInterruption: Number(numberValue(breakdown.badInterruption).toFixed(2)),
+          flowPreservation: Number(numberValue(breakdown.flowPreservation).toFixed(2)),
+          cleanClosure: Number(numberValue(breakdown.cleanClosure).toFixed(2)),
+          riskIdentified: Number(numberValue(breakdown.riskIdentified).toFixed(2)),
+          tradeoffDepth: Number(numberValue(breakdown.tradeoffDepth).toFixed(2)),
+          handwavePenalty: Number(numberValue(breakdown.handwavePenalty).toFixed(2)),
+        },
+      };
+    });
 
   const trend = events
     .filter((event) => event.eventType === "REWARD_RECORDED")
@@ -1199,7 +1266,14 @@ function buildRewardSummary(events: SessionEventLike[]): RewardSummary | null {
       badInterruption: Number((componentTotals.badInterruption / count).toFixed(2)),
       flowPreservation: Number((componentTotals.flowPreservation / count).toFixed(2)),
       cleanClosure: Number((componentTotals.cleanClosure / count).toFixed(2)),
+      riskIdentified: Number((componentTotals.riskIdentified / count).toFixed(2)),
+      tradeoffDepth: Number((componentTotals.tradeoffDepth / count).toFixed(2)),
+      handwavePenalty: Number((componentTotals.handwavePenalty / count).toFixed(2)),
     },
+    designEvidenceTypeCounts: [...designEvidenceTypeCounts.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([type, count]) => ({ type, count })),
+    attributions,
     topPenalties: [...penaltyCounts.entries()]
       .sort((left, right) => right[1] - left[1])
       .slice(0, 5)

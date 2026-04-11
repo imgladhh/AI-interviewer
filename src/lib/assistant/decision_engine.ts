@@ -354,7 +354,7 @@ export function makeCandidateDecision(input: {
     }
 
     if (conversationHealth.mode === "RESCUE") {
-      if (recentEchoEvents <= 1 && signals.echoLikely) {
+      if (recentEchoEvents < 2) {
         return attachIntentTrajectory({
           action: "ask_for_clarification",
           target: "reasoning",

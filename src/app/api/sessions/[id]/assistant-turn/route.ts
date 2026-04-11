@@ -316,6 +316,7 @@ export async function POST(_: Request, { params }: RouteContext) {
         eventType: event.eventType,
         payloadJson: event.payloadJson,
       })),
+      originTurnId: transcript.id,
     });
     const rewardEvent = await prisma.sessionEvent.create({
       data: {

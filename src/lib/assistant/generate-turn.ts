@@ -2372,7 +2372,9 @@ function assessDecisionComplexity(decision: CandidateDecision) {
           : decision.conversationHealthMode === "CONSTRAINED"
             ? 0.1
             : 0;
-  const echoPenalty = decision.echoRecoveryMode ? 0.12 : 0;
+  const echoPenalty = decision.echoRecoveryMode
+    ? 0.2 + Math.min(0.1, (decision.echoRecoveryAttempt ?? 0) * 0.05)
+    : 0;
 
   return Number(
     Math.min(
