@@ -750,6 +750,47 @@ function fromSeed(seed: QuickQuestionSeed): QuestionBankEntry {
   };
 }
 
+type SystemDesignSeed = {
+  title: string;
+  slug: string;
+  scenario: string;
+  scope: string[];
+  focus: string[];
+  estimatedMinutes: number;
+  topicTags: string[];
+};
+
+function buildSystemDesignPrompt(seed: SystemDesignSeed) {
+  return [
+    seed.scenario,
+    "",
+    "Scope:",
+    ...seed.scope.map((item) => `- ${item}`),
+    "",
+    "What to cover in the interview:",
+    "- Functional requirements and non-functional goals (latency, availability, reliability, cost).",
+    "- Core APIs and data model boundaries.",
+    "- High-level architecture and critical read/write paths.",
+    ...seed.focus.map((item) => `- ${item}`),
+    "- Capacity and scaling assumptions when traffic/throughput concerns are active.",
+    "- SPOF, bottlenecks, and mitigation tradeoffs.",
+  ].join("\n");
+}
+
+function fromSystemDesignSeed(seed: SystemDesignSeed): QuestionBankEntry {
+  return {
+    type: QuestionType.SYSTEM_DESIGN,
+    title: seed.title,
+    slug: seed.slug,
+    prompt: buildSystemDesignPrompt(seed),
+    difficulty: Difficulty.MEDIUM,
+    companyStyle: GENERIC,
+    levelTarget: null,
+    estimatedMinutes: seed.estimatedMinutes,
+    topicTags: Array.from(new Set(["system-design", ...seed.topicTags])),
+  };
+}
+
 const EXTRA_QUESTION_SEEDS: QuickQuestionSeed[] = [
   {
     title: "Maximum Subarray",
@@ -1680,9 +1721,278 @@ const EXTRA_QUESTION_SEEDS: QuickQuestionSeed[] = [
   },
 ];
 
-const EXTRA_QUESTION_BANK: QuestionBankEntry[] = EXTRA_QUESTION_SEEDS.map(fromSeed);
+const SYSTEM_DESIGN_QUESTION_SEEDS: SystemDesignSeed[] = [
+  {
+    title: "Design Twitter/X Feed",
+    slug: "system-design-twitter-feed",
+    scenario: "Design a Twitter/X-like social feed service with tweet publishing and timeline fanout.",
+    scope: ["Users publish posts and follow other users.", "Users load home timeline with low latency.", "Users can like/repost and view counts."],
+    focus: ["Fanout on write vs fanout on read tradeoff.", "Hot user handling and timeline caching strategy."],
+    estimatedMinutes: 50,
+    topicTags: ["feed", "fanout", "cache"],
+  },
+  {
+    title: "Design Instagram",
+    slug: "system-design-instagram",
+    scenario: "Design an Instagram-like photo sharing platform.",
+    scope: ["Users upload photos/videos.", "Users view personalized feed and stories.", "Users interact via likes/comments."],
+    focus: ["Media storage/CDN strategy.", "Feed ranking pipeline boundaries."],
+    estimatedMinutes: 50,
+    topicTags: ["media", "feed", "cdn"],
+  },
+  {
+    title: "Design WhatsApp",
+    slug: "system-design-whatsapp",
+    scenario: "Design a WhatsApp-like real-time messaging platform.",
+    scope: ["1:1 and group messaging.", "Message delivery/read receipts.", "Online presence and last seen."],
+    focus: ["Realtime delivery guarantees and offline sync.", "Ordering, idempotency, and retry model."],
+    estimatedMinutes: 50,
+    topicTags: ["messaging", "realtime", "consistency"],
+  },
+  {
+    title: "Design Slack",
+    slug: "system-design-slack",
+    scenario: "Design a Slack-like team chat and channel collaboration system.",
+    scope: ["Workspace/channel messaging.", "Search over historical messages.", "File attachments in channels."],
+    focus: ["Channel shard model and websocket scaling.", "Search indexing and retention strategy."],
+    estimatedMinutes: 50,
+    topicTags: ["messaging", "search", "websocket"],
+  },
+  {
+    title: "Design YouTube",
+    slug: "system-design-youtube",
+    scenario: "Design a YouTube-like video upload and streaming system.",
+    scope: ["Video upload and transcoding.", "Playback with adaptive bitrate.", "Metadata, comments, and engagement counters."],
+    focus: ["Transcoding pipeline and storage lifecycle.", "Global CDN and cache invalidation strategy."],
+    estimatedMinutes: 55,
+    topicTags: ["video", "cdn", "pipeline"],
+  },
+  {
+    title: "Design Netflix Streaming",
+    slug: "system-design-netflix-streaming",
+    scenario: "Design a Netflix-like on-demand video streaming platform.",
+    scope: ["Catalog browsing and playback.", "Personalized recommendations integration points.", "Session resume and watch progress."],
+    focus: ["Playback latency and startup optimization.", "Regional failover and content delivery resilience."],
+    estimatedMinutes: 55,
+    topicTags: ["streaming", "cdn", "reliability"],
+  },
+  {
+    title: "Design Uber Ride Matching",
+    slug: "system-design-uber-ride-matching",
+    scenario: "Design an Uber-like ride matching platform.",
+    scope: ["Rider request and driver matching.", "Live trip tracking.", "ETA and pricing estimate."],
+    focus: ["Geo-indexing for nearby driver lookup.", "Dispatch fairness vs latency tradeoff."],
+    estimatedMinutes: 55,
+    topicTags: ["geo", "dispatch", "realtime"],
+  },
+  {
+    title: "Design DoorDash Order Dispatch",
+    slug: "system-design-doordash-dispatch",
+    scenario: "Design a DoorDash-like food delivery dispatch system.",
+    scope: ["Order placement and restaurant acceptance.", "Courier assignment and tracking.", "Order status timeline updates."],
+    focus: ["Multi-sided marketplace consistency.", "Dispatch optimization under surge."],
+    estimatedMinutes: 55,
+    topicTags: ["delivery", "dispatch", "marketplace"],
+  },
+  {
+    title: "Design Google Maps Nearby Search",
+    slug: "system-design-google-maps-nearby-search",
+    scenario: "Design a nearby places search service like Google Maps.",
+    scope: ["Users query nearby places by location and category.", "Return ranked results with metadata.", "Support map viewport updates."],
+    focus: ["Geo-hash / S2 indexing choices.", "Ranking freshness vs latency tradeoff."],
+    estimatedMinutes: 50,
+    topicTags: ["geo", "search", "indexing"],
+  },
+  {
+    title: "Design Waze Traffic Ingestion",
+    slug: "system-design-waze-traffic-ingestion",
+    scenario: "Design a Waze-like live traffic ingestion and routing signal system.",
+    scope: ["Ingest anonymized GPS pings.", "Detect congestion/incidents.", "Serve routing quality signals."],
+    focus: ["High-volume stream processing architecture.", "Outlier filtering and stale-data handling."],
+    estimatedMinutes: 50,
+    topicTags: ["streaming", "geo", "analytics"],
+  },
+  {
+    title: "Design LeetCode Judge",
+    slug: "system-design-leetcode-judge",
+    scenario: "Design an online coding judge platform like LeetCode.",
+    scope: ["Submit code in multiple languages.", "Run against hidden/public test sets.", "Return verdict and runtime stats."],
+    focus: ["Sandbox/isolation model.", "Queueing and autoscaling workers."],
+    estimatedMinutes: 50,
+    topicTags: ["execution", "sandbox", "queue"],
+  },
+  {
+    title: "Design GitHub Notifications",
+    slug: "system-design-github-notifications",
+    scenario: "Design a GitHub-like notifications system.",
+    scope: ["Generate events for repo activities.", "Deliver in-app and email notifications.", "Support per-user notification preferences."],
+    focus: ["Event fanout and deduplication.", "Preference filtering pipeline."],
+    estimatedMinutes: 45,
+    topicTags: ["notifications", "fanout", "preferences"],
+  },
+  {
+    title: "Design Jira Issue Tracker",
+    slug: "system-design-jira-issue-tracker",
+    scenario: "Design a Jira-like issue tracking system.",
+    scope: ["Project/issue CRUD with workflows.", "Comments and activity history.", "Search/filter by project, assignee, status."],
+    focus: ["Workflow state machine and audit log.", "Query indexing strategy for boards."],
+    estimatedMinutes: 50,
+    topicTags: ["workflow", "search", "audit-log"],
+  },
+  {
+    title: "Design Confluence Docs",
+    slug: "system-design-confluence-docs",
+    scenario: "Design a Confluence-like collaborative document system.",
+    scope: ["Rich text document editing.", "Version history and restore.", "Permissioned sharing."],
+    focus: ["Consistency model for collaborative edits.", "Revision storage and diff strategy."],
+    estimatedMinutes: 50,
+    topicTags: ["docs", "collaboration", "versioning"],
+  },
+  {
+    title: "Design Google Docs Collaboration",
+    slug: "system-design-google-docs-collab",
+    scenario: "Design a Google Docs-like real-time collaborative editor.",
+    scope: ["Multiple users edit same doc concurrently.", "Low-latency cursor/presence updates.", "Version recovery and conflict safety."],
+    focus: ["OT vs CRDT tradeoff.", "Session state and persistence boundaries."],
+    estimatedMinutes: 55,
+    topicTags: ["collaboration", "realtime", "consistency"],
+  },
+  {
+    title: "Design Zoom Meeting Service",
+    slug: "system-design-zoom-meeting-service",
+    scenario: "Design a Zoom-like video meeting system.",
+    scope: ["Create/join meeting rooms.", "Audio/video streams for participants.", "Chat and screen sharing metadata."],
+    focus: ["SFU/MCU media routing tradeoff.", "Regional routing and failover."],
+    estimatedMinutes: 55,
+    topicTags: ["realtime", "video", "sfu"],
+  },
+  {
+    title: "Design Gmail Search",
+    slug: "system-design-gmail-search",
+    scenario: "Design a Gmail-like mailbox search system.",
+    scope: ["Ingest incoming/outgoing email.", "Query by sender/subject/body.", "Support labels and filters."],
+    focus: ["Indexing pipeline and query latency.", "Consistency between mailbox state and index."],
+    estimatedMinutes: 50,
+    topicTags: ["search", "indexing", "mail"],
+  },
+  {
+    title: "Design Calendar Booking",
+    slug: "system-design-calendar-booking",
+    scenario: "Design a calendar scheduling and booking platform.",
+    scope: ["Manage events and availability.", "Find meeting slots for participants.", "Send reminders and update attendees."],
+    focus: ["Double-booking prevention model.", "Timezone and recurrence handling."],
+    estimatedMinutes: 50,
+    topicTags: ["calendar", "consistency", "scheduling"],
+  },
+  {
+    title: "Design Stripe Payments Ledger",
+    slug: "system-design-stripe-payments-ledger",
+    scenario: "Design a Stripe-like payments and ledger service.",
+    scope: ["Authorize/capture/refund payment.", "Maintain immutable ledger entries.", "Expose merchant balance and reports."],
+    focus: ["Idempotency and exactly-once semantics.", "Reconciliation and auditability."],
+    estimatedMinutes: 55,
+    topicTags: ["payments", "ledger", "idempotency"],
+  },
+  {
+    title: "Design Fraud Detection Pipeline",
+    slug: "system-design-fraud-detection-pipeline",
+    scenario: "Design a real-time fraud detection pipeline for transactions.",
+    scope: ["Score transactions in near real time.", "Support rule + model signals.", "Generate review actions and feedback loops."],
+    focus: ["Online feature retrieval and latency budget.", "False positive vs recall tradeoff."],
+    estimatedMinutes: 55,
+    topicTags: ["fraud", "streaming", "ml-systems"],
+  },
+  {
+    title: "Design Feature Flag Platform",
+    slug: "system-design-feature-flag-platform",
+    scenario: "Design a feature flag management and evaluation platform.",
+    scope: ["Create/update flags and targeting rules.", "SDK evaluation in client/server paths.", "Audit changes and rollout history."],
+    focus: ["Control plane vs data plane separation.", "Consistency and cache invalidation for rules."],
+    estimatedMinutes: 45,
+    topicTags: ["config", "control-plane", "cache"],
+  },
+  {
+    title: "Design Rate Limiter Service",
+    slug: "system-design-rate-limiter-service",
+    scenario: "Design a centralized distributed rate limiter service.",
+    scope: ["Per-user/per-API quotas.", "Burst handling and backoff responses.", "Observability for throttling decisions."],
+    focus: ["Token bucket/leaky bucket/sliding window tradeoffs.", "Hot key mitigation and regional consistency."],
+    estimatedMinutes: 45,
+    topicTags: ["rate-limiting", "distributed-systems", "cache"],
+  },
+  {
+    title: "Design API Gateway",
+    slug: "system-design-api-gateway",
+    scenario: "Design an API gateway platform for microservices.",
+    scope: ["Authn/authz and request routing.", "Rate limiting and quota enforcement.", "Request/response transformation and logging."],
+    focus: ["Gateway plugin architecture.", "Latency overhead and reliability strategy."],
+    estimatedMinutes: 45,
+    topicTags: ["api-gateway", "auth", "observability"],
+  },
+  {
+    title: "Design Web Crawler",
+    slug: "system-design-web-crawler",
+    scenario: "Design a scalable web crawler service.",
+    scope: ["Discover and schedule URLs.", "Fetch and parse pages.", "Persist crawl metadata and dedupe content."],
+    focus: ["Frontier scheduling and politeness constraints.", "Duplicate detection and recrawl strategy."],
+    estimatedMinutes: 50,
+    topicTags: ["crawler", "queue", "deduplication"],
+  },
+  {
+    title: "Design Search Autocomplete",
+    slug: "system-design-search-autocomplete",
+    scenario: "Design a search autocomplete service.",
+    scope: ["Return top suggestions for typed prefix.", "Personalized vs global suggestions.", "Support typo tolerance."],
+    focus: ["Trie/index structure choices.", "Freshness vs latency tradeoff for updates."],
+    estimatedMinutes: 45,
+    topicTags: ["autocomplete", "trie", "ranking"],
+  },
+  {
+    title: "Design Log Aggregation Platform",
+    slug: "system-design-log-aggregation-platform",
+    scenario: "Design a centralized log ingestion and query platform.",
+    scope: ["Ingest logs from many services.", "Index/query logs with filters.", "Retention and tiered storage policies."],
+    focus: ["Write-heavy ingestion pipeline.", "Index granularity and cost controls."],
+    estimatedMinutes: 50,
+    topicTags: ["logging", "observability", "storage"],
+  },
+  {
+    title: "Design Metrics and Alerting",
+    slug: "system-design-metrics-alerting",
+    scenario: "Design a metrics collection and alerting system.",
+    scope: ["Collect time-series metrics.", "Query dashboards and aggregates.", "Trigger alerts with suppression rules."],
+    focus: ["Time-series storage choices.", "Alert evaluation scaling and dedupe."],
+    estimatedMinutes: 50,
+    topicTags: ["metrics", "alerting", "time-series"],
+  },
+  {
+    title: "Design S3-like Object Storage",
+    slug: "system-design-object-storage",
+    scenario: "Design an S3-like distributed object storage service.",
+    scope: ["Store/retrieve large immutable objects.", "Namespace buckets and keys.", "Lifecycle and replication policies."],
+    focus: ["Metadata and chunk placement strategy.", "Durability model and repair workflow."],
+    estimatedMinutes: 55,
+    topicTags: ["object-storage", "durability", "replication"],
+  },
+  {
+    title: "Design Kafka-like Event Streaming",
+    slug: "system-design-kafka-like-streaming",
+    scenario: "Design a Kafka-like distributed event streaming platform.",
+    scope: ["Publish/subscribe topics with partitions.", "Consumer groups and offsets.", "Retention and replay."],
+    focus: ["Partitioning and leader replication model.", "Ordering, throughput, and recovery tradeoffs."],
+    estimatedMinutes: 55,
+    topicTags: ["streaming", "pub-sub", "replication"],
+  },
+];
 
-const ALL_BASE_QUESTION_BANK: QuestionBankEntry[] = [...BASE_QUESTION_BANK, ...EXTRA_QUESTION_BANK];
+const EXTRA_QUESTION_BANK: QuestionBankEntry[] = EXTRA_QUESTION_SEEDS.map(fromSeed);
+const SYSTEM_DESIGN_EXTRA_BANK: QuestionBankEntry[] = SYSTEM_DESIGN_QUESTION_SEEDS.map(fromSystemDesignSeed);
+
+const ALL_BASE_QUESTION_BANK: QuestionBankEntry[] = [
+  ...BASE_QUESTION_BANK,
+  ...SYSTEM_DESIGN_EXTRA_BANK,
+  ...EXTRA_QUESTION_BANK,
+];
 
 const COMPANY_VARIANTS = ALL_BASE_QUESTION_BANK.flatMap((entry) => {
   if (entry.type !== QuestionType.CODING) {

@@ -6,6 +6,11 @@ describe("question bank", () => {
     expect(QUESTION_BANK.length).toBeGreaterThanOrEqual(300);
   });
 
+  it("contains at least 30 system design questions", () => {
+    const systemDesignCount = QUESTION_BANK.filter((question) => String(question.type) === "SYSTEM_DESIGN").length;
+    expect(systemDesignCount).toBeGreaterThanOrEqual(30);
+  });
+
   it("uses unique slugs", () => {
     const slugs = QUESTION_BANK.map((question) => question.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
