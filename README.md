@@ -1326,6 +1326,152 @@ First implementation steps:
 - Commit 1: system-design six-stage state machine (`stages.ts` + guards/tests)
 - Commit 2: five design signals (`signal_extractor.ts` + snapshots/tests)
 
+##### System Design Interviewer Execution Roadmap (v2, Final Executable)
+
+Execution goals:
+- every phase maps to concrete files/functions
+- every phase has explicit DoD
+- prioritize shippable decision-system behavior over conceptual discussion
+
+Phase sequence:
+
+1. Phase 0 (`P0`) - Mode + stage baseline
+- files:
+  - `src/lib/assistant/stages.ts`
+  - `src/lib/assistant/pass_conditions.ts` (stage guard behavior)
+  - `/admin` stage timeline surfaces (existing ops feed)
+- implementation target:
+  - keep canonical system-design flow (`REQUIREMENTS -> CAPACITY -> HIGH_LEVEL -> DEEP_DIVE -> REFINEMENT -> WRAP_UP`)
+  - enforce deep-dive guard when capacity is required
+- DoD:
+  - no stage skip that violates capacity prerequisites
+  - stage transitions remain explainable and visible in `/admin`
+
+2. Phase 1 (`P0`) - Design signals v1
+- files:
+  - `src/lib/assistant/signal_extractor.ts`
+  - `src/lib/session/state.ts` / snapshot payload mapping
+- required signals:
+  - `requirement_missing`
+  - `capacity_missing`
+  - `tradeoff_missed`
+  - `spof_missed`
+  - `bottleneck_unexamined`
+- required pass semantics:
+  - capacity done requires quantified estimate and design linkage
+  - tradeoff done requires options + pros/cons
+  - SPOF done requires identified failure point + mitigation
+- DoD:
+  - all 5 signals are stable
+  - each signal has evidence references
+  - admin view shows signal progression over turns
+
+3. Phase 2 (`P1`) - Stage-aware handwave detection
+- files:
+  - `src/lib/assistant/depth.ts` (new)
+  - `src/lib/assistant/signal_extractor.ts`
+  - `src/lib/assistant/system_design_decision.ts`
+  - `src/lib/assistant/reward.ts` and `src/lib/evaluation/report.ts`
+- implementation target:
+  - expected depth matrix by stage
+  - depth scoring from quantification/constraints/causal chain
+  - handwave classes:
+    - `unjustified_component_choice`
+    - `unquantified_scaling_claim`
+    - `tradeoff_evasion`
+  - decision boost for probe actions when handwave is active
+  - reward penalty + report weakness attribution
+- DoD:
+  - deep-dive rejects shallow answers consistently
+  - high-level answers are not over-penalized
+
+4. Phase 3 (`P1`) - Decision stability (inertia + hysteresis)
+- files:
+  - `src/lib/assistant/system_design_decision.ts`
+  - regression tests in `src/lib/assistant/*.test.ts`
+- implementation target:
+  - inertia term: `FinalScore(A) = Score(A) + lambda * same_as_previous(A)`
+  - hysteresis gate: keep previous action unless new action beats by delta
+  - default parameters:
+    - `lambda = 0.2`
+    - `delta = 0.2`
+- DoD:
+  - action oscillation is reduced
+  - multi-turn flow is measurably more coherent
+
+5. Phase 4 (`P1.5`) - Pivot moment detection
+- files:
+  - `src/lib/assistant/pivot.ts` (new)
+  - reward/report integration points
+- implementation target:
+  - emit `PivotMoment { turn_id, type, impact_score }` only on strict triggers:
+    - hint was received
+    - new design dimension was introduced
+    - design changed materially
+  - connect to reward uplift via pivot impact
+- DoD:
+  - captures true self-correction / insight jumps
+  - avoids triggering on normal incremental progress
+
+6. Phase 5 (`P0-P1`, parallel) - Calibration
+- files:
+  - reward/report calibration modules
+  - offline evaluation fixtures
+- implementation target:
+  - labeled session set with level/hire/pivot references
+  - non-linear level caps (for missing critical dimensions)
+  - tune gains/penalties (`G_evidence`, `P_handwave`, `G_pivot`)
+- DoD:
+  - recommendation stability improves
+  - outputs align more closely with human grading
+
+7. Phase 6 (`P1`) - Regression lab v2
+- files:
+  - `src/lib/assistant/policy-regression.ts`
+  - `src/lib/assistant/policy-regression.test.ts`
+- required scenarios:
+  - `late_bloomer` (pivot)
+  - `confident_bullshitter` (handwave)
+  - `rigid_coder` (no tradeoff depth)
+- required outputs:
+  - decision timeline
+  - score breakdown
+  - reward timeline/delta
+- DoD:
+  - behavior remains stable after policy changes
+  - policy variants are directly comparable
+
+8. Phase 7 (`P1`) - System-design causal loop
+- files:
+  - stage guard + decision override path
+- implementation target:
+  - force capacity recovery when deep dive is attempted with missing capacity
+  - keep escape hatch for explicit, scoped assumptions to avoid rigid deadlock
+- DoD:
+  - no-capacity deep-dive is reliably intercepted
+  - flow stays adaptive, not brittle
+
+Fast vs Slow path (must keep):
+- Fast path (sync, current turn):
+  - stage
+  - basic signals
+  - decision
+- Slow path (async, post-turn):
+  - deep handwave check
+  - pivot detection
+  - DNA recompute
+- invariant:
+  - slow path must not block or mutate the current-turn response contract
+
+Explicit non-goals for this roadmap:
+- multimodal deep understanding expansion
+- prosody-heavy scoring
+- sandbox/tooling overhaul
+- large prompt architecture rewrite
+
+One-line objective:
+- evolve the interviewer from an "AI behavior script" into a calibrated, auditable decision system.
+
 #### If We Expand to ML System Design
 
 Everything above for system design still applies, plus ML-specific semantic layers:
