@@ -26,7 +26,7 @@ This repo now has a working MVP-plus skeleton with:
 
 ## Recent Progress
 
-- System design interviewer `Phase 0/1/2/3/4` is completed (including reward attribution and report wiring).
+- System design interviewer `Phase 0/1/2/3/4/5/6/7` is completed (including whiteboard UX with aux-only weak signals).
 - Stage control is mode-aware, and system design includes API contract gating + on-demand capacity gating.
 - Design signals (`requirements/capacity/tradeoff/SPOF/bottleneck`) are extracted with evidence refs and visible in admin snapshots.
 - System design decision path is now separated from coding decision flow to avoid regressions while still reusing shared conversation-quality controls.
@@ -1210,7 +1210,13 @@ Current implementation status (updated April 11, 2026):
   - system-design-specific decision actions and score routing are separated from coding flow with no-code invariant protection.
 - `Phase 4` completed
   - reward/report now include system-design depth vs handwave attribution by turn and evidence type.
-- next active build target: `Phase 5` (`Report and DNA extension`).
+- `Phase 5` completed
+  - report now emits System Design DNA dimensions with evidence pinning (`score -> snapshotId -> turnIds/evidenceRefs`).
+- `Phase 6` completed
+  - system design regression lab now includes `no_estimation`, `handwave`, and `strong_tradeoff` scenarios with decision timeline + score/reward diffs.
+- `Phase 7` completed
+  - Excalidraw whiteboard telemetry now emits weak signals (`component_count`, `connection_count`) as auxiliary-only events, explicitly excluded from core decision/reward truth paths.
+- next active build target: post-v1 system design calibration and scenario expansion.
 
 Phase sequence:
 

@@ -1,6 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useEffect, useMemo, useRef } from "react";
+import { extractWhiteboardWeakSignals, type WhiteboardElementLike, type WhiteboardWeakSignals } from "@/lib/interview/whiteboard-signals";
 
 const Excalidraw = dynamic(
   async () => {
@@ -22,7 +24,36 @@ const Excalidraw = dynamic(
   },
 );
 
-export function SystemDesignWhiteboard() {
+type SystemDesignWhiteboardProps = {
+  onWeakSignalChange?: (signals: WhiteboardWeakSignals) => void;
+};
+
+export function SystemDesignWhiteboard({ onWeakSignalChange }: SystemDesignWhiteboardProps) {
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    },
+    [],
+  );
+  const onChange = useMemo(
+    () => (elements: unknown) => {
+      if (!Array.isArray(elements)) {
+        return;
+      }
+      const parsed = extractWhiteboardWeakSignals(elements as WhiteboardElementLike[]);
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+      debounceRef.current = setTimeout(() => {
+        onWeakSignalChange?.(parsed);
+      }, 300);
+    },
+    [onWeakSignalChange],
+  );
+
   return (
     <div
       style={{
@@ -32,7 +63,7 @@ export function SystemDesignWhiteboard() {
         overflow: "hidden",
       }}
     >
-      <Excalidraw />
+      <Excalidraw onChange={onChange} />
     </div>
   );
 }

@@ -2,8 +2,9 @@
 import { getPolicyPreset, type PolicyArchetype } from "@/lib/assistant/policy-config";
 import { evaluateTurnReward } from "@/lib/assistant/reward";
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
+import { makeSystemDesignDecision } from "@/lib/assistant/system_design_decision";
 import type { CodingInterviewPolicy } from "@/lib/assistant/policy";
-import type { CodingInterviewStage } from "@/lib/assistant/stages";
+import type { CodingInterviewStage, SystemDesignStage } from "@/lib/assistant/stages";
 
 export type PolicyRegressionScenarioId =
   | "strong_precode"
@@ -88,6 +89,44 @@ export type PolicyTuningSuggestion = {
   recommendedAdjustments: string[];
 };
 
+export type SystemDesignRegressionScenarioId =
+  | "no_estimation_candidate"
+  | "handwave_candidate"
+  | "strong_tradeoff_candidate";
+
+export type SystemDesignRegressionScenario = {
+  id: SystemDesignRegressionScenarioId;
+  label: string;
+  currentStage: SystemDesignStage;
+  signals: CandidateSignalSnapshot;
+  recentEvents?: Array<{ eventType: string; eventTime?: Date | string; payloadJson?: unknown }>;
+};
+
+export type SystemDesignRegressionResult = {
+  scenarioId: SystemDesignRegressionScenarioId;
+  label: string;
+  decisionTimeline: Array<{
+    turn: number;
+    action: CandidateDecision["action"];
+    target: CandidateDecision["target"];
+    systemDesignActionType: string;
+    totalScore?: number;
+    rewardTotal: number;
+    rewardPenalties: string[];
+  }>;
+  totalScore: number;
+  averageReward: number;
+  cumulativeReward: number;
+};
+
+export type SystemDesignRegressionReport = {
+  scenarioId: SystemDesignRegressionScenarioId;
+  label: string;
+  result: SystemDesignRegressionResult;
+  scoreDiffFromBest: number;
+  rewardDiffFromBest: number;
+};
+
 const baseSignals: CandidateSignalSnapshot = {
   understanding: "clear",
   progress: "progressing",
@@ -105,6 +144,28 @@ const baseSignals: CandidateSignalSnapshot = {
   structuredEvidence: [],
   summary: "Understanding is clear and progress is progressing.",
   trendSummary: "Candidate state is broadly stable relative to the previous snapshot.",
+};
+
+const baseSystemDesignSignals: CandidateSignalSnapshot = {
+  ...baseSignals,
+  summary: "System design candidate snapshot",
+  designSignals: {
+    signals: {
+      requirement_missing: false,
+      capacity_missing: false,
+      tradeoff_missed: false,
+      spof_missed: false,
+      bottleneck_unexamined: false,
+    },
+    evidenceRefs: {
+      requirement_missing: [],
+      capacity_missing: [],
+      tradeoff_missed: [],
+      spof_missed: [],
+      bottleneck_unexamined: [],
+    },
+    summary: "design signals baseline",
+  },
 };
 
 const basePolicy: CodingInterviewPolicy = {
@@ -392,6 +453,88 @@ export const POLICY_REGRESSION_SCENARIOS: PolicyRegressionScenario[] = [
   },
 ];
 
+export const SYSTEM_DESIGN_REGRESSION_SCENARIOS: SystemDesignRegressionScenario[] = [
+  {
+    id: "no_estimation_candidate",
+    label: "No estimation candidate",
+    currentStage: "HIGH_LEVEL",
+    signals: {
+      ...baseSystemDesignSignals,
+      designSignals: {
+        signals: {
+          requirement_missing: false,
+          capacity_missing: true,
+          tradeoff_missed: false,
+          spof_missed: false,
+          bottleneck_unexamined: false,
+        },
+        evidenceRefs: {
+          requirement_missing: ["USER#1: requirements are clear"],
+          capacity_missing: ["No QPS/data estimate provided yet."],
+          tradeoff_missed: ["USER#2: discussed one architecture path only"],
+          spof_missed: ["USER#3: reliability is underspecified"],
+          bottleneck_unexamined: ["USER#3: no hotspot analysis yet"],
+        },
+        summary: "Capacity estimates are still missing.",
+      },
+    },
+  },
+  {
+    id: "handwave_candidate",
+    label: "Handwave candidate",
+    currentStage: "DEEP_DIVE",
+    signals: {
+      ...baseSystemDesignSignals,
+      reasoningDepth: "thin",
+      communication: "mixed",
+      designSignals: {
+        signals: {
+          requirement_missing: false,
+          capacity_missing: false,
+          tradeoff_missed: true,
+          spof_missed: true,
+          bottleneck_unexamined: false,
+        },
+        evidenceRefs: {
+          requirement_missing: ["USER#1: basic requirements listed"],
+          capacity_missing: ["USER#2: rough scale stated"],
+          tradeoff_missed: ["No explicit option A vs option B tradeoff."],
+          spof_missed: ["Single metadata service without mitigation."],
+          bottleneck_unexamined: ["Partial hotspot mention only."],
+        },
+        summary: "Tradeoff and SPOF reasoning are still handwavy.",
+      },
+    },
+  },
+  {
+    id: "strong_tradeoff_candidate",
+    label: "Strong tradeoff candidate",
+    currentStage: "WRAP_UP",
+    signals: {
+      ...baseSystemDesignSignals,
+      reasoningDepth: "deep",
+      communication: "clear",
+      designSignals: {
+        signals: {
+          requirement_missing: false,
+          capacity_missing: false,
+          tradeoff_missed: false,
+          spof_missed: false,
+          bottleneck_unexamined: false,
+        },
+        evidenceRefs: {
+          requirement_missing: ["Requirements are complete."],
+          capacity_missing: ["Capacity estimates already integrated."],
+          tradeoff_missed: ["Alternatives compared with pros/cons."],
+          spof_missed: ["SPOF and failover covered."],
+          bottleneck_unexamined: ["Hotspots and optimizations covered."],
+        },
+        summary: "Design coverage is complete.",
+      },
+    },
+  },
+];
+
 export function evaluatePolicyScenario(
   scenario: PolicyRegressionScenario,
   archetype: PolicyArchetype,
@@ -668,5 +811,135 @@ function buildRewardSpread(results: PolicyRegressionResult[]) {
     bestArchetype: best.archetype,
     weakestArchetype: weakest.archetype,
   };
+}
+
+export function evaluateSystemDesignScenario(
+  scenario: SystemDesignRegressionScenario,
+  maxTurns = 3,
+): SystemDesignRegressionResult {
+  const decisionTimeline = runSystemDesignScenarioTimeline(scenario, maxTurns);
+  const totalScore = Number((decisionTimeline[0]?.totalScore ?? 0).toFixed(2));
+  const cumulativeReward = Number(
+    decisionTimeline.reduce((sum, item) => sum + item.rewardTotal, 0).toFixed(2),
+  );
+  const averageReward =
+    decisionTimeline.length > 0
+      ? Number((cumulativeReward / decisionTimeline.length).toFixed(2))
+      : 0;
+
+  return {
+    scenarioId: scenario.id,
+    label: scenario.label,
+    decisionTimeline,
+    totalScore,
+    averageReward,
+    cumulativeReward,
+  };
+}
+
+export function runSystemDesignRegressionLab(
+  scenarios: SystemDesignRegressionScenario[] = SYSTEM_DESIGN_REGRESSION_SCENARIOS,
+): SystemDesignRegressionReport[] {
+  const results = scenarios.map((scenario) => evaluateSystemDesignScenario(scenario));
+  const bestScore = Math.max(...results.map((item) => item.totalScore));
+  const bestReward = Math.max(...results.map((item) => item.averageReward));
+
+  return results.map((result) => ({
+    scenarioId: result.scenarioId,
+    label: result.label,
+    result,
+    scoreDiffFromBest: Number((bestScore - result.totalScore).toFixed(2)),
+    rewardDiffFromBest: Number((bestReward - result.averageReward).toFixed(2)),
+  }));
+}
+
+function runSystemDesignScenarioTimeline(
+  scenario: SystemDesignRegressionScenario,
+  maxTurns: number,
+) {
+  const recentEvents = [...(scenario.recentEvents ?? [])];
+  const signals: CandidateSignalSnapshot = JSON.parse(JSON.stringify(scenario.signals));
+  const timeline: Array<{
+    turn: number;
+    action: CandidateDecision["action"];
+    target: CandidateDecision["target"];
+    systemDesignActionType: string;
+    totalScore?: number;
+    rewardTotal: number;
+    rewardPenalties: string[];
+  }> = [];
+
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    const decision = makeSystemDesignDecision({
+      currentStage: scenario.currentStage,
+      signals,
+    });
+    const reward = evaluateTurnReward({
+      stage: scenario.currentStage,
+      decision,
+      recentEvents,
+    });
+
+    timeline.push({
+      turn: turn + 1,
+      action: decision.action,
+      target: decision.target,
+      systemDesignActionType: decision.systemDesignActionType,
+      totalScore: decision.totalScore,
+      rewardTotal: reward.total,
+      rewardPenalties: reward.penalties,
+    });
+
+    recentEvents.push(
+      {
+        eventType: "DECISION_RECORDED",
+        payloadJson: {
+          stage: scenario.currentStage,
+          decision: {
+            action: decision.action,
+            target: decision.target,
+            totalScore: decision.totalScore,
+            systemDesignActionType: decision.systemDesignActionType,
+          },
+        },
+      },
+      {
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          stage: scenario.currentStage,
+          reward,
+        },
+      },
+    );
+
+    const designSignals = signals.designSignals?.signals;
+    if (designSignals) {
+      switch (decision.systemDesignActionType) {
+        case "ASK_REQUIREMENT":
+          designSignals.requirement_missing = false;
+          break;
+        case "ASK_CAPACITY":
+          designSignals.capacity_missing = false;
+          break;
+        case "PROBE_TRADEOFF":
+          designSignals.tradeoff_missed = false;
+          break;
+        case "CHALLENGE_SPOF":
+          designSignals.spof_missed = false;
+          break;
+        case "ZOOM_IN":
+          designSignals.bottleneck_unexamined = false;
+          break;
+        case "WRAP_UP":
+          break;
+      }
+    }
+
+    if (decision.systemDesignActionType === "WRAP_UP") {
+      break;
+    }
+  }
+
+  return timeline;
 }
 

@@ -966,6 +966,11 @@ export function buildSessionEventDescription(eventType: string, payloadJson: unk
     return `AI served a ${stringOrFallback(payload.hintLevel, "light").toLowerCase()} hint during ${describeStage(payload.stage) ?? "the current stage"} (${stringOrFallback(payload.hintStyle, "generic hint")})${because}.`;
   }
 
+  if (eventType === "WHITEBOARD_SIGNAL_RECORDED") {
+    const weak = asRecord(payload.whiteboardSignal);
+    return `Whiteboard weak signal recorded (components=${stringOrFallback(weak.component_count, "0")}, connections=${stringOrFallback(weak.connection_count, "0")}, aux-only=${stringOrFallback(payload.auxiliaryOnly, "true")}).`;
+  }
+
   if (eventType === "CODE_SNAPSHOT_SAVED") {
     return `Code snapshot saved in ${stringOrFallback(payload.language, "unknown language")}.`;
   }

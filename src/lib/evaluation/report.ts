@@ -1,5 +1,7 @@
-﻿import {
+import {
   deriveCurrentCodingStage,
+  deriveCurrentSystemDesignStage,
+  describeInterviewStage,
   describeCodingStage,
   isCodingInterviewStage,
   type CodingInterviewStage,
@@ -63,6 +65,7 @@ type TrajectorySnapshotLike = {
 
 type SessionReportInput = {
   sessionId: string;
+  mode?: "CODING" | "SYSTEM_DESIGN" | null;
   questionTitle: string;
   questionPrompt?: string | null;
   targetLevel?: string | null;
@@ -108,6 +111,23 @@ type CandidateSignalSummary = {
     impact?: string;
     fix?: string;
   }>;
+  designSignals?: {
+    signals?: {
+      requirement_missing?: boolean;
+      capacity_missing?: boolean;
+      tradeoff_missed?: boolean;
+      spof_missed?: boolean;
+      bottleneck_unexamined?: boolean;
+    };
+    evidenceRefs?: {
+      requirement_missing?: string[];
+      capacity_missing?: string[];
+      tradeoff_missed?: string[];
+      spof_missed?: string[];
+      bottleneck_unexamined?: string[];
+    };
+    summary?: string;
+  };
   summary?: string;
 };
 
@@ -323,6 +343,24 @@ type RewardSummary = {
   trend: Array<{ index: number; total: number; stage: string | null }>;
 };
 
+type SystemDesignDna = {
+  requirement_clarity: number;
+  capacity_instinct: number;
+  tradeoff_depth: number;
+  reliability_awareness: number;
+  bottleneck_sensitivity: number;
+  levelRecommendation: "Mid-level" | "Senior" | "Staff";
+  strengths: string[];
+  weaknesses: string[];
+  evidencePins: Array<{
+    dimension: "requirement_clarity" | "capacity_instinct" | "tradeoff_depth" | "reliability_awareness" | "bottleneck_sensitivity";
+    score: number;
+    snapshotId: string | null;
+    turnIds: string[];
+    evidenceRefs: string[];
+  }>;
+};
+
 export type GeneratedSessionReport = {
   overallScore: number;
   recommendation: Recommendation;
@@ -336,11 +374,18 @@ export type GeneratedSessionReport = {
 };
 
 export function generateSessionReport(input: SessionReportInput): GeneratedSessionReport {
-  const currentStage = deriveCurrentCodingStage({
-    events: input.events,
-    transcripts: input.transcripts,
-    latestExecutionRun: input.executionRuns[0] ?? null,
-  });
+  const mode = input.mode === "SYSTEM_DESIGN" ? "SYSTEM_DESIGN" : "CODING";
+  const currentStage =
+    mode === "SYSTEM_DESIGN"
+      ? deriveCurrentSystemDesignStage({
+          events: input.events,
+          transcripts: input.transcripts,
+        })
+      : deriveCurrentCodingStage({
+          events: input.events,
+          transcripts: input.transcripts,
+          latestExecutionRun: input.executionRuns[0] ?? null,
+        });
   const stageJourney = buildStageJourney(input.events, currentStage);
   const stageReplay = buildStageReplay(
     input.events,
@@ -386,8 +431,6 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
   const overallScore = Math.round((scoreSum / maxSum) * 100);
   const adjustedOverallScore = Math.max(0, Math.round(overallScore - hintSummary.penaltyApplied));
   const recommendation = toRecommendation(adjustedOverallScore);
-  const strengths = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount, hintSummary, counterfactualSummary);
-  const weaknesses = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount, hintSummary);
   const missedSignals = collectMissedSignals(stageJourney, latestSignal, latestUserText, passedRuns);
   const improvementPlan = collectImprovementPlan(dimensions, latestSignal, hintServedCount, hintSummary);
   const evidenceTrace = buildEvidenceTrace({
@@ -448,6 +491,22 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     recommendationBasis,
   });
   const rewardSummary = buildRewardSummary(input.events);
+  const systemDesignDna =
+    mode === "SYSTEM_DESIGN"
+      ? buildSystemDesignDna({
+          latestSignal,
+          latestSignalSnapshotId: latestSignalSnapshotRow?.id ?? null,
+          events: input.events,
+        })
+      : null;
+  const strengthsBase = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount, hintSummary, counterfactualSummary);
+  const weaknessesBase = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount, hintSummary);
+  const strengths = systemDesignDna
+    ? [...strengthsBase, ...systemDesignDna.strengths].filter((item, index, list) => list.indexOf(item) === index).slice(0, 5)
+    : strengthsBase;
+  const weaknesses = systemDesignDna
+    ? [...weaknessesBase, ...systemDesignDna.weaknesses].filter((item, index, list) => list.indexOf(item) === index).slice(0, 5)
+    : weaknessesBase;
   const overallSummary = buildOverallSummary({
     recommendation,
     evaluatedLevel,
@@ -472,6 +531,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
     reportJson: {
       generatedAt: new Date().toISOString(),
       sessionId: input.sessionId,
+      mode,
       questionTitle: input.questionTitle,
       targetLevel: input.targetLevel,
       selectedLanguage: input.selectedLanguage,
@@ -530,6 +590,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       recommendationBasis,
       calibrationMatrix,
       rewardSummary,
+      systemDesignDna,
       recommendationRationale: buildRecommendationRationale({
         recommendation,
         evaluatedLevel,
@@ -1948,6 +2009,10 @@ function toRecommendation(score: number): Recommendation {
 
 function describeCodingStageSafe(stage: string) {
   try {
+    const interviewStageLabel = describeInterviewStage(stage);
+    if (interviewStageLabel) {
+      return interviewStageLabel;
+    }
     return isCodingInterviewStage(stage) ? describeCodingStage(stage) : stage;
   } catch {
     return stage;
@@ -2051,6 +2116,146 @@ function buildHintSummary(
       label: coachabilityLabel,
       rationale: coachabilityRationale,
     },
+  };
+}
+
+function buildSystemDesignDna(input: {
+  latestSignal: CandidateSignalSummary | null;
+  latestSignalSnapshotId: string | null;
+  events: SessionEventLike[];
+}): SystemDesignDna {
+  const signalValues = asRecord(input.latestSignal?.designSignals?.signals);
+  const refs = asRecord(input.latestSignal?.designSignals?.evidenceRefs);
+  const turnPins = buildDesignEvidenceTurnPins(input.events);
+  const scoreByMissing = (missing: unknown) => (missing === true ? 2 : 4.5);
+
+  const requirementScore = scoreByMissing(signalValues.requirement_missing);
+  const capacityScore = scoreByMissing(signalValues.capacity_missing);
+  const tradeoffScore = scoreByMissing(signalValues.tradeoff_missed);
+  const reliabilityScore = scoreByMissing(signalValues.spof_missed);
+  const bottleneckScore = scoreByMissing(signalValues.bottleneck_unexamined);
+  const avgScore = (requirementScore + capacityScore + tradeoffScore + reliabilityScore + bottleneckScore) / 5;
+
+  const levelRecommendation: SystemDesignDna["levelRecommendation"] =
+    avgScore >= 4.2 ? "Staff" : avgScore >= 3.4 ? "Senior" : "Mid-level";
+
+  const strengths: string[] = [];
+  const weaknesses: string[] = [];
+
+  if (requirementScore >= 4) {
+    strengths.push("Requirement framing stayed clear with functional scope and non-functional constraints.");
+  } else {
+    weaknesses.push("Requirement clarity is incomplete; functional boundaries or non-functional constraints are still thin.");
+  }
+  if (capacityScore >= 4) {
+    strengths.push("Capacity instinct is solid; estimates were connected to architecture decisions.");
+  } else {
+    weaknesses.push("Capacity reasoning needs stronger QPS/data-volume estimates linked to design choices.");
+  }
+  if (tradeoffScore >= 4) {
+    strengths.push("Tradeoff depth is strong; alternatives and pros/cons were discussed explicitly.");
+  } else {
+    weaknesses.push("Tradeoff analysis stayed shallow; compare at least two options with concrete pros/cons.");
+  }
+  if (reliabilityScore >= 4) {
+    strengths.push("Reliability awareness is visible through SPOF identification and mitigation discussion.");
+  } else {
+    weaknesses.push("Reliability awareness is incomplete; SPOF risks or failover strategy need explicit coverage.");
+  }
+  if (bottleneckScore >= 4) {
+    strengths.push("Bottleneck sensitivity is good; likely hotspots and optimization paths were examined.");
+  } else {
+    weaknesses.push("Bottleneck analysis is limited; identify likely hotspots and mitigation plans.");
+  }
+
+  const asStringArray = (value: unknown) =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+  return {
+    requirement_clarity: Number(requirementScore.toFixed(2)),
+    capacity_instinct: Number(capacityScore.toFixed(2)),
+    tradeoff_depth: Number(tradeoffScore.toFixed(2)),
+    reliability_awareness: Number(reliabilityScore.toFixed(2)),
+    bottleneck_sensitivity: Number(bottleneckScore.toFixed(2)),
+    levelRecommendation,
+    strengths: strengths.slice(0, 3),
+    weaknesses: weaknesses.slice(0, 3),
+    evidencePins: [
+      {
+        dimension: "requirement_clarity",
+        score: Number(requirementScore.toFixed(2)),
+        snapshotId: input.latestSignalSnapshotId,
+        turnIds: turnPins.requirement,
+        evidenceRefs: asStringArray(refs.requirement_missing),
+      },
+      {
+        dimension: "capacity_instinct",
+        score: Number(capacityScore.toFixed(2)),
+        snapshotId: input.latestSignalSnapshotId,
+        turnIds: turnPins.capacity,
+        evidenceRefs: asStringArray(refs.capacity_missing),
+      },
+      {
+        dimension: "tradeoff_depth",
+        score: Number(tradeoffScore.toFixed(2)),
+        snapshotId: input.latestSignalSnapshotId,
+        turnIds: turnPins.tradeoff,
+        evidenceRefs: asStringArray(refs.tradeoff_missed),
+      },
+      {
+        dimension: "reliability_awareness",
+        score: Number(reliabilityScore.toFixed(2)),
+        snapshotId: input.latestSignalSnapshotId,
+        turnIds: turnPins.spof,
+        evidenceRefs: asStringArray(refs.spof_missed),
+      },
+      {
+        dimension: "bottleneck_sensitivity",
+        score: Number(bottleneckScore.toFixed(2)),
+        snapshotId: input.latestSignalSnapshotId,
+        turnIds: turnPins.bottleneck,
+        evidenceRefs: asStringArray(refs.bottleneck_unexamined),
+      },
+    ],
+  };
+}
+
+function buildDesignEvidenceTurnPins(events: SessionEventLike[]) {
+  const byType: Record<"requirement" | "capacity" | "tradeoff" | "spof" | "bottleneck", Set<string>> = {
+    requirement: new Set<string>(),
+    capacity: new Set<string>(),
+    tradeoff: new Set<string>(),
+    spof: new Set<string>(),
+    bottleneck: new Set<string>(),
+  };
+
+  for (const event of events) {
+    if (event.eventType !== "REWARD_RECORDED") {
+      continue;
+    }
+    const payload = asRecord(event.payloadJson);
+    const trace = asRecord(payload.trace);
+    const reward = asRecord(payload.reward);
+    const turnId = stringValue(trace.transcriptSegmentId);
+    if (!turnId) {
+      continue;
+    }
+    const types = Array.isArray(reward.designEvidenceTypes)
+      ? reward.designEvidenceTypes.filter((item): item is string => typeof item === "string")
+      : [];
+    for (const type of types) {
+      if (type === "requirement" || type === "capacity" || type === "tradeoff" || type === "spof" || type === "bottleneck") {
+        byType[type].add(turnId);
+      }
+    }
+  }
+
+  return {
+    requirement: [...byType.requirement],
+    capacity: [...byType.capacity],
+    tradeoff: [...byType.tradeoff],
+    spof: [...byType.spof],
+    bottleneck: [...byType.bottleneck],
   };
 }
 
@@ -2196,6 +2401,7 @@ function buildCounterfactualSummary(events: SessionEventLike[]): CounterfactualS
     shouldWaitBeforeIntervening: criticEvents.some((verdict) => verdict.shouldWaitBeforeIntervening === true),
   };
 }
+
 
 
 

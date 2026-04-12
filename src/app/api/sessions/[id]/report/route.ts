@@ -83,6 +83,7 @@ export async function POST(_: Request, { params }: RouteContext) {
 
   const generated = generateSessionReport({
     sessionId: session.id,
+    mode: session.mode,
     questionTitle: session.question?.title ?? "Coding interview",
     questionPrompt: session.question?.prompt ?? "",
     targetLevel: session.targetLevel,

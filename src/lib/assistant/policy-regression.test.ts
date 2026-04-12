@@ -2,8 +2,11 @@
 import {
   derivePolicyTuningSuggestions,
   evaluatePolicyScenario,
+  evaluateSystemDesignScenario,
   POLICY_REGRESSION_SCENARIOS,
+  runSystemDesignRegressionLab,
   runPolicyRegressionLab,
+  SYSTEM_DESIGN_REGRESSION_SCENARIOS,
 } from "@/lib/assistant/policy-regression";
 
 describe("policy regression lab", () => {
@@ -126,5 +129,32 @@ describe("policy regression lab", () => {
     expect(actions).not.toContain("ask_for_reasoning");
     expect(actions).not.toContain("probe_correctness");
     expect(actions).not.toContain("probe_tradeoff");
+  });
+
+  it("includes system design phase6 scenario fixtures", () => {
+    const ids = SYSTEM_DESIGN_REGRESSION_SCENARIOS.map((item) => item.id);
+    expect(ids).toContain("no_estimation_candidate");
+    expect(ids).toContain("handwave_candidate");
+    expect(ids).toContain("strong_tradeoff_candidate");
+  });
+
+  it("forces capacity estimation prompt for no-estimation system design candidate", () => {
+    const scenario = SYSTEM_DESIGN_REGRESSION_SCENARIOS.find((item) => item.id === "no_estimation_candidate");
+    expect(scenario).toBeTruthy();
+
+    const result = evaluateSystemDesignScenario(scenario!);
+    expect(result.decisionTimeline.length).toBeGreaterThan(0);
+    expect(result.decisionTimeline[0]?.systemDesignActionType).toBe("ASK_CAPACITY");
+    expect(result.decisionTimeline[0]?.action).toBe("ask_followup");
+  });
+
+  it("produces score diff and reward diff across system design regression scenarios", () => {
+    const reports = runSystemDesignRegressionLab();
+    expect(reports).toHaveLength(3);
+    expect(reports.every((item) => typeof item.scoreDiffFromBest === "number")).toBe(true);
+    expect(reports.every((item) => typeof item.rewardDiffFromBest === "number")).toBe(true);
+    expect(reports.some((item) => item.scoreDiffFromBest === 0)).toBe(true);
+    expect(reports.some((item) => item.rewardDiffFromBest === 0)).toBe(true);
+    expect(reports.every((item) => item.result.decisionTimeline.length >= 1)).toBe(true);
   });
 });

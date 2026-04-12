@@ -575,5 +575,108 @@ it("downgrades the recommendation band when independence is weak despite a middl
   expect(((reportJson.recommendationBasis as Record<string, unknown>).independenceSignal as string)).toBe("weak");
 });
 
+it("emits system design DNA with evidence pinning when mode is SYSTEM_DESIGN", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design Dropbox",
+    transcripts: [
+      { speaker: "USER", text: "We should support upload/download and list files with metadata." },
+      { speaker: "USER", text: "Assume 50k qps reads and 5k qps writes with object store + metadata DB sharding." },
+      { speaker: "USER", text: "Option A is stronger consistency, option B is eventual consistency with better latency." },
+    ],
+    events: [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          stage: "DEEP_DIVE",
+          signals: {
+            summary: "Design signals updated.",
+            designSignals: {
+              signals: {
+                requirement_missing: false,
+                capacity_missing: false,
+                tradeoff_missed: false,
+                spof_missed: true,
+                bottleneck_unexamined: false,
+              },
+              evidenceRefs: {
+                requirement_missing: ["USER#1: upload/download + list files"],
+                capacity_missing: ["USER#2: 50k qps reads and 5k qps writes"],
+                tradeoff_missed: ["USER#3: option A vs option B"],
+                spof_missed: ["No direct candidate evidence in recent turns."],
+                bottleneck_unexamined: ["USER#2: metadata DB sharding and scaling"],
+              },
+            },
+          },
+        },
+      },
+      {
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: {
+            total: 0.42,
+            designEvidenceTypes: ["requirement", "capacity", "tradeoff", "bottleneck"],
+          },
+          trace: {
+            transcriptSegmentId: "seg-sd-42",
+          },
+        },
+      },
+    ],
+    executionRuns: [],
+    candidateStateSnapshots: [
+      {
+        id: "snap-sd-1",
+        stage: "DEEP_DIVE",
+        snapshotJson: {
+          summary: "System design state snapshot",
+          designSignals: {
+            signals: {
+              requirement_missing: false,
+              capacity_missing: false,
+              tradeoff_missed: false,
+              spof_missed: true,
+              bottleneck_unexamined: false,
+            },
+            evidenceRefs: {
+              requirement_missing: ["USER#1: upload/download + list files"],
+              capacity_missing: ["USER#2: 50k qps reads and 5k qps writes"],
+              tradeoff_missed: ["USER#3: option A vs option B"],
+              spof_missed: ["No direct candidate evidence in recent turns."],
+              bottleneck_unexamined: ["USER#2: metadata DB sharding and scaling"],
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
+  const evidencePins = (systemDesignDna.evidencePins as Array<Record<string, unknown>>) ?? [];
+
+  expect(reportJson.mode).toBe("SYSTEM_DESIGN");
+  expect(typeof systemDesignDna.requirement_clarity).toBe("number");
+  expect(typeof systemDesignDna.capacity_instinct).toBe("number");
+  expect(typeof systemDesignDna.tradeoff_depth).toBe("number");
+  expect(typeof systemDesignDna.reliability_awareness).toBe("number");
+  expect(typeof systemDesignDna.bottleneck_sensitivity).toBe("number");
+  expect((systemDesignDna.levelRecommendation as string)).toMatch(/Mid-level|Senior|Staff/);
+  expect(Array.isArray(systemDesignDna.strengths)).toBe(true);
+  expect(Array.isArray(systemDesignDna.weaknesses)).toBe(true);
+  expect(Array.isArray(evidencePins)).toBe(true);
+  expect(evidencePins.length).toBe(5);
+  expect(evidencePins.some((item) => item.snapshotId === "snap-sd-1")).toBe(true);
+  expect(
+    evidencePins.some(
+      (item) =>
+        item.dimension === "tradeoff_depth" &&
+        Array.isArray(item.turnIds) &&
+        (item.turnIds as string[]).includes("seg-sd-42"),
+    ),
+  ).toBe(true);
+});
+
 
 

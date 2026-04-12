@@ -16,6 +16,7 @@ import {
 } from "@/lib/assistant/stages";
 import { getStarterCode, isRunnableLanguage, normalizeLanguage, toMonacoLanguage } from "@/lib/interview/editor";
 import { SystemDesignWhiteboard } from "@/components/interview/system-design-whiteboard";
+import type { WhiteboardWeakSignals } from "@/lib/interview/whiteboard-signals";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { summarizeUsageFromSessionEvents } from "@/lib/usage/cost";
 import { BrowserVoiceAdapter } from "@/lib/voice/browser-voice-adapter";
@@ -186,6 +187,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const [reportSummary, setReportSummary] = useState<SessionReportSummary | null>(null);
   const [usageSummary, setUsageSummary] = useState<UsageSummary>(props.initialUsageSummary);
   const [roomNotice, setRoomNotice] = useState("Continuous listening is available when your browser supports speech recognition.");
+  const [whiteboardSignals, setWhiteboardSignals] = useState<WhiteboardWeakSignals | null>(null);
   const [isContinuousListening, setIsContinuousListening] = useState(false);
   const [lastInterruptionAt, setLastInterruptionAt] = useState<string | null>(null);
   const [pendingConfirmationText, setPendingConfirmationText] = useState<string | null>(null);
@@ -207,6 +209,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const assistantLeadInDelayMsRef = useRef(0);
   const assistantSpeechStartedRef = useRef(false);
   const lastEditorTelemetryPostedAtRef = useRef(0);
+  const lastWhiteboardSignalPostedRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const editorTelemetryRef = useRef({
     editCount: 0,
     deletionChars: 0,
@@ -616,6 +619,35 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       pauseMs: snapshot.pauseMs,
       deletionRatio:
         snapshot.changedChars > 0 ? Number((snapshot.deletionChars / snapshot.changedChars).toFixed(2)) : 0,
+    }).catch(() => undefined);
+  }
+
+  async function handleWhiteboardWeakSignal(signal: WhiteboardWeakSignals) {
+    if (!isSystemDesignMode) {
+      return;
+    }
+
+    setWhiteboardSignals(signal);
+    const key = `${signal.componentCount}:${signal.connectionCount}:${signal.elementCount}`;
+    const now = Date.now();
+    const last = lastWhiteboardSignalPostedRef.current;
+
+    if (last.key === key || now - last.at < 4_000) {
+      return;
+    }
+
+    lastWhiteboardSignalPostedRef.current = { key, at: now };
+
+    await postEvent(SESSION_EVENT_TYPES.WHITEBOARD_SIGNAL_RECORDED, {
+      mode: props.mode,
+      stage: currentStage,
+      auxiliaryOnly: true,
+      excludedFromDecision: true,
+      whiteboardSignal: {
+        component_count: signal.componentCount,
+        connection_count: signal.connectionCount,
+        element_count: signal.elementCount,
+      },
     }).catch(() => undefined);
   }
 
@@ -2107,7 +2139,22 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
             {isSystemDesignMode ? (
               <div style={{ display: "grid", gap: 10 }}>
                 <SystemDesignStageRail currentStage={currentStage} />
-                <SystemDesignWhiteboard />
+                {whiteboardSignals ? (
+                  <div
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 12,
+                      border: "1px solid var(--border)",
+                      background: "var(--surface-alt)",
+                      color: "var(--muted)",
+                      fontSize: 13,
+                    }}
+                  >
+                    Whiteboard weak signals (aux only): components {whiteboardSignals.componentCount}, connections{" "}
+                    {whiteboardSignals.connectionCount}. This telemetry is excluded from core decision scoring.
+                  </div>
+                ) : null}
+                <SystemDesignWhiteboard onWeakSignalChange={handleWhiteboardWeakSignal} />
               </div>
             ) : (
               <div
