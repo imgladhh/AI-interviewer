@@ -26,7 +26,7 @@ This repo now has a working MVP-plus skeleton with:
 
 ## Recent Progress
 
-- System design interviewer `Phase 0/1/2/3/4/5/6/7` is completed (including whiteboard UX with aux-only weak signals).
+- System design interviewer `Phase 0/1/2/3/4/5/6/7/8/9` is completed (including report radar/evidence view and whiteboard aux-only observability).
 - Stage control is mode-aware, and system design includes API contract gating + on-demand capacity gating.
 - Design signals (`requirements/capacity/tradeoff/SPOF/bottleneck`) are extracted with evidence refs and visible in admin snapshots.
 - System design decision path is now separated from coding decision flow to avoid regressions while still reusing shared conversation-quality controls.
@@ -1338,6 +1338,10 @@ Current execution status (updated April 12, 2026):
 - `Phase 3` baseline completed (inertia + hysteresis decision stabilizer in system-design policy path).
 - `Phase 4` baseline completed (strict pivot detection integrated into reward attribution).
 - `Phase 5` baseline completed (calibration pack scaffold + non-linear system-design level cap + tests).
+- `Phase 6` baseline completed (`late_bloomer / confident_bullshitter / rigid_coder` regression scenarios + timeline score breakdown visibility).
+- `Phase 7` baseline completed (causal-loop capacity override + explicit-assumption escape hatch integrated and covered by tests).
+- `Phase 8` baseline completed (System Design report-focused view with radar + evidence pins, including no-evidence score floor fixes and wider report layout).
+- `Phase 9` baseline completed (whiteboard weak-signal observability panel in reports with stage-trend + analysis-only correlation metrics, excluded from decision path).
 
 Phase sequence:
 

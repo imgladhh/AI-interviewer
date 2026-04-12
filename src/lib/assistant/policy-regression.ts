@@ -90,9 +90,9 @@ export type PolicyTuningSuggestion = {
 };
 
 export type SystemDesignRegressionScenarioId =
-  | "no_estimation_candidate"
-  | "handwave_candidate"
-  | "strong_tradeoff_candidate";
+  | "late_bloomer"
+  | "confident_bullshitter"
+  | "rigid_coder";
 
 export type SystemDesignRegressionScenario = {
   id: SystemDesignRegressionScenarioId;
@@ -111,6 +111,7 @@ export type SystemDesignRegressionResult = {
     target: CandidateDecision["target"];
     systemDesignActionType: string;
     totalScore?: number;
+    scoreBreakdown?: CandidateDecision["scoreBreakdown"];
     rewardTotal: number;
     rewardPenalties: string[];
   }>;
@@ -455,81 +456,140 @@ export const POLICY_REGRESSION_SCENARIOS: PolicyRegressionScenario[] = [
 
 export const SYSTEM_DESIGN_REGRESSION_SCENARIOS: SystemDesignRegressionScenario[] = [
   {
-    id: "no_estimation_candidate",
-    label: "No estimation candidate",
+    id: "late_bloomer",
+    label: "Late bloomer (pivot)",
     currentStage: "HIGH_LEVEL",
     signals: {
       ...baseSystemDesignSignals,
-      designSignals: {
-        signals: {
-          requirement_missing: false,
-          capacity_missing: true,
-          tradeoff_missed: false,
-          spof_missed: false,
-          bottleneck_unexamined: false,
-        },
-        evidenceRefs: {
-          requirement_missing: ["USER#1: requirements are clear"],
-          capacity_missing: ["No QPS/data estimate provided yet."],
-          tradeoff_missed: ["USER#2: discussed one architecture path only"],
-          spof_missed: ["USER#3: reliability is underspecified"],
-          bottleneck_unexamined: ["USER#3: no hotspot analysis yet"],
-        },
-        summary: "Capacity estimates are still missing.",
-      },
-    },
-  },
-  {
-    id: "handwave_candidate",
-    label: "Handwave candidate",
-    currentStage: "DEEP_DIVE",
-    signals: {
-      ...baseSystemDesignSignals,
-      reasoningDepth: "thin",
+      reasoningDepth: "moderate",
       communication: "mixed",
       designSignals: {
         signals: {
           requirement_missing: false,
-          capacity_missing: false,
+          capacity_missing: true,
           tradeoff_missed: true,
           spof_missed: true,
-          bottleneck_unexamined: false,
+          bottleneck_unexamined: true,
         },
         evidenceRefs: {
-          requirement_missing: ["USER#1: basic requirements listed"],
-          capacity_missing: ["USER#2: rough scale stated"],
-          tradeoff_missed: ["No explicit option A vs option B tradeoff."],
-          spof_missed: ["Single metadata service without mitigation."],
-          bottleneck_unexamined: ["Partial hotspot mention only."],
+          requirement_missing: ["USER#1: baseline requirements are covered"],
+          capacity_missing: ["USER#2: scaling is mentioned but unquantified"],
+          tradeoff_missed: ["USER#2: single architecture path only"],
+          spof_missed: ["USER#2: SPOF not mitigated yet"],
+          bottleneck_unexamined: ["USER#2: hotspot not examined yet"],
         },
-        summary: "Tradeoff and SPOF reasoning are still handwavy.",
+        summary: "Candidate starts shallow, then improves after hint.",
+        handwave: {
+          detected: true,
+          depth: 0.32,
+          expectedDepth: 0.8,
+          categories: ["tradeoff_evasion", "unquantified_scaling_claim"],
+          evidenceRefs: ["Initial high-level answer lacked quantification and tradeoff depth."],
+        },
+      },
+    },
+    recentEvents: [
+      { eventType: "HINT_SERVED", payloadJson: { hintLevel: "L1_AREA", hintStyle: "APPROACH_NUDGE" } },
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          signals: {
+            designSignals: {
+              signals: {
+                requirement_missing: false,
+                capacity_missing: true,
+                tradeoff_missed: true,
+                spof_missed: true,
+                bottleneck_unexamined: true,
+              },
+            },
+          },
+        },
+      },
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          signals: {
+            designSignals: {
+              signals: {
+                requirement_missing: false,
+                capacity_missing: false,
+                tradeoff_missed: true,
+                spof_missed: true,
+                bottleneck_unexamined: true,
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: "confident_bullshitter",
+    label: "Confident bullshitter (handwave)",
+    currentStage: "DEEP_DIVE",
+    signals: {
+      ...baseSystemDesignSignals,
+      reasoningDepth: "thin",
+      communication: "clear",
+      confidence: 0.93,
+      designSignals: {
+        signals: {
+          requirement_missing: false,
+          capacity_missing: true,
+          tradeoff_missed: true,
+          spof_missed: true,
+          bottleneck_unexamined: true,
+        },
+        evidenceRefs: {
+          requirement_missing: ["USER#1: polished requirements narrative"],
+          capacity_missing: ["USER#2: says scalable but gives no concrete QPS/data"],
+          tradeoff_missed: ["USER#2: avoids A/B tradeoff comparison"],
+          spof_missed: ["USER#3: acknowledges SPOF but no mitigation plan"],
+          bottleneck_unexamined: ["USER#3: no concrete bottleneck optimization"],
+        },
+        summary: "Candidate sounds confident but keeps handwaving deep-dive requirements.",
+        handwave: {
+          detected: true,
+          depth: 0.28,
+          expectedDepth: 0.9,
+          categories: ["tradeoff_evasion", "unquantified_scaling_claim", "unjustified_component_choice"],
+          evidenceRefs: ["Claims scale/reliability without quantification or causal justification."],
+        },
       },
     },
   },
   {
-    id: "strong_tradeoff_candidate",
-    label: "Strong tradeoff candidate",
-    currentStage: "WRAP_UP",
+    id: "rigid_coder",
+    label: "Rigid coder (no tradeoff depth)",
+    currentStage: "REFINEMENT",
     signals: {
       ...baseSystemDesignSignals,
-      reasoningDepth: "deep",
+      reasoningDepth: "moderate",
       communication: "clear",
       designSignals: {
         signals: {
           requirement_missing: false,
           capacity_missing: false,
-          tradeoff_missed: false,
+          tradeoff_missed: true,
           spof_missed: false,
-          bottleneck_unexamined: false,
+          bottleneck_unexamined: true,
         },
         evidenceRefs: {
           requirement_missing: ["Requirements are complete."],
-          capacity_missing: ["Capacity estimates already integrated."],
-          tradeoff_missed: ["Alternatives compared with pros/cons."],
-          spof_missed: ["SPOF and failover covered."],
-          bottleneck_unexamined: ["Hotspots and optimizations covered."],
+          capacity_missing: ["Capacity estimates are integrated."],
+          tradeoff_missed: ["Implementation path is presented as fixed with no alternatives."],
+          spof_missed: ["SPOF and failover are covered."],
+          bottleneck_unexamined: ["Mentions bottleneck but no optimization tradeoff."],
         },
-        summary: "Design coverage is complete.",
+        summary: "Candidate focuses on implementation details and avoids design tradeoff depth.",
+        handwave: {
+          detected: true,
+          depth: 0.44,
+          expectedDepth: 0.75,
+          categories: ["tradeoff_evasion"],
+          evidenceRefs: ["No option comparison under refinement stage."],
+        },
       },
     },
   },
@@ -865,15 +925,19 @@ function runSystemDesignScenarioTimeline(
     target: CandidateDecision["target"];
     systemDesignActionType: string;
     totalScore?: number;
+    scoreBreakdown?: CandidateDecision["scoreBreakdown"];
     rewardTotal: number;
     rewardPenalties: string[];
   }> = [];
+  let previousActionType: Parameters<typeof makeSystemDesignDecision>[0]["previousActionType"] = null;
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const decision = makeSystemDesignDecision({
       currentStage: scenario.currentStage,
       signals,
+      previousActionType,
     });
+    previousActionType = decision.systemDesignActionType;
     const reward = evaluateTurnReward({
       stage: scenario.currentStage,
       decision,
@@ -886,6 +950,7 @@ function runSystemDesignScenarioTimeline(
       target: decision.target,
       systemDesignActionType: decision.systemDesignActionType,
       totalScore: decision.totalScore,
+      scoreBreakdown: decision.scoreBreakdown,
       rewardTotal: reward.total,
       rewardPenalties: reward.penalties,
     });
@@ -932,6 +997,13 @@ function runSystemDesignScenarioTimeline(
           break;
         case "WRAP_UP":
           break;
+      }
+      if (signals.designSignals?.handwave?.detected && decision.systemDesignActionType !== "WRAP_UP") {
+        signals.designSignals.handwave = {
+          ...signals.designSignals.handwave,
+          detected: false,
+          depth: Math.max(signals.designSignals.handwave.depth, signals.designSignals.handwave.expectedDepth),
+        };
       }
     }
 

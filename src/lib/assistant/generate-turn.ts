@@ -165,7 +165,13 @@ async function generateSystemDesignAssistantTurn(
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
-  const decision = buildSystemDesignDecision(signals, currentStage, input.targetLevel, input.recentEvents);
+  const decision = buildSystemDesignDecision(
+    signals,
+    currentStage,
+    input.targetLevel,
+    input.recentEvents,
+    input.recentTranscripts,
+  );
   const reply = buildSystemDesignFallbackReply(decision, findLatestTurn(input.recentTranscripts, "AI") ?? undefined);
   const suggestedStage = inferSuggestedSystemDesignStage({
     currentStage: currentStage,
@@ -274,7 +280,13 @@ async function* streamSystemDesignAssistantTurn(
     recentEvents: input.recentEvents,
     latestExecutionRun: input.latestExecutionRun,
   });
-  const decision = buildSystemDesignDecision(signals, currentStage, input.targetLevel, input.recentEvents);
+  const decision = buildSystemDesignDecision(
+    signals,
+    currentStage,
+    input.targetLevel,
+    input.recentEvents,
+    input.recentTranscripts,
+  );
   const reply = buildSystemDesignFallbackReply(decision, findLatestTurn(input.recentTranscripts, "AI") ?? undefined);
   const suggestedStage = inferSuggestedSystemDesignStage({
     currentStage: currentStage,
@@ -1931,6 +1943,7 @@ function buildSystemDesignDecision(
   currentStage: SystemDesignStage,
   targetLevel?: string | null,
   recentEvents?: GenerateAssistantTurnInput["recentEvents"],
+  recentTranscripts?: GenerateAssistantTurnInput["recentTranscripts"],
 ): SystemDesignDecision {
   const previousActionType = findPreviousSystemDesignActionType(recentEvents);
   const baseDecision = makeSystemDesignDecision({
@@ -1938,6 +1951,11 @@ function buildSystemDesignDecision(
     signals,
     targetLevel,
     previousActionType,
+    recentEvents: (recentEvents ?? []).map((event) => ({
+      eventType: event.eventType,
+      payloadJson: event.payloadJson,
+    })),
+    recentTranscripts: recentTranscripts ?? [],
   });
   const guarded = enforceSystemDesignNoCodeInvariant({
     mode: "SYSTEM_DESIGN",

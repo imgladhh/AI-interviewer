@@ -133,19 +133,21 @@ describe("policy regression lab", () => {
 
   it("includes system design phase6 scenario fixtures", () => {
     const ids = SYSTEM_DESIGN_REGRESSION_SCENARIOS.map((item) => item.id);
-    expect(ids).toContain("no_estimation_candidate");
-    expect(ids).toContain("handwave_candidate");
-    expect(ids).toContain("strong_tradeoff_candidate");
+    expect(ids).toContain("late_bloomer");
+    expect(ids).toContain("confident_bullshitter");
+    expect(ids).toContain("rigid_coder");
   });
 
-  it("forces capacity estimation prompt for no-estimation system design candidate", () => {
-    const scenario = SYSTEM_DESIGN_REGRESSION_SCENARIOS.find((item) => item.id === "no_estimation_candidate");
+  it("pushes deep probing for confident handwave system design candidate", () => {
+    const scenario = SYSTEM_DESIGN_REGRESSION_SCENARIOS.find((item) => item.id === "confident_bullshitter");
     expect(scenario).toBeTruthy();
 
     const result = evaluateSystemDesignScenario(scenario!);
     expect(result.decisionTimeline.length).toBeGreaterThan(0);
-    expect(result.decisionTimeline[0]?.systemDesignActionType).toBe("ASK_CAPACITY");
-    expect(result.decisionTimeline[0]?.action).toBe("ask_followup");
+    expect(["PROBE_TRADEOFF", "ASK_CAPACITY", "CHALLENGE_SPOF"]).toContain(
+      result.decisionTimeline[0]?.systemDesignActionType,
+    );
+    expect(Array.isArray(result.decisionTimeline[0]?.scoreBreakdown)).toBe(true);
   });
 
   it("produces score diff and reward diff across system design regression scenarios", () => {
@@ -156,5 +158,10 @@ describe("policy regression lab", () => {
     expect(reports.some((item) => item.scoreDiffFromBest === 0)).toBe(true);
     expect(reports.some((item) => item.rewardDiffFromBest === 0)).toBe(true);
     expect(reports.every((item) => item.result.decisionTimeline.length >= 1)).toBe(true);
+    expect(
+      reports.every((item) =>
+        item.result.decisionTimeline.every((turn) => Array.isArray(turn.scoreBreakdown)),
+      ),
+    ).toBe(true);
   });
 });

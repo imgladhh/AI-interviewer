@@ -17,6 +17,8 @@ export function makeSystemDesignDecision(input: {
   signals: CandidateSignalSnapshot;
   targetLevel?: string | null;
   previousActionType?: SystemDesignPolicyAction | null;
+  recentTranscripts?: Array<{ speaker: "USER" | "AI" | "SYSTEM"; text: string }>;
+  recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>;
 }): SystemDesignDecision {
   const designSignals = input.signals.designSignals?.signals ?? {
     requirement_missing: true,
@@ -40,6 +42,21 @@ export function makeSystemDesignDecision(input: {
   const scoresWithInertia = applyInertia(baseScores, input.previousActionType ?? null);
   const sortedScores = [...scoresWithInertia].sort((left, right) => right.totalScore - left.totalScore);
   const selected = applyHysteresis(sortedScores, input.previousActionType ?? null);
+  const assumptionEscapeHatch = hasExplicitScopedAssumption(input.recentTranscripts, input.recentEvents);
+  const capacityGateStage = ["DEEP_DIVE", "REFINEMENT", "WRAP_UP"].includes(input.currentStage);
+
+  if (capacityGateStage && designSignals.capacity_missing && !assumptionEscapeHatch) {
+    const askCapacity = sortedScores.find((item) => item.actionType === "ASK_CAPACITY") ?? selected;
+    return toDecision("ASK_CAPACITY", sortedScores, [
+      ...askCapacity.reasons,
+      {
+        key: "causal_capacity_override",
+        magnitude: 1,
+        kind: "signal",
+        detail: "Capacity is missing before deep-dive/refinement/wrap-up, so ASK_CAPACITY is forced by causal loop policy.",
+      },
+    ]);
+  }
 
   return toDecision(selected.actionType, sortedScores);
 }
@@ -295,13 +312,15 @@ function toDecision(
     reasons: Array<{ key: string; magnitude: number; kind: "signal"; detail: string }>;
     totalScore: number;
   }>,
+  overrideReasons?: Array<{ key: string; magnitude: number; kind: "signal"; detail: string }>,
 ): SystemDesignDecision {
+  const selected = scores.find((item) => item.actionType === actionType) ?? scores[0];
   const common = {
     confidence: 0.86,
     reason: `System design argmax selected ${actionType}.`,
-    scoreBreakdown: scores[0]?.reasons ?? [],
+    scoreBreakdown: overrideReasons ?? selected?.reasons ?? [],
     candidateScores: [],
-    totalScore: scores[0]?.totalScore ?? 0,
+    totalScore: selected?.totalScore ?? 0,
     systemDesignActionType: actionType,
   };
 
@@ -376,4 +395,43 @@ export function mapSystemDesignActionToPolicyAction(actionType: SystemDesignPoli
     case "WRAP_UP":
       return "WRAP_UP";
   }
+}
+
+function hasExplicitScopedAssumption(
+  recentTranscripts?: Array<{ speaker: "USER" | "AI" | "SYSTEM"; text: string }>,
+  recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>,
+) {
+  const userTurn = [...(recentTranscripts ?? [])].reverse().find((item) => item.speaker === "USER")?.text.toLowerCase() ?? "";
+  const assumptionInText =
+    /\b(assume|assuming|let's assume|for now we assume)\b/.test(userTurn) &&
+    /\b(qps|rps|tps|req\/s|users|dau|mau|gb|tb|mb|ms|s|region|zone|az|node|instance|tenant)\b/.test(userTurn);
+
+  if (assumptionInText) {
+    return true;
+  }
+
+  for (let index = (recentEvents?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = recentEvents?.[index];
+    if (!event) {
+      continue;
+    }
+    if (event.eventType === "EXPLICIT_ASSUMPTION_RECORDED") {
+      return true;
+    }
+    if (event.eventType === "SIGNAL_SNAPSHOT_RECORDED") {
+      const payload = asRecord(event.payloadJson);
+      const signals = asRecord(payload.signals);
+      const designSignals = asRecord(signals.designSignals);
+      const handwave = asRecord(designSignals.handwave);
+      if (handwave.detected === false) {
+        break;
+      }
+    }
+  }
+
+  return false;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }

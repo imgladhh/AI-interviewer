@@ -169,4 +169,45 @@ describe("makeSystemDesignDecision level adaptation", () => {
 
     expect((decision.scoreBreakdown ?? []).some((item) => item.key === "stability_hysteresis" || item.key === "stability_inertia")).toBe(true);
   });
+
+  it("forces ASK_CAPACITY in deep stages when capacity is missing and no explicit assumption is provided", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SENIOR",
+      signals: createSnapshot({
+        requirement_missing: false,
+        capacity_missing: true,
+        tradeoff_missed: true,
+        spof_missed: false,
+        bottleneck_unexamined: false,
+      }),
+      recentTranscripts: [{ speaker: "USER", text: "We can scale horizontally across regions." }],
+    });
+
+    expect(decision.systemDesignActionType).toBe("ASK_CAPACITY");
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "causal_capacity_override")).toBe(true);
+  });
+
+  it("allows progress when an explicit scoped assumption is stated", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SENIOR",
+      signals: createSnapshot({
+        requirement_missing: false,
+        capacity_missing: true,
+        tradeoff_missed: true,
+        spof_missed: false,
+        bottleneck_unexamined: false,
+      }),
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "Assume 30k qps reads and 3k qps writes for now across two regions; with that, I would compare replication vs partitioning tradeoffs.",
+        },
+      ],
+    });
+
+    expect(["PROBE_TRADEOFF", "ZOOM_IN", "CHALLENGE_SPOF"]).toContain(decision.systemDesignActionType);
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "causal_capacity_override")).toBe(false);
+  });
 });

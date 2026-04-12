@@ -758,5 +758,106 @@ it("applies non-linear cap to system design level recommendation when tradeoff d
   expect(calibrationNotes.some((note) => /cap applied|tradeoff depth/i.test(note))).toBe(true);
 });
 
+it("keeps system design DNA scores low when no candidate evidence is available", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-empty-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design URL Shortener",
+    transcripts: [
+      { speaker: "AI", text: "Let's start with requirements." },
+    ],
+    events: [],
+    executionRuns: [],
+    candidateStateSnapshots: [],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
+  const requirementClarity = systemDesignDna.requirement_clarity as number;
+  const capacityInstinct = systemDesignDna.capacity_instinct as number;
+  const tradeoffDepth = systemDesignDna.tradeoff_depth as number;
+  const reliabilityAwareness = systemDesignDna.reliability_awareness as number;
+  const bottleneckSensitivity = systemDesignDna.bottleneck_sensitivity as number;
+  const levelRecommendation = systemDesignDna.levelRecommendation as string;
+  const strengths = (systemDesignDna.strengths as string[]) ?? [];
+  const weaknesses = (systemDesignDna.weaknesses as string[]) ?? [];
+
+  expect(requirementClarity).toBeLessThanOrEqual(1);
+  expect(capacityInstinct).toBeLessThanOrEqual(1);
+  expect(tradeoffDepth).toBeLessThanOrEqual(1);
+  expect(reliabilityAwareness).toBeLessThanOrEqual(1);
+  expect(bottleneckSensitivity).toBeLessThanOrEqual(1);
+  expect(levelRecommendation).toBe("Mid-level");
+  expect(strengths.length).toBe(0);
+  expect(weaknesses.length).toBeGreaterThan(0);
+});
+
+it("emits whiteboard weak-signal observability metrics as analysis-only data", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-whiteboard-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design Collaborative Docs",
+    transcripts: [{ speaker: "USER", text: "I will sketch requirements and deep dive." }],
+    events: [
+      {
+        eventType: "WHITEBOARD_SIGNAL_RECORDED",
+        payloadJson: {
+          stage: "REQUIREMENTS",
+          auxiliaryOnly: true,
+          excludedFromDecision: true,
+          whiteboardSignal: {
+            component_count: 4,
+            connection_count: 2,
+            element_count: 6,
+          },
+        },
+      },
+      {
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: { total: 0.1 },
+          trace: { transcriptSegmentId: "seg-sd-wb-1" },
+        },
+      },
+      {
+        eventType: "WHITEBOARD_SIGNAL_RECORDED",
+        payloadJson: {
+          stage: "DEEP_DIVE",
+          auxiliaryOnly: true,
+          excludedFromDecision: true,
+          whiteboardSignal: {
+            component_count: 8,
+            connection_count: 6,
+            element_count: 14,
+          },
+        },
+      },
+      {
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: { total: 0.4 },
+          trace: { transcriptSegmentId: "seg-sd-wb-2" },
+        },
+      },
+    ],
+    executionRuns: [],
+    candidateStateSnapshots: [],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const whiteboard = (reportJson.whiteboardObservability as Record<string, unknown>) ?? {};
+  const stageTrend = (whiteboard.stageTrend as Array<Record<string, unknown>>) ?? [];
+  const correlation = (whiteboard.qualityCorrelation as Record<string, unknown>) ?? {};
+
+  expect(whiteboard.auxiliaryOnly).toBe(true);
+  expect(whiteboard.excludedFromDecision).toBe(true);
+  expect(whiteboard.totalSignals).toBe(2);
+  expect(stageTrend.length).toBe(2);
+  expect(stageTrend.some((row) => row.stage === "REQUIREMENTS")).toBe(true);
+  expect(stageTrend.some((row) => row.stage === "DEEP_DIVE")).toBe(true);
+  expect(correlation.samplePairs).toBe(2);
+  expect(typeof correlation.note).toBe("string");
+});
+
 
 

@@ -364,6 +364,34 @@ type SystemDesignDna = {
   }>;
 };
 
+type WhiteboardWeakSignalObservability = {
+  auxiliaryOnly: true;
+  excludedFromDecision: true;
+  totalSignals: number;
+  latest: {
+    stage: string;
+    componentCount: number;
+    connectionCount: number;
+    elementCount: number;
+    at: string | null;
+  } | null;
+  stageTrend: Array<{
+    stage: string;
+    samples: number;
+    avgComponentCount: number;
+    avgConnectionCount: number;
+    avgElementCount: number;
+    maxComponentCount: number;
+    maxConnectionCount: number;
+    maxElementCount: number;
+  }>;
+  qualityCorrelation: {
+    samplePairs: number;
+    complexityToRewardPearson: number | null;
+    note: string;
+  };
+};
+
 export type GeneratedSessionReport = {
   overallScore: number;
   recommendation: Recommendation;
@@ -502,6 +530,10 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
           events: input.events,
         })
       : null;
+  const whiteboardObservability =
+    mode === "SYSTEM_DESIGN"
+      ? buildWhiteboardWeakSignalObservability(input.events)
+      : null;
   const strengthsBase = collectStrengths(dimensions, latestSignal, stageReplay, passedRuns, hintRequestedCount, hintSummary, counterfactualSummary);
   const weaknessesBase = collectWeaknesses(dimensions, currentStage, latestSignal, hintRequestedCount, hintSummary);
   const strengths = systemDesignDna
@@ -594,6 +626,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
       calibrationMatrix,
       rewardSummary,
       systemDesignDna,
+      whiteboardObservability,
       recommendationRationale: buildRecommendationRationale({
         recommendation,
         evaluatedLevel,
@@ -2045,6 +2078,10 @@ function numberValue(value: unknown) {
   return typeof value === "number" ? value : 0;
 }
 
+function numericValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function truncate(value: string, maxLength: number) {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
 }
@@ -2135,7 +2172,16 @@ function buildSystemDesignDna(input: {
   const signalValues = asRecord(input.latestSignal?.designSignals?.signals);
   const refs = asRecord(input.latestSignal?.designSignals?.evidenceRefs);
   const turnPins = buildDesignEvidenceTurnPins(input.events);
-  const scoreByMissing = (missing: unknown) => (missing === true ? 2 : 4.5);
+  const scoreByMissing = (missing: unknown) => {
+    if (missing === false) {
+      return 4.5;
+    }
+    if (missing === true) {
+      return 2;
+    }
+    // Unknown / no evidence should never be treated as "pass".
+    return 0.5;
+  };
 
   const requirementScore = scoreByMissing(signalValues.requirement_missing);
   const capacityScore = scoreByMissing(signalValues.capacity_missing);
@@ -2304,6 +2350,121 @@ function buildDesignEvidenceTurnPins(events: SessionEventLike[]) {
     spof: [...byType.spof],
     bottleneck: [...byType.bottleneck],
   };
+}
+
+function buildWhiteboardWeakSignalObservability(
+  events: SessionEventLike[],
+): WhiteboardWeakSignalObservability {
+  const signals = events
+    .filter((event) => event.eventType === "WHITEBOARD_SIGNAL_RECORDED")
+    .map((event) => {
+      const payload = asRecord(event.payloadJson);
+      const weak = asRecord(payload.whiteboardSignal);
+      return {
+        stage: stringValue(payload.stage) ?? "UNKNOWN",
+        componentCount: numericValue(weak.component_count) ?? 0,
+        connectionCount: numericValue(weak.connection_count) ?? 0,
+        elementCount: numericValue(weak.element_count) ?? 0,
+        at: asIsoString(event.eventTime),
+      };
+    });
+
+  const trendMap = new Map<
+    string,
+    { components: number[]; connections: number[]; elements: number[] }
+  >();
+  for (const signal of signals) {
+    const row = trendMap.get(signal.stage) ?? { components: [], connections: [], elements: [] };
+    row.components.push(signal.componentCount);
+    row.connections.push(signal.connectionCount);
+    row.elements.push(signal.elementCount);
+    trendMap.set(signal.stage, row);
+  }
+
+  const stageTrend = [...trendMap.entries()].map(([stage, values]) => ({
+    stage,
+    samples: values.components.length,
+    avgComponentCount: avg(values.components),
+    avgConnectionCount: avg(values.connections),
+    avgElementCount: avg(values.elements),
+    maxComponentCount: values.components.length > 0 ? Math.max(...values.components) : 0,
+    maxConnectionCount: values.connections.length > 0 ? Math.max(...values.connections) : 0,
+    maxElementCount: values.elements.length > 0 ? Math.max(...values.elements) : 0,
+  }));
+
+  const rewardTotals = events
+    .filter((event) => event.eventType === "REWARD_RECORDED")
+    .map((event) => {
+      const payload = asRecord(event.payloadJson);
+      const reward = asRecord(payload.reward);
+      return numericValue(reward.total);
+    })
+    .filter((value): value is number => typeof value === "number");
+  const complexitySeries = signals.map((signal) => signal.componentCount + signal.connectionCount);
+  const samplePairs = Math.min(complexitySeries.length, rewardTotals.length);
+  const complexityToRewardPearson =
+    samplePairs >= 2
+      ? pearson(complexitySeries.slice(-samplePairs), rewardTotals.slice(-samplePairs))
+      : null;
+
+  const qualityCorrelationNote =
+    samplePairs < 2
+      ? "Not enough paired whiteboard/reward samples to estimate correlation."
+      : complexityToRewardPearson === null
+      ? "Correlation is undefined because one series has near-zero variance."
+      : `Pearson correlation between whiteboard complexity and reward totals is ${complexityToRewardPearson.toFixed(2)} over ${samplePairs} paired turns.`;
+
+  return {
+    auxiliaryOnly: true,
+    excludedFromDecision: true,
+    totalSignals: signals.length,
+    latest: signals.at(-1) ?? null,
+    stageTrend,
+    qualityCorrelation: {
+      samplePairs,
+      complexityToRewardPearson,
+      note: qualityCorrelationNote,
+    },
+  };
+}
+
+function avg(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
+}
+
+function pearson(left: number[], right: number[]) {
+  if (left.length !== right.length || left.length < 2) {
+    return null;
+  }
+  const leftAvg = left.reduce((sum, value) => sum + value, 0) / left.length;
+  const rightAvg = right.reduce((sum, value) => sum + value, 0) / right.length;
+  let numerator = 0;
+  let leftVariance = 0;
+  let rightVariance = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const deltaLeft = left[index] - leftAvg;
+    const deltaRight = right[index] - rightAvg;
+    numerator += deltaLeft * deltaRight;
+    leftVariance += deltaLeft * deltaLeft;
+    rightVariance += deltaRight * deltaRight;
+  }
+  if (leftVariance <= 1e-9 || rightVariance <= 1e-9) {
+    return null;
+  }
+  return Number((numerator / Math.sqrt(leftVariance * rightVariance)).toFixed(4));
+}
+
+function asIsoString(value: Date | string | undefined) {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return value.toISOString();
 }
 
 function buildEvidenceTrace(input: {

@@ -128,6 +128,34 @@ type StageReplaySection = {
   turns?: Array<{ speaker: string; text: string }>;
 };
 
+type SystemDesignDimensionKey =
+  | "requirement_clarity"
+  | "capacity_instinct"
+  | "tradeoff_depth"
+  | "reliability_awareness"
+  | "bottleneck_sensitivity";
+
+type SystemDesignEvidencePin = {
+  dimension?: SystemDesignDimensionKey;
+  score?: number;
+  snapshotId?: string | null;
+  turnIds?: string[];
+  evidenceRefs?: string[];
+};
+
+type SystemDesignDna = {
+  requirement_clarity: number;
+  capacity_instinct: number;
+  tradeoff_depth: number;
+  reliability_awareness: number;
+  bottleneck_sensitivity: number;
+  levelRecommendation?: string;
+  calibrationNotes?: string[];
+  strengths?: string[];
+  weaknesses?: string[];
+  evidencePins: SystemDesignEvidencePin[];
+};
+
 type ReportJson = {
   generatedAt?: string;
   questionTitle?: string;
@@ -287,6 +315,34 @@ type ReportJson = {
     }>;
   }>;
   stageSections?: StageReplaySection[];
+  systemDesignDna?: SystemDesignDna;
+  whiteboardObservability?: {
+    auxiliaryOnly?: boolean;
+    excludedFromDecision?: boolean;
+    totalSignals?: number;
+    latest?: {
+      stage?: string;
+      componentCount?: number;
+      connectionCount?: number;
+      elementCount?: number;
+      at?: string | null;
+    } | null;
+    stageTrend?: Array<{
+      stage?: string;
+      samples?: number;
+      avgComponentCount?: number;
+      avgConnectionCount?: number;
+      avgElementCount?: number;
+      maxComponentCount?: number;
+      maxConnectionCount?: number;
+      maxElementCount?: number;
+    }>;
+    qualityCorrelation?: {
+      samplePairs?: number;
+      complexityToRewardPearson?: number | null;
+      note?: string;
+    } | null;
+  } | null;
 };
 
 type ReplayItem = {
@@ -432,6 +488,8 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
       : snapshotState.stageJourney;
   const stageReplaySections = reportJson.stageSections ?? [];
   const dimensions = normalizeDimensions(reportJson.dimensions, session.evaluation?.dimensionScores ?? []);
+  const systemDesignDna = normalizeSystemDesignDna(reportJson.systemDesignDna);
+  const systemDesignDimensionRows = systemDesignDna ? buildSystemDesignDimensionRows(systemDesignDna) : [];
   const committedTranscripts = getCommittedTranscriptSegments(session.transcripts, session.events);
   const transcriptTruth = summarizeTranscriptTruth(session.transcripts, session.events);
   const replayItems = buildReplayItems({
@@ -690,6 +748,162 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
               )}
             </div>
           </article>
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>System Design Assessment</h2>
+          {systemDesignDna ? (
+            <div style={{ display: "grid", gap: 14 }}>
+              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "minmax(280px, 1fr) minmax(280px, 1fr)" }}>
+                <SystemDesignRadar dimensions={systemDesignDimensionRows} maxScore={5} />
+                <div style={{ display: "grid", gap: 10 }}>
+                  <MetricRow label="Level Recommendation" value={systemDesignDna.levelRecommendation ?? "Mid-level"} />
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {systemDesignDimensionRows.map((dimension) => (
+                      <div key={`sd-row-${dimension.key}`} style={listItemStyle}>
+                        <strong>{dimension.label}</strong>
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          {dimension.score.toFixed(2)}/5.00
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {Array.isArray(systemDesignDna.calibrationNotes) && systemDesignDna.calibrationNotes.length > 0 ? (
+                <div style={listItemStyle}>
+                  <strong>Calibration Notes</strong>
+                  <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                    {systemDesignDna.calibrationNotes.map((note, index) => (
+                      <div key={`sd-calibration-note-${index}`} style={listItemStyle}>
+                        {note}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <strong>System Design Strengths</strong>
+                  {(systemDesignDna.strengths ?? []).length === 0 ? (
+                    <p style={mutedParagraphStyle}>No system-design strengths captured yet.</p>
+                  ) : (
+                    (systemDesignDna.strengths ?? []).map((item, index) => (
+                      <div key={`sd-strength-${index}`} style={listItemStyle}>{item}</div>
+                    ))
+                  )}
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <strong>System Design Gaps</strong>
+                  {(systemDesignDna.weaknesses ?? []).length === 0 ? (
+                    <p style={mutedParagraphStyle}>No system-design gaps captured yet.</p>
+                  ) : (
+                    (systemDesignDna.weaknesses ?? []).map((item, index) => (
+                      <div key={`sd-weakness-${index}`} style={listItemStyle}>{item}</div>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                <strong>Evidence Pins</strong>
+                {systemDesignDna.evidencePins.length === 0 ? (
+                  <p style={mutedParagraphStyle}>No evidence pins were recorded for this report.</p>
+                ) : (
+                  systemDesignDna.evidencePins.map((pin, index) => (
+                    <div key={`sd-evidence-pin-${index}`} style={listItemStyle}>
+                      <strong>{systemDesignDimensionLabel(pin.dimension)}</strong>
+                      <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                        score={typeof pin.score === "number" ? pin.score.toFixed(2) : "n/a"} | snapshot=
+                        {pin.snapshotId ?? "n/a"} | turns={(pin.turnIds ?? []).join(", ") || "n/a"}
+                      </p>
+                      <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                        evidence refs: {(pin.evidenceRefs ?? []).join(", ") || "n/a"}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : (
+            <p style={mutedParagraphStyle}>
+              System-design DNA is not available for this report yet.
+            </p>
+          )}
+        </section>
+
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>Whiteboard Observability (Aux Only)</h2>
+          {reportJson.whiteboardObservability ? (
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                <Metric label="Total Signals" value={String(reportJson.whiteboardObservability.totalSignals ?? 0)} />
+                <Metric label="Auxiliary Only" value={reportJson.whiteboardObservability.auxiliaryOnly ? "true" : "false"} />
+                <Metric
+                  label="Excluded From Decision"
+                  value={reportJson.whiteboardObservability.excludedFromDecision ? "true" : "false"}
+                />
+                <Metric
+                  label="Paired Correlation Samples"
+                  value={String(reportJson.whiteboardObservability.qualityCorrelation?.samplePairs ?? 0)}
+                />
+              </div>
+              {reportJson.whiteboardObservability.latest ? (
+                <div style={listItemStyle}>
+                  <strong>Latest Signal</strong>
+                  <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                    stage={reportJson.whiteboardObservability.latest.stage ?? "UNKNOWN"} | components=
+                    {reportJson.whiteboardObservability.latest.componentCount ?? 0} | connections=
+                    {reportJson.whiteboardObservability.latest.connectionCount ?? 0} | elements=
+                    {reportJson.whiteboardObservability.latest.elementCount ?? 0}
+                  </p>
+                  {reportJson.whiteboardObservability.latest.at ? (
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                      at {new Date(reportJson.whiteboardObservability.latest.at).toLocaleString()}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p style={mutedParagraphStyle}>No whiteboard weak-signal samples were captured in this session.</p>
+              )}
+              <div style={{ display: "grid", gap: 8 }}>
+                <strong>Stage-local Trend</strong>
+                {(reportJson.whiteboardObservability.stageTrend ?? []).length === 0 ? (
+                  <p style={mutedParagraphStyle}>No stage trend data available yet.</p>
+                ) : (
+                  (reportJson.whiteboardObservability.stageTrend ?? []).map((item, index) => (
+                    <div key={`whiteboard-stage-trend-${index}`} style={listItemStyle}>
+                      <strong>{item.stage ?? "UNKNOWN"}</strong>
+                      <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                        samples={item.samples ?? 0} | avg(c={item.avgComponentCount ?? 0}, n={item.avgConnectionCount ?? 0}, e=
+                        {item.avgElementCount ?? 0}) | max(c={item.maxComponentCount ?? 0}, n={item.maxConnectionCount ?? 0}, e=
+                        {item.maxElementCount ?? 0})
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+              {reportJson.whiteboardObservability.qualityCorrelation ? (
+                <div style={listItemStyle}>
+                  <strong>Quality Correlation (Analysis Only)</strong>
+                  <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                    reward-correlation=
+                    {typeof reportJson.whiteboardObservability.qualityCorrelation.complexityToRewardPearson === "number"
+                      ? reportJson.whiteboardObservability.qualityCorrelation.complexityToRewardPearson.toFixed(3)
+                      : "n/a"}
+                  </p>
+                  {reportJson.whiteboardObservability.qualityCorrelation.note ? (
+                    <p style={{ ...mutedParagraphStyle, marginTop: 8 }}>
+                      {reportJson.whiteboardObservability.qualityCorrelation.note}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p style={mutedParagraphStyle}>
+              Whiteboard observability is available for system-design sessions once whiteboard signals are recorded.
+            </p>
+          )}
         </section>
 
         <section style={panelStyle}>
@@ -1674,6 +1888,104 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function SystemDesignRadar({
+  dimensions,
+  maxScore,
+}: {
+  dimensions: Array<{ key: SystemDesignDimensionKey; label: string; score: number }>;
+  maxScore: number;
+}) {
+  if (dimensions.length === 0 || maxScore <= 0) {
+    return (
+      <div style={listItemStyle}>
+        <p style={mutedParagraphStyle}>No radar data available.</p>
+      </div>
+    );
+  }
+
+  const center = 140;
+  const radius = 96;
+  const axes = dimensions.map((dimension, index) => {
+    const angle = (Math.PI * 2 * index) / dimensions.length - Math.PI / 2;
+    const axisX = center + Math.cos(angle) * radius;
+    const axisY = center + Math.sin(angle) * radius;
+    const labelX = center + Math.cos(angle) * (radius + 24);
+    const labelY = center + Math.sin(angle) * (radius + 24);
+    return {
+      ...dimension,
+      axisX,
+      axisY,
+      labelX,
+      labelY,
+      angle,
+    };
+  });
+
+  const polygonPoints = axes
+    .map((axis) => {
+      const clamped = Math.max(0, Math.min(maxScore, axis.score));
+      const ratio = clamped / maxScore;
+      const pointX = center + Math.cos(axis.angle) * radius * ratio;
+      const pointY = center + Math.sin(axis.angle) * radius * ratio;
+      return `${pointX.toFixed(1)},${pointY.toFixed(1)}`;
+    })
+    .join(" ");
+
+  const ringRadii = [0.25, 0.5, 0.75, 1].map((step) => radius * step);
+
+  return (
+    <div style={{ ...listItemStyle, display: "grid", gap: 10 }}>
+      <strong>Five-Dimension Radar</strong>
+      <svg viewBox="0 0 280 280" role="img" aria-label="System design dimension radar">
+        {ringRadii.map((ring) => (
+          <circle
+            key={`radar-ring-${ring}`}
+            cx={center}
+            cy={center}
+            r={ring}
+            fill="none"
+            stroke="var(--border)"
+            strokeWidth="1"
+          />
+        ))}
+        {axes.map((axis) => (
+          <line
+            key={`radar-axis-${axis.key}`}
+            x1={center}
+            y1={center}
+            x2={axis.axisX}
+            y2={axis.axisY}
+            stroke="var(--border)"
+            strokeWidth="1"
+          />
+        ))}
+        <polygon
+          points={polygonPoints}
+          fill="rgba(58, 145, 255, 0.2)"
+          stroke="rgba(26, 116, 232, 0.95)"
+          strokeWidth="2"
+        />
+        {axes.map((axis) => (
+          <text
+            key={`radar-label-${axis.key}`}
+            x={axis.labelX}
+            y={axis.labelY}
+            textAnchor={axis.labelX >= center ? "start" : "end"}
+            dominantBaseline="middle"
+            fontSize="11"
+            fill="#2d3550"
+          >
+            {axis.label}
+          </text>
+        ))}
+      </svg>
+      <p style={{ ...mutedParagraphStyle, marginTop: 0 }}>
+        Scores are plotted on a 0-5 scale with evidence-backed pins.
+      </p>
+    </div>
+  );
+}
+
 function ListPanel({ title, items }: { title: string; items: string[] }) {
   return (
     <article style={panelStyle}>
@@ -1695,6 +2007,99 @@ function ListPanel({ title, items }: { title: string; items: string[] }) {
 
 function asReportJson(value: unknown): ReportJson {
   return typeof value === "object" && value !== null ? (value as ReportJson) : {};
+}
+
+function normalizeSystemDesignDna(value: unknown): SystemDesignDna | null {
+  const record = asRecord(value);
+  if (Object.keys(record).length === 0) {
+    return null;
+  }
+
+  const requirement = numericValue(record.requirement_clarity);
+  const capacity = numericValue(record.capacity_instinct);
+  const tradeoff = numericValue(record.tradeoff_depth);
+  const reliability = numericValue(record.reliability_awareness);
+  const bottleneck = numericValue(record.bottleneck_sensitivity);
+
+  if ([requirement, capacity, tradeoff, reliability, bottleneck].some((score) => score === null)) {
+    return null;
+  }
+
+  const evidencePins = Array.isArray(record.evidencePins)
+    ? record.evidencePins
+        .map((item) => asRecord(item))
+        .map(
+          (item): SystemDesignEvidencePin => ({
+            dimension: isSystemDesignDimensionKey(item.dimension) ? item.dimension : undefined,
+            score: numericValue(item.score) ?? undefined,
+            snapshotId: stringValue(item.snapshotId),
+            turnIds: asStringArray(item.turnIds),
+            evidenceRefs: asStringArray(item.evidenceRefs),
+          }),
+        )
+    : [];
+
+  return {
+    requirement_clarity: requirement,
+    capacity_instinct: capacity,
+    tradeoff_depth: tradeoff,
+    reliability_awareness: reliability,
+    bottleneck_sensitivity: bottleneck,
+    levelRecommendation: stringValue(record.levelRecommendation) ?? undefined,
+    calibrationNotes: asStringArray(record.calibrationNotes),
+    strengths: asStringArray(record.strengths),
+    weaknesses: asStringArray(record.weaknesses),
+    evidencePins,
+  };
+}
+
+function buildSystemDesignDimensionRows(dna: SystemDesignDna) {
+  const dimensions: Array<{ key: SystemDesignDimensionKey; score: number }> = [
+    { key: "requirement_clarity", score: dna.requirement_clarity },
+    { key: "capacity_instinct", score: dna.capacity_instinct },
+    { key: "tradeoff_depth", score: dna.tradeoff_depth },
+    { key: "reliability_awareness", score: dna.reliability_awareness },
+    { key: "bottleneck_sensitivity", score: dna.bottleneck_sensitivity },
+  ];
+  return dimensions.map((dimension) => ({
+    ...dimension,
+    label: systemDesignDimensionLabel(dimension.key),
+  }));
+}
+
+function systemDesignDimensionLabel(key?: SystemDesignDimensionKey) {
+  switch (key) {
+    case "requirement_clarity":
+      return "Requirement Clarity";
+    case "capacity_instinct":
+      return "Capacity Instinct";
+    case "tradeoff_depth":
+      return "Tradeoff Depth";
+    case "reliability_awareness":
+      return "Reliability Awareness";
+    case "bottleneck_sensitivity":
+      return "Bottleneck Sensitivity";
+    default:
+      return "Unknown Dimension";
+  }
+}
+
+function isSystemDesignDimensionKey(value: unknown): value is SystemDesignDimensionKey {
+  return (
+    value === "requirement_clarity" ||
+    value === "capacity_instinct" ||
+    value === "tradeoff_depth" ||
+    value === "reliability_awareness" ||
+    value === "bottleneck_sensitivity"
+  );
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function numericValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function normalizeDimensions(
@@ -2157,7 +2562,7 @@ const pageStyle = {
 } as const;
 
 const containerStyle = {
-  width: "min(1120px, 100%)",
+  width: "min(1680px, 100%)",
   margin: "0 auto",
   display: "grid",
   gap: 22,
