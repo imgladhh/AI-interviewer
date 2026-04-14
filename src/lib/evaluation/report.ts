@@ -314,6 +314,12 @@ type RewardSummary = {
   latestTotal: number | null;
   positiveTurns: number;
   negativeTurns: number;
+  nudgeConversion: {
+    guideCount: number;
+    pivotCount: number;
+    conversionRate: number | null;
+    noiseTaggedTurns: number;
+  };
   averageComponents: {
     evidenceGain: number;
     redundancy: number;
@@ -1355,12 +1361,27 @@ function buildRewardSummary(events: SessionEventLike[]): RewardSummary | null {
     });
 
   const count = rewardEvents.length;
+  const guideCount = events.filter((event) => event.eventType === "HINT_SERVED").length;
+  const pivotCount = rewardEvents.filter((reward) => numberValue(asRecord(reward.components).pivotImpact) > 0).length;
+  const noiseTaggedTurns = rewardEvents.filter((reward) => {
+    const tags = Array.isArray(reward.noiseTags)
+      ? reward.noiseTags.filter((item): item is string => typeof item === "string")
+      : [];
+    return tags.length > 0;
+  }).length;
+  const conversionRate = guideCount > 0 ? Number((pivotCount / guideCount).toFixed(2)) : null;
   return {
     totalTurns: count,
     averageTotal: Number((sumTotal / count).toFixed(2)),
     latestTotal: Number(((rewardEvents.at(-1)?.total as number) ?? 0).toFixed(2)),
     positiveTurns,
     negativeTurns,
+    nudgeConversion: {
+      guideCount,
+      pivotCount,
+      conversionRate,
+      noiseTaggedTurns,
+    },
     averageComponents: {
       evidenceGain: Number((componentTotals.evidenceGain / count).toFixed(2)),
       redundancy: Number((componentTotals.redundancy / count).toFixed(2)),
@@ -2189,6 +2210,7 @@ function buildSystemDesignDna(input: {
   const reliabilityScore = scoreByMissing(signalValues.spof_missed);
   const bottleneckScore = scoreByMissing(signalValues.bottleneck_unexamined);
   const avgScore = (requirementScore + capacityScore + tradeoffScore + reliabilityScore + bottleneckScore) / 5;
+  const pivotSummary = summarizeSystemDesignPivot(input.events);
 
   const baseLevelRecommendation: SystemDesignDna["levelRecommendation"] =
     avgScore >= 4.2 ? "Staff" : avgScore >= 3.4 ? "Senior" : "Mid-level";
@@ -2196,6 +2218,9 @@ function buildSystemDesignDna(input: {
     baseLevel: baseLevelRecommendation,
     tradeoffScore,
     capacityScore,
+    reliabilityScore,
+    bottleneckScore,
+    pivotSummary,
   });
   const levelRecommendation = levelCapResult.level;
 
@@ -2285,11 +2310,19 @@ function applySystemDesignLevelCap(input: {
   baseLevel: SystemDesignDna["levelRecommendation"];
   tradeoffScore: number;
   capacityScore: number;
+  reliabilityScore: number;
+  bottleneckScore: number;
+  pivotSummary: {
+    count: number;
+    averageImpact: number;
+  };
 }) {
   const notes: string[] = [];
   let level = input.baseLevel;
   const tradeoffWeak = input.tradeoffScore < 4;
   const capacityWeak = input.capacityScore < 4;
+  const reliabilityWeak = input.reliabilityScore < 4;
+  const bottleneckWeak = input.bottleneckScore < 4;
 
   if (tradeoffWeak) {
     notes.push("Calibration guard: tradeoff depth is below strong-level threshold.");
@@ -2307,9 +2340,61 @@ function applySystemDesignLevelCap(input: {
     notes.push("Staff-level cap applied: capacity instinct signal is below the required threshold.");
   }
 
+  if (input.capacityScore >= 4 && (reliabilityWeak || bottleneckWeak)) {
+    notes.push("Cross-stage consistency: strong capacity estimate must be backed by reliability and bottleneck depth.");
+    if (level === "Staff") {
+      level = "Senior";
+      notes.push("Cross-stage cap applied: deep-dive evidence is not yet consistent with stated scale assumptions.");
+    } else if (level === "Senior" && input.reliabilityScore < 3.5 && input.bottleneckScore < 3.5) {
+      level = "Mid-level";
+      notes.push("Cross-stage cap applied: reliability and bottleneck analysis stayed too shallow for senior recommendation.");
+    }
+  }
+
+  const pivotStrong = input.pivotSummary.count >= 2 && input.pivotSummary.averageImpact >= 0.35;
+  if (pivotStrong && level === "Mid-level" && !tradeoffWeak && !capacityWeak) {
+    level = "Senior";
+    notes.push("Pivot boost applied: sustained hint-to-insight conversion improved level recommendation within guardrails.");
+  }
+
   return {
     level,
     notes,
+  };
+}
+
+function summarizeSystemDesignPivot(events: SessionEventLike[]) {
+  const impacts: number[] = [];
+  for (const event of events) {
+    if (event.eventType !== "REWARD_RECORDED") {
+      continue;
+    }
+    const payload = asRecord(event.payloadJson);
+    const reward = asRecord(payload.reward);
+    const tags = Array.isArray(reward.noiseTags)
+      ? reward.noiseTags.filter((item): item is string => typeof item === "string")
+      : [];
+    if (tags.length > 0) {
+      continue;
+    }
+    const components = asRecord(reward.components);
+    const impact = numberValue(components.pivotImpact);
+    if (impact > 0) {
+      impacts.push(impact);
+    }
+  }
+
+  if (impacts.length === 0) {
+    return {
+      count: 0,
+      averageImpact: 0,
+    };
+  }
+
+  const sum = impacts.reduce((acc, value) => acc + value, 0);
+  return {
+    count: impacts.length,
+    averageImpact: Number((sum / impacts.length).toFixed(2)),
   };
 }
 

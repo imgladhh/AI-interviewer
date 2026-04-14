@@ -198,6 +198,12 @@ type ReportJson = {
     latestTotal?: number | null;
     positiveTurns?: number;
     negativeTurns?: number;
+    nudgeConversion?: {
+      guideCount?: number;
+      pivotCount?: number;
+      conversionRate?: number | null;
+      noiseTaggedTurns?: number;
+    };
     averageComponents?: {
       evidenceGain?: number;
       redundancy?: number;
@@ -983,6 +989,18 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
               <MetricRow
                 label="Reward Latest"
                 value={typeof reportJson.rewardSummary?.latestTotal === "number" ? reportJson.rewardSummary.latestTotal.toFixed(2) : "n/a"}
+              />
+              <MetricRow
+                label="Nudge Conversion"
+                value={
+                  typeof reportJson.rewardSummary?.nudgeConversion?.conversionRate === "number"
+                    ? `${Math.round(reportJson.rewardSummary.nudgeConversion.conversionRate * 100)}% (${reportJson.rewardSummary.nudgeConversion.pivotCount ?? 0}/${reportJson.rewardSummary.nudgeConversion.guideCount ?? 0})`
+                    : "n/a"
+                }
+              />
+              <MetricRow
+                label="Noise-Tagged Reward Turns"
+                value={String(reportJson.rewardSummary?.nudgeConversion?.noiseTaggedTurns ?? 0)}
               />
               <MetricRow
                 label="Transcript Truth"

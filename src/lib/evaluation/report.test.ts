@@ -151,8 +151,78 @@ describe("generateSessionReport", () => {
       Array.isArray((reportJson.rewardSummary as Record<string, unknown>).designEvidenceTypeCounts),
     ).toBe(true);
     expect(Array.isArray((reportJson.rewardSummary as Record<string, unknown>).attributions)).toBe(true);
+    expect(
+      ((
+        (reportJson.rewardSummary as Record<string, unknown>).nudgeConversion as Record<string, unknown>
+      ).conversionRate as number | null) ?? null,
+    ).toBe(0);
     expect(Array.isArray(reportJson.shadowPolicySnapshots as unknown[])).toBe(true);
     expect((reportJson.shadowPolicySnapshots as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+  });
+
+  it("computes nudge conversion rate from hints, pivots, and noise-tagged reward turns", () => {
+    const report = generateSessionReport({
+      sessionId: "session-nudge-conversion-1",
+      mode: "SYSTEM_DESIGN",
+      questionTitle: "Design Event Bus",
+      transcripts: [{ speaker: "USER", text: "I will compare async queue vs stream and call out SPOF." }],
+      events: [
+        { eventType: "HINT_SERVED", payloadJson: { hintLevel: "LIGHT", hintStyle: "APPROACH_NUDGE" } },
+        { eventType: "HINT_SERVED", payloadJson: { hintLevel: "LIGHT", hintStyle: "APPROACH_NUDGE" } },
+        {
+          eventType: "REWARD_RECORDED",
+          payloadJson: {
+            reward: {
+              total: 0.42,
+              components: {
+                evidenceGain: 0.4,
+                redundancy: 0.1,
+                badInterruption: 0,
+                flowPreservation: 0.05,
+                cleanClosure: 0,
+                riskIdentified: 0.2,
+                tradeoffDepth: 0.18,
+                handwavePenalty: 0,
+                pivotImpact: 0.44,
+              },
+              penalties: [],
+            },
+          },
+        },
+        {
+          eventType: "REWARD_RECORDED",
+          payloadJson: {
+            reward: {
+              total: -0.1,
+              noiseTags: ["INTERRUPTED_TURN"],
+              components: {
+                evidenceGain: 0,
+                redundancy: 0,
+                badInterruption: -0.1,
+                flowPreservation: 0,
+                cleanClosure: 0,
+                riskIdentified: 0,
+                tradeoffDepth: 0,
+                handwavePenalty: 0,
+                pivotImpact: 0,
+              },
+              penalties: ["interrupted_when_should_wait"],
+            },
+          },
+        },
+      ],
+      executionRuns: [],
+      candidateStateSnapshots: [],
+    });
+
+    const reportJson = report.reportJson as Record<string, unknown>;
+    const rewardSummary = (reportJson.rewardSummary as Record<string, unknown>) ?? {};
+    const nudgeConversion = (rewardSummary.nudgeConversion as Record<string, unknown>) ?? {};
+
+    expect(nudgeConversion.guideCount).toBe(2);
+    expect(nudgeConversion.pivotCount).toBe(1);
+    expect(nudgeConversion.conversionRate).toBe(0.5);
+    expect(nudgeConversion.noiseTaggedTurns).toBe(1);
   });
 
   it("groups replay evidence around stage, signals, decisions, and code runs", () => {
@@ -756,6 +826,180 @@ it("applies non-linear cap to system design level recommendation when tradeoff d
 
   expect(levelRecommendation).not.toBe("Staff");
   expect(calibrationNotes.some((note) => /cap applied|tradeoff depth/i.test(note))).toBe(true);
+});
+
+it("applies cross-stage consistency cap when scale claims are strong but deep-dive reliability remains shallow", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-cross-stage-cap-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design Search Index",
+    transcripts: [{ speaker: "USER", text: "Scale is high but we should still cover reliability details." }],
+    events: [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          stage: "DEEP_DIVE",
+          signals: {
+            designSignals: {
+              signals: {
+                requirement_missing: false,
+                capacity_missing: false,
+                tradeoff_missed: false,
+                spof_missed: true,
+                bottleneck_unexamined: true,
+              },
+              evidenceRefs: {
+                requirement_missing: ["USER#1: requirements"],
+                capacity_missing: ["USER#1: 80k qps"],
+                tradeoff_missed: ["USER#1: cache vs index tradeoff"],
+                spof_missed: ["No direct candidate evidence in recent turns."],
+                bottleneck_unexamined: ["No direct candidate evidence in recent turns."],
+              },
+            },
+          },
+        },
+      },
+    ],
+    executionRuns: [],
+    candidateStateSnapshots: [
+      {
+        id: "snap-sd-cross-stage-cap-1",
+        stage: "DEEP_DIVE",
+        snapshotJson: {
+          designSignals: {
+            signals: {
+              requirement_missing: false,
+              capacity_missing: false,
+              tradeoff_missed: false,
+              spof_missed: true,
+              bottleneck_unexamined: true,
+            },
+            evidenceRefs: {
+              requirement_missing: ["USER#1: requirements"],
+              capacity_missing: ["USER#1: 80k qps"],
+              tradeoff_missed: ["USER#1: cache vs index tradeoff"],
+              spof_missed: ["No direct candidate evidence in recent turns."],
+              bottleneck_unexamined: ["No direct candidate evidence in recent turns."],
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
+  const levelRecommendation = systemDesignDna.levelRecommendation as string;
+  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+
+  expect(levelRecommendation).toBe("Mid-level");
+  expect(calibrationNotes.some((note) => /cross-stage consistency/i.test(note))).toBe(true);
+});
+
+it("applies pivot boost within guardrails when hint-to-insight conversion is sustained", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-pivot-boost-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design Notification Fanout",
+    transcripts: [{ speaker: "USER", text: "Let's compare fanout models with concrete costs." }],
+    events: [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          stage: "DEEP_DIVE",
+          signals: {
+            designSignals: {
+              signals: {
+                requirement_missing: true,
+                capacity_missing: false,
+                tradeoff_missed: false,
+                spof_missed: true,
+                bottleneck_unexamined: true,
+              },
+              evidenceRefs: {
+                requirement_missing: ["No direct candidate evidence in recent turns."],
+                capacity_missing: ["USER#1: 50k qps"],
+                tradeoff_missed: ["USER#1: push vs pull tradeoff"],
+                spof_missed: ["No direct candidate evidence in recent turns."],
+                bottleneck_unexamined: ["No direct candidate evidence in recent turns."],
+              },
+            },
+          },
+        },
+      },
+      {
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: {
+            total: 0.35,
+            components: {
+              evidenceGain: 0.3,
+              redundancy: 0,
+              badInterruption: 0,
+              flowPreservation: 0,
+              cleanClosure: 0,
+              riskIdentified: 0.2,
+              tradeoffDepth: 0.2,
+              handwavePenalty: 0,
+              pivotImpact: 0.46,
+            },
+          },
+        },
+      },
+      {
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: {
+            total: 0.31,
+            components: {
+              evidenceGain: 0.25,
+              redundancy: 0,
+              badInterruption: 0,
+              flowPreservation: 0,
+              cleanClosure: 0,
+              riskIdentified: 0.18,
+              tradeoffDepth: 0.22,
+              handwavePenalty: 0,
+              pivotImpact: 0.39,
+            },
+          },
+        },
+      },
+    ],
+    executionRuns: [],
+    candidateStateSnapshots: [
+      {
+        id: "snap-sd-pivot-boost-1",
+        stage: "DEEP_DIVE",
+        snapshotJson: {
+          designSignals: {
+            signals: {
+              requirement_missing: true,
+              capacity_missing: false,
+              tradeoff_missed: false,
+              spof_missed: true,
+              bottleneck_unexamined: true,
+            },
+            evidenceRefs: {
+              requirement_missing: ["No direct candidate evidence in recent turns."],
+              capacity_missing: ["USER#1: 50k qps"],
+              tradeoff_missed: ["USER#1: push vs pull tradeoff"],
+              spof_missed: ["No direct candidate evidence in recent turns."],
+              bottleneck_unexamined: ["No direct candidate evidence in recent turns."],
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
+  const levelRecommendation = systemDesignDna.levelRecommendation as string;
+  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+
+  expect(levelRecommendation).toBe("Senior");
+  expect(calibrationNotes.some((note) => /pivot boost applied/i.test(note))).toBe(true);
 });
 
 it("keeps system design DNA scores low when no candidate evidence is available", () => {
