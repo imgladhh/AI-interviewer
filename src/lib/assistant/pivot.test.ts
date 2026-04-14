@@ -47,6 +47,9 @@ describe("detectPivotMoment", () => {
     });
 
     expect(pivot.detected).toBe(true);
+    expect(pivot.triggerAction).toBe("hint");
+    expect(pivot.dimensionJump).toBeGreaterThanOrEqual(1);
+    expect(pivot.deltaTime).toBeGreaterThanOrEqual(0);
     expect(pivot.impactScore).toBeGreaterThan(0);
   });
 
@@ -96,5 +99,21 @@ describe("detectPivotMoment", () => {
     expect(pivot.detected).toBe(false);
     expect(pivot.impactScore).toBe(0);
   });
-});
 
+  it("suppresses pivot detection when noise tags are present", () => {
+    const pivot = detectPivotMoment({
+      decision: {
+        action: "probe_tradeoff",
+        target: "tradeoff",
+      },
+      noiseTags: ["PARTIAL_TRANSCRIPT"],
+      recentEvents: [
+        { eventType: "HINT_SERVED", payloadJson: { hintLevel: "L1_AREA" } },
+      ],
+    });
+
+    expect(pivot.detected).toBe(false);
+    expect(pivot.impactScore).toBe(0);
+    expect(pivot.reason).toMatch(/noise-tagged/i);
+  });
+});

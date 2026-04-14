@@ -46,14 +46,32 @@ export type DesignSignalKey =
 
 export type DesignSignals = Record<DesignSignalKey, boolean>;
 
+export type GapState = {
+  missing_capacity: boolean;
+  missing_tradeoff: boolean;
+  missing_reliability: boolean;
+  missing_bottleneck: boolean;
+};
+
 export type DesignSignalSnapshot = {
   signals: DesignSignals;
   evidenceRefs: Record<DesignSignalKey, string[]>;
+  gapState?: GapState;
   summary: string;
   handwave?: {
     detected: boolean;
     depth: number;
+    rawDepth: number;
     expectedDepth: number;
+    vagueLanguageDecay: number;
+    components: {
+      numeric_density: number;
+      constraint_binding: number;
+      causal_chain: number;
+      specificity: number;
+    };
+    lowDetailStreak: number;
+    forceDeeperAction: boolean;
     categories: HandwaveCategory[];
     evidenceRefs: string[];
   };
@@ -169,7 +187,7 @@ export function extractCandidateSignals(input: {
 
   const designSignals =
     input.mode === "SYSTEM_DESIGN"
-      ? extractSystemDesignSignals(input.recentTranscripts, input.systemDesignStage)
+      ? extractSystemDesignSignals(input.recentTranscripts, input.systemDesignStage, recentEvents)
       : undefined;
 
   return {
@@ -976,6 +994,7 @@ function parseObservedSignals(
 function extractSystemDesignSignals(
   recentTranscripts: TranscriptLike[],
   stage: SystemDesignStage | undefined,
+  recentEvents: SessionEventLike[] = [],
 ): DesignSignalSnapshot {
   const userTurns = recentTranscripts
     .map((segment, index) => ({ segment, index }))
@@ -1073,22 +1092,72 @@ function extractSystemDesignSignals(
     recentUserText: normalizedText,
     tradeoffMissed: signals.tradeoff_missed,
   });
+  const gapState: GapState = {
+    missing_capacity:
+      signals.capacity_missing ||
+      depthAssessment.categories.includes("unquantified_scaling_claim"),
+    missing_tradeoff:
+      signals.tradeoff_missed ||
+      depthAssessment.categories.includes("tradeoff_evasion") ||
+      depthAssessment.categories.includes("unjustified_component_choice"),
+    missing_reliability: signals.spof_missed,
+    missing_bottleneck: signals.bottleneck_unexamined,
+  };
+  const previousLowDetailStreak = computePreviousLowDetailStreak(recentEvents);
+  const lowDetailStreak = depthAssessment.handwave ? previousLowDetailStreak + 1 : 0;
+  const forceDeeperAction = lowDetailStreak >= 2;
   const handwaveSummary = depthAssessment.handwave
     ? `handwave detected (${depthAssessment.categories.join(", ") || "generic_shallow_answer"})`
     : "depth acceptable for stage";
+  const gapSummary = [
+    gapState.missing_capacity ? "capacity gap" : null,
+    gapState.missing_tradeoff ? "tradeoff gap" : null,
+    gapState.missing_reliability ? "reliability gap" : null,
+    gapState.missing_bottleneck ? "bottleneck gap" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return {
     signals,
     evidenceRefs,
-    summary: `${summary}; ${handwaveSummary}`,
+    gapState,
+    summary: `${summary}; ${handwaveSummary}${gapSummary ? `; ${gapSummary}` : ""}`,
     handwave: {
       detected: depthAssessment.handwave,
       depth: depthAssessment.depth,
+      rawDepth: depthAssessment.rawDepth,
       expectedDepth: depthAssessment.expectedDepth,
+      vagueLanguageDecay: depthAssessment.vagueLanguageDecay,
+      components: depthAssessment.components,
+      lowDetailStreak,
+      forceDeeperAction,
       categories: depthAssessment.categories,
       evidenceRefs: depthAssessment.evidenceRefs,
     },
   };
+}
+
+function computePreviousLowDetailStreak(recentEvents: SessionEventLike[]) {
+  let streak = 0;
+  for (let index = recentEvents.length - 1; index >= 0; index -= 1) {
+    const event = recentEvents[index];
+    if (!event || event.eventType !== "SIGNAL_SNAPSHOT_RECORDED") {
+      continue;
+    }
+    const payload = asRecord(event.payloadJson);
+    const signals = asRecord(payload.signals);
+    const designSignals = asRecord(signals.designSignals);
+    const handwave = asRecord(designSignals.handwave);
+    if (handwave.detected === true) {
+      streak += 1;
+      continue;
+    }
+    if (handwave.detected === false) {
+      break;
+    }
+  }
+  return streak;
 }
 
 function collectUserEvidenceRefs(
@@ -1135,6 +1204,10 @@ function coerceOptionalEnum<T extends string>(
     return value as T;
   }
   return fallback;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 function buildStructuredEvidence(input: {

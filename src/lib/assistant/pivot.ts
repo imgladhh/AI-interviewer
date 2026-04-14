@@ -3,9 +3,14 @@ type SessionEventLike = {
   payloadJson?: unknown;
 };
 
+export type NoiseTag = "STT_CORRUPTION" | "PARTIAL_TRANSCRIPT" | "INTERRUPTED_TURN";
+
 export type PivotMoment = {
   detected: boolean;
   type: "self_correction" | "insight_jump" | null;
+  triggerAction: "hint" | "guide" | null;
+  deltaTime: number;
+  dimensionJump: number;
   impactScore: number;
   evidenceRefs: string[];
   reason: string;
@@ -14,7 +19,22 @@ export type PivotMoment = {
 export function detectPivotMoment(input: {
   recentEvents: SessionEventLike[];
   decision: unknown;
+  noiseTags?: NoiseTag[];
 }): PivotMoment {
+  const noiseTags = input.noiseTags ?? [];
+  if (noiseTags.length > 0) {
+    return {
+      detected: false,
+      type: null,
+      triggerAction: null,
+      deltaTime: 0,
+      dimensionJump: 0,
+      impactScore: 0,
+      evidenceRefs: [`noise_tags=${noiseTags.join(",")}`],
+      reason: "Pivot disabled for noise-tagged turn to prevent calibration contamination.",
+    };
+  }
+
   const decision = asRecord(input.decision);
   const target = normalize(stringValue(decision.target)) ?? "";
   const action = normalize(stringValue(decision.action)) ?? "";
@@ -24,6 +44,9 @@ export function detectPivotMoment(input: {
     return {
       detected: false,
       type: null,
+      triggerAction: null,
+      deltaTime: 0,
+      dimensionJump: 0,
       impactScore: 0,
       evidenceRefs: [],
       reason: "No recent hint served, so pivot gate did not open.",
@@ -37,6 +60,9 @@ export function detectPivotMoment(input: {
     return {
       detected: false,
       type: null,
+      triggerAction: null,
+      deltaTime: 0,
+      dimensionJump: 0,
       impactScore: 0,
       evidenceRefs: [`target=${target || "none"}`, `recent_targets=${previousTargets.join(",") || "none"}`],
       reason: "No new design dimension was added after hint.",
@@ -48,6 +74,9 @@ export function detectPivotMoment(input: {
     return {
       detected: false,
       type: null,
+      triggerAction: null,
+      deltaTime: 0,
+      dimensionJump: 0,
       impactScore: 0,
       evidenceRefs: improvement.evidenceRefs,
       reason: "No significant design-signal improvement was detected.",
@@ -56,16 +85,22 @@ export function detectPivotMoment(input: {
 
   const type: PivotMoment["type"] =
     action.includes("probe") || action.includes("ask_followup") ? "insight_jump" : "self_correction";
-  const impactScore = Number(Math.min(1, 0.4 + 0.2 * improvement.delta).toFixed(2));
+  const deltaTime = turnsSinceLastEvent(input.recentEvents, "HINT_SERVED", 20);
+  const dimensionJump = improvement.delta;
+  const impactScore = Number(Math.min(1, 0.35 + 0.2 * dimensionJump + (deltaTime <= 4 ? 0.1 : 0)).toFixed(2));
 
   return {
     detected: true,
     type,
+    triggerAction: "hint",
+    deltaTime,
+    dimensionJump,
     impactScore,
     evidenceRefs: [
       "recent_hint_served=true",
       `new_dimension=${targetDimension}`,
-      `signal_improvement_delta=${improvement.delta}`,
+      `signal_improvement_delta=${dimensionJump}`,
+      `delta_time_turns=${deltaTime}`,
       ...improvement.evidenceRefs,
     ],
     reason: "Hint + new dimension + significant design improvement detected.",
@@ -176,6 +211,21 @@ function hasRecentEvent(events: SessionEventLike[], eventType: string, lookback:
   return false;
 }
 
+function turnsSinceLastEvent(events: SessionEventLike[], eventType: string, lookback: number) {
+  let seen = 0;
+  for (let index = events.length - 1; index >= 0 && seen < lookback; index -= 1) {
+    const event = events[index];
+    if (!event) {
+      continue;
+    }
+    if (event.eventType === eventType) {
+      return seen;
+    }
+    seen += 1;
+  }
+  return lookback;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -197,4 +247,3 @@ function normalize(value: string | null) {
 function booleanValue(value: unknown) {
   return typeof value === "boolean" ? value : null;
 }
-

@@ -47,7 +47,7 @@ describe("makeSystemDesignDecision level adaptation", () => {
       }),
     });
 
-    expect(["WRAP_UP", "CHALLENGE_SPOF", "ZOOM_IN"]).toContain(decision.systemDesignActionType);
+    expect(["WRAP_UP", "CHALLENGE_SPOF", "ZOOM_IN", "PROBE_TRADEOFF"]).toContain(decision.systemDesignActionType);
     expect(decision.action).not.toBe("move_to_implementation");
   });
 
@@ -209,5 +209,74 @@ describe("makeSystemDesignDecision level adaptation", () => {
 
     expect(["PROBE_TRADEOFF", "ZOOM_IN", "CHALLENGE_SPOF"]).toContain(decision.systemDesignActionType);
     expect((decision.scoreBreakdown ?? []).some((item) => item.key === "causal_capacity_override")).toBe(false);
+  });
+
+  it("routes by reliability gap to challenge SPOF when reliability remains missing", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SDE2",
+      signals: createSnapshot({
+        requirement_missing: false,
+        capacity_missing: false,
+        tradeoff_missed: false,
+        spof_missed: true,
+        bottleneck_unexamined: false,
+      }),
+    });
+
+    expect(decision.systemDesignActionType).toBe("CHALLENGE_SPOF");
+  });
+
+  it("forces deeper follow-up after repeated low-detail streak instead of wrapping up", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "WRAP_UP",
+      targetLevel: "SDE2",
+      signals: {
+        ...createSnapshot({
+          requirement_missing: false,
+          capacity_missing: false,
+          tradeoff_missed: true,
+          spof_missed: false,
+          bottleneck_unexamined: false,
+        }),
+        designSignals: {
+          signals: {
+            requirement_missing: false,
+            capacity_missing: false,
+            tradeoff_missed: true,
+            spof_missed: false,
+            bottleneck_unexamined: false,
+          },
+          evidenceRefs: {
+            requirement_missing: [],
+            capacity_missing: [],
+            tradeoff_missed: [],
+            spof_missed: [],
+            bottleneck_unexamined: [],
+          },
+          summary: "low detail streak",
+          handwave: {
+            detected: true,
+            depth: 0.28,
+            rawDepth: 0.48,
+            expectedDepth: 0.4,
+            vagueLanguageDecay: 1.7,
+            components: {
+              numeric_density: 0,
+              constraint_binding: 0.24,
+              causal_chain: 0.24,
+              specificity: 0,
+            },
+            lowDetailStreak: 2,
+            forceDeeperAction: true,
+            categories: ["tradeoff_evasion"],
+            evidenceRefs: ["depth streak"],
+          },
+        },
+      },
+    });
+
+    expect(decision.systemDesignActionType).toBe("PROBE_TRADEOFF");
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "depth_streak_force_deeper")).toBe(true);
   });
 });

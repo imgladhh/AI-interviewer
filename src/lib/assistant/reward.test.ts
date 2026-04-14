@@ -243,4 +243,50 @@ describe("evaluateTurnReward", () => {
 
     expect(reward.components.pivotImpact).toBeGreaterThan(0);
   });
+
+  it("excludes handwave and pivot signals from reward shaping when turn is noise-tagged", () => {
+    const reward = evaluateTurnReward({
+      stage: "DEEP_DIVE",
+      decision: {
+        action: "encourage_and_continue",
+        target: "approach",
+        systemDesignActionType: "ZOOM_IN",
+      },
+      recentEvents: [
+        {
+          eventType: "AI_INTERRUPTED_BY_CANDIDATE",
+          payloadJson: {},
+        },
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            signals: {
+              designSignals: {
+                signals: {
+                  requirement_missing: false,
+                  capacity_missing: false,
+                  tradeoff_missed: true,
+                  spof_missed: false,
+                  bottleneck_unexamined: true,
+                },
+                handwave: {
+                  detected: true,
+                  categories: ["tradeoff_evasion", "unquantified_scaling_claim"],
+                  lowDetailStreak: 3,
+                },
+              },
+            },
+          },
+        },
+        {
+          eventType: "HINT_SERVED",
+          payloadJson: { hintLevel: "L1_AREA" },
+        },
+      ],
+    });
+
+    expect(reward.noiseTags).toContain("INTERRUPTED_TURN");
+    expect(reward.components.handwavePenalty).toBe(0);
+    expect(reward.components.pivotImpact).toBe(0);
+  });
 });

@@ -1,4 +1,4 @@
-import { detectPivotMoment } from "@/lib/assistant/pivot";
+import { detectPivotMoment, type NoiseTag } from "@/lib/assistant/pivot";
 
 type SessionEventLike = {
   eventType: string;
@@ -18,6 +18,7 @@ type RewardAxis = "reasoning" | "implementation" | "test" | "debugging" | "trade
 export type RewardResult = {
   version: "v1";
   total: number;
+  noiseTags?: NoiseTag[];
   components: {
     evidenceGain: number;
     redundancy: number;
@@ -136,9 +137,10 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
   let tradeoffDepth = 0;
   let handwavePenalty = 0;
   let pivotImpact = 0;
+  const noiseTags = detectNoiseTags(input.recentEvents);
   const designEvidenceTypes = new Set<"requirement" | "capacity" | "tradeoff" | "spof" | "bottleneck" | "handwave">();
 
-  if (isSystemDesignReward) {
+  if (isSystemDesignReward && noiseTags.length === 0) {
     const missingCount =
       (latestDesignSignals?.requirement_missing ? 1 : 0) +
       (latestDesignSignals?.capacity_missing ? 1 : 0) +
@@ -189,18 +191,19 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
       (action === "hold_and_listen" && urgency === "high") ||
       (target === "approach" && !hasAny(action ?? "", ["probe", "ask_for_clarification"]));
     if (looksHandwavey) {
-      handwavePenalty = -0.3;
+      handwavePenalty = applyHandwavePenalty({
+        missingCount,
+        categories: latestDesignSignals?.handwave_categories ?? [],
+        lowDetailStreak: latestDesignSignals?.handwave_low_detail_streak ?? 0,
+      });
       penalties.push("handwave_detected");
       designEvidenceTypes.add("handwave");
-
-      if (missingCount >= 3) {
-        handwavePenalty = -0.4;
-      }
     }
 
     const pivot = detectPivotMoment({
       recentEvents: input.recentEvents,
       decision: input.decision,
+      noiseTags,
     });
     if (pivot.detected) {
       pivotImpact = pivot.impactScore;
@@ -226,6 +229,7 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
   return {
     version: "v1",
     total,
+    noiseTags: noiseTags.length > 0 ? noiseTags : undefined,
     components: {
       evidenceGain: round2(evidenceGain),
       redundancy: round2(redundancy),
@@ -294,6 +298,8 @@ function findLatestDesignSignals(
   spof_missed: boolean;
   bottleneck_unexamined: boolean;
   handwave_detected?: boolean;
+  handwave_categories?: string[];
+  handwave_low_detail_streak?: number;
 } | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
@@ -322,11 +328,68 @@ function findLatestDesignSignals(
         spof_missed: designSignalValues.spof_missed as boolean,
         bottleneck_unexamined: designSignalValues.bottleneck_unexamined as boolean,
         handwave_detected: typeof handwave.detected === "boolean" ? (handwave.detected as boolean) : undefined,
+        handwave_categories: Array.isArray(handwave.categories)
+          ? handwave.categories.filter((item): item is string => typeof item === "string")
+          : [],
+        handwave_low_detail_streak:
+          typeof handwave.lowDetailStreak === "number" ? handwave.lowDetailStreak : 0,
       };
     }
   }
 
   return null;
+}
+
+function detectNoiseTags(events: SessionEventLike[]): NoiseTag[] {
+  const tags = new Set<NoiseTag>();
+  for (let index = events.length - 1; index >= 0 && index >= events.length - 12; index -= 1) {
+    const event = events[index];
+    if (!event) {
+      continue;
+    }
+    const payload = asRecord(event.payloadJson);
+    const explicit = Array.isArray(payload.noiseTags)
+      ? payload.noiseTags.filter((item): item is NoiseTag => item === "STT_CORRUPTION" || item === "PARTIAL_TRANSCRIPT" || item === "INTERRUPTED_TURN")
+      : [];
+    for (const tag of explicit) {
+      tags.add(tag);
+    }
+    if (event.eventType === "AI_INTERRUPTED_BY_CANDIDATE") {
+      tags.add("INTERRUPTED_TURN");
+    }
+    if (
+      event.eventType === "CANDIDATE_TRANSCRIPT_REFINED" &&
+      (payload.partial === true || payload.transcriptCompleteness === "partial")
+    ) {
+      tags.add("PARTIAL_TRANSCRIPT");
+    }
+    if (
+      event.eventType === "STT_USAGE_RECORDED" &&
+      (payload.providerFailure || payload.error || payload.errorCode || payload.corruptionDetected === true)
+    ) {
+      tags.add("STT_CORRUPTION");
+    }
+  }
+  return [...tags];
+}
+
+function applyHandwavePenalty(input: { missingCount: number; categories: string[]; lowDetailStreak: number }) {
+  let penalty = -0.3;
+
+  if (input.missingCount >= 3) {
+    penalty = -0.4;
+  }
+  if (input.categories.includes("tradeoff_evasion")) {
+    penalty -= 0.04;
+  }
+  if (input.categories.includes("unquantified_scaling_claim")) {
+    penalty -= 0.04;
+  }
+  if (input.lowDetailStreak >= 2) {
+    penalty -= 0.06;
+  }
+
+  return clamp(round2(penalty), -1, 1);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

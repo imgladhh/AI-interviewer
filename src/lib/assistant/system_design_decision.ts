@@ -1,6 +1,6 @@
 import type { CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { CodingInterviewPolicyAction, SystemDesignPolicyAction } from "@/lib/assistant/policy";
-import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
+import type { CandidateSignalSnapshot, GapState } from "@/lib/assistant/signal_extractor";
 import type { SystemDesignStage } from "@/lib/assistant/stages";
 
 export type SystemDesignTargetLevel = "NEW_GRAD" | "SDE1" | "SDE2" | "SENIOR" | "STAFF";
@@ -27,16 +27,17 @@ export function makeSystemDesignDecision(input: {
     spof_missed: true,
     bottleneck_unexamined: true,
   };
+  const gapState = inferGapState(input.signals);
   const targetLevel = normalizeSystemDesignTargetLevel(input.targetLevel);
   const handwaveSignal = input.signals.designSignals?.handwave;
 
   const baseScores = [
-    score("ASK_REQUIREMENT", input.currentStage, designSignals, targetLevel, handwaveSignal),
-    score("ASK_CAPACITY", input.currentStage, designSignals, targetLevel, handwaveSignal),
-    score("PROBE_TRADEOFF", input.currentStage, designSignals, targetLevel, handwaveSignal),
-    score("CHALLENGE_SPOF", input.currentStage, designSignals, targetLevel, handwaveSignal),
-    score("ZOOM_IN", input.currentStage, designSignals, targetLevel, handwaveSignal),
-    score("WRAP_UP", input.currentStage, designSignals, targetLevel, handwaveSignal),
+    score("ASK_REQUIREMENT", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
+    score("ASK_CAPACITY", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
+    score("PROBE_TRADEOFF", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
+    score("CHALLENGE_SPOF", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
+    score("ZOOM_IN", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
+    score("WRAP_UP", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
   ];
 
   const scoresWithInertia = applyInertia(baseScores, input.previousActionType ?? null);
@@ -58,6 +59,35 @@ export function makeSystemDesignDecision(input: {
     ]);
   }
 
+  const routedAction = routeActionByGap(gapState);
+  if (
+    routedAction &&
+    (handwaveSignal?.forceDeeperAction ||
+      (selected.actionType === "WRAP_UP" &&
+        (gapState.missing_tradeoff || gapState.missing_reliability || gapState.missing_bottleneck)))
+  ) {
+    const routedCandidate = sortedScores.find((item) => item.actionType === routedAction) ?? selected;
+    return toDecision(routedAction, sortedScores, [
+      ...routedCandidate.reasons,
+      {
+        key: "gap_routing_override",
+        magnitude: 1,
+        kind: "signal",
+        detail: `Gap routing selected ${routedAction} from current missing-dimension state.`,
+      },
+      ...(handwaveSignal?.forceDeeperAction
+        ? [
+            {
+              key: "depth_streak_force_deeper",
+              magnitude: handwaveSignal.lowDetailStreak ?? 2,
+              kind: "signal" as const,
+              detail: "Low-detail streak reached threshold, so the interviewer is forced into a deeper follow-up.",
+            },
+          ]
+        : []),
+    ]);
+  }
+
   return toDecision(selected.actionType, sortedScores);
 }
 
@@ -72,8 +102,11 @@ function score(
         depth: number;
         expectedDepth: number;
         categories: Array<"unjustified_component_choice" | "unquantified_scaling_claim" | "tradeoff_evasion">;
-      }
+      forceDeeperAction?: boolean;
+      lowDetailStreak?: number;
+    }
     | undefined,
+  gapState: GapState,
 ) {
   const profile = levelProfile(targetLevel);
   const unresolvedDeepSignals = [signals.tradeoff_missed, signals.spof_missed, signals.bottleneck_unexamined].filter(Boolean).length;
@@ -151,6 +184,23 @@ function score(
       break;
   }
 
+  if (gapState.missing_capacity && actionType === "ASK_CAPACITY") {
+    policy += 0.24;
+    value += 0.12;
+  }
+  if (gapState.missing_tradeoff && actionType === "PROBE_TRADEOFF") {
+    policy += 0.22;
+    value += 0.1;
+  }
+  if (gapState.missing_reliability && actionType === "CHALLENGE_SPOF") {
+    policy += 0.2;
+    value += 0.1;
+  }
+  if (gapState.missing_bottleneck && actionType === "ZOOM_IN") {
+    policy += 0.2;
+    value += 0.1;
+  }
+
   if (handwaveSignal?.detected) {
     const hasTradeoffEvasion = handwaveSignal.categories.includes("tradeoff_evasion");
     const hasUnquantifiedScaling = handwaveSignal.categories.includes("unquantified_scaling_claim");
@@ -183,6 +233,53 @@ function score(
     reasons,
     totalScore,
   };
+}
+
+function inferGapState(signals: CandidateSignalSnapshot): GapState {
+  const fromSnapshot = signals.designSignals?.gapState;
+  if (fromSnapshot) {
+    return {
+      missing_capacity: Boolean(fromSnapshot.missing_capacity),
+      missing_tradeoff: Boolean(fromSnapshot.missing_tradeoff),
+      missing_reliability: Boolean(fromSnapshot.missing_reliability),
+      missing_bottleneck: Boolean(fromSnapshot.missing_bottleneck),
+    };
+  }
+  const base = signals.designSignals?.signals ?? {
+    requirement_missing: true,
+    capacity_missing: true,
+    tradeoff_missed: true,
+    spof_missed: true,
+    bottleneck_unexamined: true,
+  };
+  const handwave = signals.designSignals?.handwave;
+  return {
+    missing_capacity:
+      base.capacity_missing ||
+      Boolean(handwave?.categories?.includes("unquantified_scaling_claim")),
+    missing_tradeoff:
+      base.tradeoff_missed ||
+      Boolean(handwave?.categories?.includes("tradeoff_evasion")) ||
+      Boolean(handwave?.categories?.includes("unjustified_component_choice")),
+    missing_reliability: base.spof_missed,
+    missing_bottleneck: base.bottleneck_unexamined,
+  };
+}
+
+function routeActionByGap(gapState: GapState): SystemDesignPolicyAction | null {
+  if (gapState.missing_capacity) {
+    return "ASK_CAPACITY";
+  }
+  if (gapState.missing_reliability) {
+    return "CHALLENGE_SPOF";
+  }
+  if (gapState.missing_tradeoff) {
+    return "PROBE_TRADEOFF";
+  }
+  if (gapState.missing_bottleneck) {
+    return "ZOOM_IN";
+  }
+  return null;
 }
 
 function applyInertia(

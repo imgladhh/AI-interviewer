@@ -7,8 +7,16 @@ export type HandwaveCategory =
 
 export type SystemDesignDepthResult = {
   depth: number;
+  rawDepth: number;
   expectedDepth: number;
   handwave: boolean;
+  vagueLanguageDecay: number;
+  components: {
+    numeric_density: number;
+    constraint_binding: number;
+    causal_chain: number;
+    specificity: number;
+  };
   categories: HandwaveCategory[];
   evidenceRefs: string[];
 };
@@ -41,8 +49,24 @@ export function assessSystemDesignDepth(input: {
     ) || /\b(must|should|cannot|budget|limit|constraint)\b/.test(text);
   const hasCausalChain =
     /\b(because|therefore|so that|which means|given|thus|hence|leads to|as a result)\b/.test(text);
+  const hasSpecificity =
+    /\b(api gateway|load balancer|kafka|redis|mysql|postgres|dynamodb|s3|cdn|queue|cache|shard|partition|replica|leader election|circuit breaker|rate limit|idempotency)\b/.test(
+      text,
+    );
+  const vagueWithoutNumbers =
+    /\b(maybe|probably|usually|generally|somehow|kind of|sort of|roughly)\b/.test(text) && !hasNumber;
 
-  const depth = Number((Number(hasNumber) * 0.4 + Number(hasConstraint) * 0.3 + Number(hasCausalChain) * 0.3).toFixed(2));
+  const components = {
+    numeric_density: Number(hasNumber) * 0.32,
+    constraint_binding: Number(hasConstraint) * 0.24,
+    causal_chain: Number(hasCausalChain) * 0.24,
+    specificity: Number(hasSpecificity) * 0.2,
+  };
+  const rawDepth = Number(
+    (components.numeric_density + components.constraint_binding + components.causal_chain + components.specificity).toFixed(2),
+  );
+  const vagueLanguageDecay = vagueWithoutNumbers ? 1.7 : 1;
+  const depth = Number((rawDepth / vagueLanguageDecay).toFixed(2));
   const handwave = depth < expectedDepth;
 
   const mentionsScale =
@@ -64,18 +88,22 @@ export function assessSystemDesignDepth(input: {
   }
 
   const evidenceRefs = [
-    `depth=${depth}, expected=${expectedDepth}, stage=${input.stage}`,
+    `depth=${depth}, raw=${rawDepth}, expected=${expectedDepth}, stage=${input.stage}, decay=${vagueLanguageDecay}`,
     hasNumber ? "found quantification" : "missing quantification",
     hasConstraint ? "found constraints" : "missing explicit constraints",
     hasCausalChain ? "found causal chain" : "missing causal chain",
+    hasSpecificity ? "found concrete components" : "missing concrete components",
+    vagueWithoutNumbers ? "vague language used without quantification" : "no vague-language decay",
   ];
 
   return {
     depth,
+    rawDepth,
     expectedDepth,
     handwave,
+    vagueLanguageDecay,
+    components,
     categories,
     evidenceRefs,
   };
 }
-

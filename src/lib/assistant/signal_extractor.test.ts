@@ -373,6 +373,40 @@ describe("extractCandidateSignals", () => {
 
     expect(snapshot.designSignals?.handwave?.detected).toBe(false);
   });
+
+  it("applies vague-language decay and increments low-detail streak for system design handwave v2", () => {
+    const snapshot = extractCandidateSignals({
+      mode: "SYSTEM_DESIGN",
+      systemDesignStage: "DEEP_DIVE",
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "We probably should scale somehow with cache and queue, maybe it usually works.",
+        },
+      ],
+      recentEvents: [
+        {
+          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          payloadJson: {
+            signals: {
+              designSignals: {
+                handwave: {
+                  detected: true,
+                },
+              },
+            },
+          },
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.designSignals?.handwave?.vagueLanguageDecay).toBeGreaterThan(1);
+    expect(snapshot.designSignals?.handwave?.lowDetailStreak).toBeGreaterThanOrEqual(2);
+    expect(snapshot.designSignals?.handwave?.forceDeeperAction).toBe(true);
+    expect(snapshot.designSignals?.gapState?.missing_tradeoff).toBe(true);
+  });
 });
 
 
