@@ -72,6 +72,12 @@ export type SessionSummary = {
   latestCodeRunStatus: string | null;
   hintCount: number;
   failedRunCount: number;
+  nudgeConversion: {
+    guideCount: number;
+    pivotCount: number;
+    conversionRate: number | null;
+    noiseTaggedTurns: number;
+  };
   transcriptTruth: TranscriptTruthSummary | null;
   timeline: SessionTimelineItem[];
 };
@@ -342,6 +348,7 @@ function summarizeSession(session: {
     ? asRecord(asRecord(latestShadowPolicyEvent.payloadJson).shadowPolicy)
     : null;
   const hintCount = ordered.filter((event) => event.eventType === "HINT_SERVED").length;
+  const nudgeConversion = summarizeNudgeConversion(ordered);
   const failedRunCount = ordered.filter((event) => {
     if (event.eventType !== "CODE_RUN_COMPLETED") {
       return false;
@@ -395,8 +402,31 @@ function summarizeSession(session: {
     latestCodeRunStatus: latestCodeRunEvent ? stringValue(asRecord(latestCodeRunEvent.payloadJson).status) : null,
     hintCount,
     failedRunCount,
+    nudgeConversion,
     transcriptTruth,
     timeline: buildSessionTimeline(truthEvents),
+  };
+}
+
+function summarizeNudgeConversion(events: Array<{ eventType: string; eventTime: Date; payloadJson: unknown }>) {
+  const guideCount = events.filter((event) => event.eventType === "HINT_SERVED").length;
+  const rewardEvents = events
+    .filter((event) => event.eventType === "REWARD_RECORDED")
+    .map((event) => asRecord(asRecord(event.payloadJson).reward));
+  const pivotCount = rewardEvents.filter((reward) => numberValue(asRecord(reward.components).pivotImpact) > 0).length;
+  const noiseTaggedTurns = rewardEvents.filter((reward) => {
+    const tags = Array.isArray(reward.noiseTags)
+      ? reward.noiseTags.filter((item): item is string => typeof item === "string")
+      : [];
+    return tags.length > 0;
+  }).length;
+  const conversionRate = guideCount > 0 ? Number((pivotCount / guideCount).toFixed(2)) : null;
+
+  return {
+    guideCount,
+    pivotCount,
+    conversionRate,
+    noiseTaggedTurns,
   };
 }
 
@@ -1026,6 +1056,10 @@ function stringValue(value: unknown) {
   return null;
 }
 
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 function readDesignSignals(signals: Record<string, unknown>) {
   const designSignalsContainer = asRecord(signals.designSignals);
   const signalValues = asRecord(designSignalsContainer.signals);
@@ -1033,12 +1067,16 @@ function readDesignSignals(signals: Record<string, unknown>) {
     return null;
   }
 
+  const primaryGap = stringValue(designSignalsContainer.primaryGap);
+  const recommendedActionByGap = stringValue(designSignalsContainer.recommendedActionByGap);
   return {
     requirementMissing: signalValues.requirement_missing === true,
     capacityMissing: signalValues.capacity_missing === true,
     tradeoffMissed: signalValues.tradeoff_missed === true,
     spofMissed: signalValues.spof_missed === true,
     bottleneckUnexamined: signalValues.bottleneck_unexamined === true,
+    primaryGap,
+    recommendedActionByGap,
   };
 }
 
@@ -1048,14 +1086,23 @@ function summarizeDesignSignals(input: {
   tradeoffMissed: boolean;
   spofMissed: boolean;
   bottleneckUnexamined: boolean;
+  primaryGap?: string | null;
+  recommendedActionByGap?: string | null;
 }) {
-  return [
+  const base = [
     `requirements=${input.requirementMissing ? "missing" : "covered"}`,
     `capacity=${input.capacityMissing ? "missing" : "covered"}`,
     `tradeoff=${input.tradeoffMissed ? "missing" : "covered"}`,
     `spof=${input.spofMissed ? "missing" : "covered"}`,
     `bottleneck=${input.bottleneckUnexamined ? "missing" : "covered"}`,
-  ].join(", ");
+  ];
+  if (input.primaryGap) {
+    base.push(`primary_gap=${input.primaryGap}`);
+  }
+  if (input.recommendedActionByGap) {
+    base.push(`route=${input.recommendedActionByGap}`);
+  }
+  return base.join(", ");
 }
 
 function describeStage(value: unknown) {

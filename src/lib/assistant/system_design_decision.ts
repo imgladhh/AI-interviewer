@@ -1,6 +1,10 @@
 import type { CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { CodingInterviewPolicyAction, SystemDesignPolicyAction } from "@/lib/assistant/policy";
 import type { CandidateSignalSnapshot, GapState } from "@/lib/assistant/signal_extractor";
+import {
+  deriveSystemDesignGapState,
+  routeSystemDesignActionByGap,
+} from "@/lib/assistant/system_design_gap";
 import type { SystemDesignStage } from "@/lib/assistant/stages";
 
 export type SystemDesignTargetLevel = "NEW_GRAD" | "SDE1" | "SDE2" | "SENIOR" | "STAFF";
@@ -27,9 +31,18 @@ export function makeSystemDesignDecision(input: {
     spof_missed: true,
     bottleneck_unexamined: true,
   };
-  const gapState = inferGapState(input.signals);
-  const targetLevel = normalizeSystemDesignTargetLevel(input.targetLevel);
   const handwaveSignal = input.signals.designSignals?.handwave;
+  const gapState = deriveSystemDesignGapState({
+    signals: {
+      capacity_missing: designSignals.capacity_missing,
+      tradeoff_missed: designSignals.tradeoff_missed,
+      spof_missed: designSignals.spof_missed,
+      bottleneck_unexamined: designSignals.bottleneck_unexamined,
+    },
+    handwaveCategories: handwaveSignal?.categories,
+    snapshotGapState: input.signals.designSignals?.gapState,
+  });
+  const targetLevel = normalizeSystemDesignTargetLevel(input.targetLevel);
 
   const baseScores = [
     score("ASK_REQUIREMENT", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
@@ -40,11 +53,39 @@ export function makeSystemDesignDecision(input: {
     score("WRAP_UP", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
   ];
 
-  const scoresWithInertia = applyInertia(baseScores, input.previousActionType ?? null);
+  const chainContext = assessProblemChainContinuity({
+    currentGapState: gapState,
+    previousActionType: input.previousActionType ?? null,
+  });
+  const scoresWithInertia = applyInertia(
+    baseScores,
+    chainContext.sameChain ? input.previousActionType ?? null : null,
+  );
   const sortedScores = [...scoresWithInertia].sort((left, right) => right.totalScore - left.totalScore);
-  const selected = applyHysteresis(sortedScores, input.previousActionType ?? null);
+  const selected = applyHysteresis(
+    sortedScores,
+    chainContext.sameChain ? input.previousActionType ?? null : null,
+  );
   const assumptionEscapeHatch = hasExplicitScopedAssumption(input.recentTranscripts, input.recentEvents);
   const capacityGateStage = ["DEEP_DIVE", "REFINEMENT", "WRAP_UP"].includes(input.currentStage);
+  const routedAction = routeSystemDesignActionByGap(gapState);
+  const safetyOverride = detectSafetyOverride({
+    recentEvents: input.recentEvents,
+    fallbackAction: routedAction ?? selected.actionType,
+  });
+
+  if (safetyOverride) {
+    const safetyCandidate = sortedScores.find((item) => item.actionType === safetyOverride.actionType) ?? selected;
+    return toDecision(safetyOverride.actionType, sortedScores, [
+      ...safetyCandidate.reasons,
+      {
+        key: safetyOverride.key,
+        magnitude: 1,
+        kind: "signal",
+        detail: safetyOverride.detail,
+      },
+    ]);
+  }
 
   if (capacityGateStage && designSignals.capacity_missing && !assumptionEscapeHatch) {
     const askCapacity = sortedScores.find((item) => item.actionType === "ASK_CAPACITY") ?? selected;
@@ -59,7 +100,6 @@ export function makeSystemDesignDecision(input: {
     ]);
   }
 
-  const routedAction = routeActionByGap(gapState);
   if (
     routedAction &&
     (handwaveSignal?.forceDeeperAction ||
@@ -85,6 +125,19 @@ export function makeSystemDesignDecision(input: {
             },
           ]
         : []),
+    ]);
+  }
+
+  if (!chainContext.sameChain && chainContext.previousActionType) {
+    const selectedCandidate = sortedScores.find((item) => item.actionType === selected.actionType) ?? selected;
+    return toDecision(selected.actionType, sortedScores, [
+      ...selectedCandidate.reasons,
+      {
+        key: "stability_chain_reset",
+        magnitude: 0.5,
+        kind: "signal",
+        detail: `Stability reset: previous action ${chainContext.previousActionType} belongs to a different problem chain (${chainContext.previousGap ?? "unknown"} -> ${chainContext.currentGap ?? "none"}).`,
+      },
     ]);
   }
 
@@ -235,53 +288,6 @@ function score(
   };
 }
 
-function inferGapState(signals: CandidateSignalSnapshot): GapState {
-  const fromSnapshot = signals.designSignals?.gapState;
-  if (fromSnapshot) {
-    return {
-      missing_capacity: Boolean(fromSnapshot.missing_capacity),
-      missing_tradeoff: Boolean(fromSnapshot.missing_tradeoff),
-      missing_reliability: Boolean(fromSnapshot.missing_reliability),
-      missing_bottleneck: Boolean(fromSnapshot.missing_bottleneck),
-    };
-  }
-  const base = signals.designSignals?.signals ?? {
-    requirement_missing: true,
-    capacity_missing: true,
-    tradeoff_missed: true,
-    spof_missed: true,
-    bottleneck_unexamined: true,
-  };
-  const handwave = signals.designSignals?.handwave;
-  return {
-    missing_capacity:
-      base.capacity_missing ||
-      Boolean(handwave?.categories?.includes("unquantified_scaling_claim")),
-    missing_tradeoff:
-      base.tradeoff_missed ||
-      Boolean(handwave?.categories?.includes("tradeoff_evasion")) ||
-      Boolean(handwave?.categories?.includes("unjustified_component_choice")),
-    missing_reliability: base.spof_missed,
-    missing_bottleneck: base.bottleneck_unexamined,
-  };
-}
-
-function routeActionByGap(gapState: GapState): SystemDesignPolicyAction | null {
-  if (gapState.missing_capacity) {
-    return "ASK_CAPACITY";
-  }
-  if (gapState.missing_reliability) {
-    return "CHALLENGE_SPOF";
-  }
-  if (gapState.missing_tradeoff) {
-    return "PROBE_TRADEOFF";
-  }
-  if (gapState.missing_bottleneck) {
-    return "ZOOM_IN";
-  }
-  return null;
-}
-
 function applyInertia(
   scores: Array<{
     actionType: SystemDesignPolicyAction;
@@ -353,6 +359,76 @@ function applyHysteresis(
   }
 
   return top;
+}
+
+function assessProblemChainContinuity(input: {
+  currentGapState: GapState;
+  previousActionType: SystemDesignPolicyAction | null;
+}) {
+  const currentGap = mapActionToGap(routeSystemDesignActionByGap(input.currentGapState));
+  const previousGap = mapActionToGap(input.previousActionType);
+  const sameChain =
+    !input.previousActionType ||
+    currentGap === null ||
+    previousGap === null ||
+    currentGap === previousGap;
+
+  return {
+    sameChain,
+    currentGap,
+    previousGap,
+    previousActionType: input.previousActionType,
+  };
+}
+
+function mapActionToGap(
+  actionType: SystemDesignPolicyAction | null,
+): "capacity" | "tradeoff" | "reliability" | "bottleneck" | null {
+  switch (actionType) {
+    case "ASK_CAPACITY":
+      return "capacity";
+    case "PROBE_TRADEOFF":
+      return "tradeoff";
+    case "CHALLENGE_SPOF":
+      return "reliability";
+    case "ZOOM_IN":
+      return "bottleneck";
+    default:
+      return null;
+  }
+}
+
+function detectSafetyOverride(input: {
+  recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>;
+  fallbackAction: SystemDesignPolicyAction;
+}) {
+  const events = input.recentEvents ?? [];
+  for (let index = events.length - 1; index >= 0 && index >= events.length - 8; index -= 1) {
+    const event = events[index];
+    if (!event) {
+      continue;
+    }
+    if (event.eventType === "SESSION_BUDGET_EXCEEDED") {
+      return {
+        actionType: "WRAP_UP" as const,
+        key: "safety_budget_override",
+        detail: "Budget guardrail fired recently; forcing WRAP_UP for safe closure.",
+      };
+    }
+    if (event.eventType === "DECISION_RECORDED") {
+      const payload = asRecord(event.payloadJson);
+      const decision = asRecord(payload.decision);
+      const blockedByInvariant = asRecord(decision).blockedByInvariant;
+      if (typeof blockedByInvariant === "string" && blockedByInvariant.length > 0) {
+        return {
+          actionType: input.fallbackAction,
+          key: "safety_invariant_override",
+          detail: `Recent hard invariant (${blockedByInvariant}) detected; bypassing stability lock and selecting safest gap-routed action.`,
+        };
+      }
+    }
+  }
+  return null;
 }
 
 function normalizeSystemDesignTargetLevel(value: string | null | undefined): SystemDesignTargetLevel {

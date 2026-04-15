@@ -135,7 +135,7 @@ describe("makeSystemDesignDecision level adaptation", () => {
     expect(["PROBE_TRADEOFF", "ASK_CAPACITY"]).toContain(decision.systemDesignActionType);
   });
 
-  it("applies inertia to keep previous action stable when scores are close", () => {
+  it("applies inertia to keep previous action stable when scores are close on the same gap chain", () => {
     const decision = makeSystemDesignDecision({
       currentStage: "DEEP_DIVE",
       targetLevel: "SDE2",
@@ -144,7 +144,7 @@ describe("makeSystemDesignDecision level adaptation", () => {
         requirement_missing: false,
         capacity_missing: false,
         tradeoff_missed: true,
-        spof_missed: true,
+        spof_missed: false,
         bottleneck_unexamined: false,
       }),
     });
@@ -153,7 +153,7 @@ describe("makeSystemDesignDecision level adaptation", () => {
     expect((decision.scoreBreakdown ?? []).some((item) => item.key === "stability_inertia")).toBe(true);
   });
 
-  it("applies hysteresis when a new action is not decisively better than previous action", () => {
+  it("keeps stability bonus active for same-chain follow-ups before switching actions", () => {
     const decision = makeSystemDesignDecision({
       currentStage: "DEEP_DIVE",
       targetLevel: "SDE2",
@@ -162,7 +162,7 @@ describe("makeSystemDesignDecision level adaptation", () => {
         requirement_missing: false,
         capacity_missing: false,
         tradeoff_missed: true,
-        spof_missed: true,
+        spof_missed: false,
         bottleneck_unexamined: false,
       }),
     });
@@ -278,5 +278,69 @@ describe("makeSystemDesignDecision level adaptation", () => {
 
     expect(decision.systemDesignActionType).toBe("PROBE_TRADEOFF");
     expect((decision.scoreBreakdown ?? []).some((item) => item.key === "depth_streak_force_deeper")).toBe(true);
+  });
+
+  it("resets stability when previous action belongs to a different gap chain", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SDE2",
+      previousActionType: "ASK_CAPACITY",
+      signals: createSnapshot({
+        requirement_missing: false,
+        capacity_missing: false,
+        tradeoff_missed: true,
+        spof_missed: false,
+        bottleneck_unexamined: false,
+      }),
+    });
+
+    expect(decision.systemDesignActionType).toBe("PROBE_TRADEOFF");
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "stability_chain_reset")).toBe(true);
+  });
+
+  it("forces wrap-up when budget guardrail has been exceeded", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SENIOR",
+      signals: createSnapshot({
+        requirement_missing: false,
+        capacity_missing: false,
+        tradeoff_missed: true,
+        spof_missed: true,
+        bottleneck_unexamined: true,
+      }),
+      recentEvents: [{ eventType: "SESSION_BUDGET_EXCEEDED", payloadJson: { thresholdUsd: 2 } }],
+    });
+
+    expect(decision.systemDesignActionType).toBe("WRAP_UP");
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "safety_budget_override")).toBe(true);
+  });
+
+  it("bypasses stability lock when a recent hard invariant blocked the prior decision", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SENIOR",
+      previousActionType: "WRAP_UP",
+      signals: createSnapshot({
+        requirement_missing: false,
+        capacity_missing: false,
+        tradeoff_missed: false,
+        spof_missed: true,
+        bottleneck_unexamined: false,
+      }),
+      recentEvents: [
+        {
+          eventType: "DECISION_RECORDED",
+          payloadJson: {
+            decision: {
+              blockedByInvariant: "capacity_missing_before_deep_dive",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(decision.systemDesignActionType).toBe("CHALLENGE_SPOF");
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "safety_invariant_override")).toBe(true);
   });
 });

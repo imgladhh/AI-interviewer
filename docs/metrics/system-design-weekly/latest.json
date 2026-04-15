@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-04-15T01:29:59.507Z",
+  "calibration": {
+    "total": 60,
+    "matched": 35,
+    "accuracy": 0.58
+  },
+  "calibrationCoverage": {
+    "total": 60,
+    "byLevel": {
+      "Mid-level": 20,
+      "Senior": 20,
+      "Staff": 20
+    },
+    "byHire": {
+      "NO_HIRE": 15,
+      "BORDERLINE": 15,
+      "HIRE": 15,
+      "STRONG_HIRE": 15
+    }
+  },
+  "regression": {
+    "health": {
+      "lateBloomerRecovered": true,
+      "bullshitterSuppressed": true,
+      "rigidCapped": true,
+      "passRate": 1,
+      "summary": "All system-design regression expectations passed (late bloomer recovered, bullshitter suppressed, rigid coder capped)."
+    },
+    "reports": [
+      {
+        "scenarioId": "late_bloomer",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.5,
+        "rewardDiffFromBest": 0
+      },
+      {
+        "scenarioId": "confident_bullshitter",
+        "expectationMet": true,
+        "scoreDiffFromBest": 1.19,
+        "rewardDiffFromBest": 0.04
+      },
+      {
+        "scenarioId": "rigid_coder",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0,
+        "rewardDiffFromBest": 0.09
+      }
+    ]
+  }
+}

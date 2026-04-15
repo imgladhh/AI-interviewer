@@ -244,6 +244,19 @@ npm run test:e2e
 npm run build
 ```
 
+### System Design Batch Evaluation
+
+```powershell
+# print calibration + regression summary JSON
+npm run eval:system-design
+
+# optional: write snapshot JSON to a file
+npm run eval:system-design -- --out artifacts/system-design-eval.json
+
+# weekly snapshot + drift trend (writes to docs/metrics/system-design-weekly/)
+npm run eval:system-design:weekly
+```
+
 ## Current Test Coverage
 
 ### Vitest

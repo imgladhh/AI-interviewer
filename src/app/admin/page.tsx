@@ -1,6 +1,11 @@
 ﻿import Link from "next/link";
 import { buildUnifiedOpsFeed, getAdminProfileDetail, listAdminProfiles, type OpsFeedScope } from "@/lib/admin/ops";
-import { derivePolicyTuningSuggestions, runPolicyRegressionLab } from "@/lib/assistant/policy-regression";
+import {
+  derivePolicyTuningSuggestions,
+  evaluateSystemDesignRegressionHealth,
+  runPolicyRegressionLab,
+  runSystemDesignRegressionLab,
+} from "@/lib/assistant/policy-regression";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +26,8 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
   const detail = activeProfileId ? await getAdminProfileDetail(activeProfileId) : null;
   const feed = buildUnifiedOpsFeed(detail, scope);
   const policyLab = runPolicyRegressionLab();
+  const systemDesignLab = runSystemDesignRegressionLab();
+  const systemDesignHealth = evaluateSystemDesignRegressionHealth(systemDesignLab);
   const tuningSuggestions = derivePolicyTuningSuggestions(policyLab);
 
   return (
@@ -153,6 +160,14 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                         <MetricCard label="Latest Code Run" value={detail.sessionSummary.latestCodeRunStatus ?? "No runs yet"} />
                         <MetricCard label="Hints Served" value={String(detail.sessionSummary.hintCount)} />
                         <MetricCard label="Failed Runs" value={String(detail.sessionSummary.failedRunCount)} />
+                        <MetricCard
+                          label="Nudge Conversion"
+                          value={
+                            typeof detail.sessionSummary.nudgeConversion.conversionRate === "number"
+                              ? `${Math.round(detail.sessionSummary.nudgeConversion.conversionRate * 100)}% (${detail.sessionSummary.nudgeConversion.pivotCount}/${detail.sessionSummary.nudgeConversion.guideCount})`
+                              : "n/a"
+                          }
+                        />
                       </div>
                     ) : null}
 
@@ -1099,6 +1114,32 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                     Golden scenarios rendered through multiple archetypes so policy differences stay visible and testable.
                   </p>
                 </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <strong>System Design Regression Health</strong>
+                  <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                    <MetricCard label="Pass Rate" value={`${Math.round(systemDesignHealth.passRate * 100)}%`} />
+                    <MetricCard label="Late Bloomer Recovery" value={systemDesignHealth.lateBloomerRecovered ? "pass" : "fail"} />
+                    <MetricCard label="Bullshitter Suppression" value={systemDesignHealth.bullshitterSuppressed ? "pass" : "fail"} />
+                    <MetricCard label="Rigid Coder Cap" value={systemDesignHealth.rigidCapped ? "pass" : "fail"} />
+                  </div>
+                  <p style={{ margin: 0, color: "var(--muted)" }}>{systemDesignHealth.summary}</p>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {systemDesignLab.map((scenario) => (
+                      <div key={`sd-regression-${scenario.scenarioId}`} style={panelStyle}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <strong>{scenario.label}</strong>
+                          <Badge tone={scenario.expectationMet ? "info" : "warning"}>
+                            {scenario.expectationMet ? "expectation pass" : "expectation fail"}
+                          </Badge>
+                          <Badge tone="neutral">score diff {scenario.scoreDiffFromBest.toFixed(2)}</Badge>
+                          <Badge tone="neutral">reward diff {scenario.rewardDiffFromBest.toFixed(2)}</Badge>
+                        </div>
+                        <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>{scenario.expectationNote}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div style={{ display: "grid", gap: 10 }}>
                   <strong>Policy Tuning Suggestions</strong>
                   {tuningSuggestions.map((suggestion) => (

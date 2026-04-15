@@ -185,6 +185,27 @@ describe("buildUnifiedOpsFeed", () => {
     expect(description).toMatch(/tradeoff=missing/i);
   });
 
+  it("includes primary gap and routed action for system design snapshots", () => {
+    const description = buildSessionEventDescription("SIGNAL_SNAPSHOT_RECORDED", {
+      signals: {
+        designSignals: {
+          signals: {
+            requirement_missing: false,
+            capacity_missing: true,
+            tradeoff_missed: true,
+            spof_missed: false,
+            bottleneck_unexamined: true,
+          },
+          primaryGap: "capacity",
+          recommendedActionByGap: "ASK_CAPACITY",
+        },
+      },
+    });
+
+    expect(description).toMatch(/primary_gap=capacity/i);
+    expect(description).toMatch(/route=ASK_CAPACITY/i);
+  });
+
   it("describes interviewer decisions in a readable way", () => {
     const description = buildSessionEventDescription("DECISION_RECORDED", {
       decision: {

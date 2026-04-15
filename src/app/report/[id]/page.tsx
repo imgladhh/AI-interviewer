@@ -141,6 +141,12 @@ type SystemDesignEvidencePin = {
   snapshotId?: string | null;
   turnIds?: string[];
   evidenceRefs?: string[];
+  textPointers?: Array<{
+    turnId?: string;
+    start?: number;
+    length?: number;
+    excerpt?: string;
+  }>;
 };
 
 type SystemDesignDna = {
@@ -825,6 +831,23 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                       <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
                         evidence refs: {(pin.evidenceRefs ?? []).join(", ") || "n/a"}
                       </p>
+                      {Array.isArray(pin.textPointers) && pin.textPointers.length > 0 ? (
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          pointers: {pin.textPointers
+                            .slice(0, 2)
+                            .map((pointer) => {
+                              const turnId = pointer.turnId ?? "n/a";
+                              const start = typeof pointer.start === "number" ? pointer.start : 0;
+                              const length = typeof pointer.length === "number" ? pointer.length : 0;
+                              const excerpt =
+                                typeof pointer.excerpt === "string" && pointer.excerpt.trim().length > 0
+                                  ? ` "${pointer.excerpt.trim()}"`
+                                  : "";
+                              return `${turnId}[${start}:${length}]${excerpt}`;
+                            })
+                            .join(" | ")}
+                        </p>
+                      ) : null}
                     </div>
                   ))
                 )}
@@ -2061,6 +2084,16 @@ function normalizeSystemDesignDna(value: unknown): SystemDesignDna | null {
             snapshotId: stringValue(item.snapshotId),
             turnIds: asStringArray(item.turnIds),
             evidenceRefs: asStringArray(item.evidenceRefs),
+            textPointers: Array.isArray(item.textPointers)
+              ? item.textPointers
+                  .map((pointer) => asRecord(pointer))
+                  .map((pointer) => ({
+                    turnId: stringValue(pointer.turnId) ?? undefined,
+                    start: numericValue(pointer.start) ?? undefined,
+                    length: numericValue(pointer.length) ?? undefined,
+                    excerpt: stringValue(pointer.excerpt) ?? undefined,
+                  }))
+              : [],
           }),
         )
     : [];

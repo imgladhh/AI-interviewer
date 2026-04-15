@@ -1,4 +1,10 @@
 import { assessSystemDesignDepth, type HandwaveCategory } from "@/lib/assistant/depth";
+import {
+  deriveSystemDesignGapState,
+  pickPrimarySystemDesignGap,
+  routeSystemDesignActionByGap,
+  type SystemDesignGapState,
+} from "@/lib/assistant/system_design_gap";
 import type { CodingInterviewStage, SystemDesignStage } from "@/lib/assistant/stages";
 
 type TranscriptLike = {
@@ -46,17 +52,14 @@ export type DesignSignalKey =
 
 export type DesignSignals = Record<DesignSignalKey, boolean>;
 
-export type GapState = {
-  missing_capacity: boolean;
-  missing_tradeoff: boolean;
-  missing_reliability: boolean;
-  missing_bottleneck: boolean;
-};
+export type GapState = SystemDesignGapState;
 
 export type DesignSignalSnapshot = {
   signals: DesignSignals;
   evidenceRefs: Record<DesignSignalKey, string[]>;
   gapState?: GapState;
+  primaryGap?: "capacity" | "tradeoff" | "reliability" | "bottleneck" | null;
+  recommendedActionByGap?: "ASK_CAPACITY" | "PROBE_TRADEOFF" | "CHALLENGE_SPOF" | "ZOOM_IN" | null;
   summary: string;
   handwave?: {
     detected: boolean;
@@ -1092,17 +1095,12 @@ function extractSystemDesignSignals(
     recentUserText: normalizedText,
     tradeoffMissed: signals.tradeoff_missed,
   });
-  const gapState: GapState = {
-    missing_capacity:
-      signals.capacity_missing ||
-      depthAssessment.categories.includes("unquantified_scaling_claim"),
-    missing_tradeoff:
-      signals.tradeoff_missed ||
-      depthAssessment.categories.includes("tradeoff_evasion") ||
-      depthAssessment.categories.includes("unjustified_component_choice"),
-    missing_reliability: signals.spof_missed,
-    missing_bottleneck: signals.bottleneck_unexamined,
-  };
+  const gapState = deriveSystemDesignGapState({
+    signals,
+    handwaveCategories: depthAssessment.categories,
+  });
+  const primaryGap = pickPrimarySystemDesignGap(gapState);
+  const recommendedActionByGap = routeSystemDesignActionByGap(gapState);
   const previousLowDetailStreak = computePreviousLowDetailStreak(recentEvents);
   const lowDetailStreak = depthAssessment.handwave ? previousLowDetailStreak + 1 : 0;
   const forceDeeperAction = lowDetailStreak >= 2;
@@ -1122,7 +1120,9 @@ function extractSystemDesignSignals(
     signals,
     evidenceRefs,
     gapState,
-    summary: `${summary}; ${handwaveSummary}${gapSummary ? `; ${gapSummary}` : ""}`,
+    primaryGap,
+    recommendedActionByGap,
+    summary: `${summary}; ${handwaveSummary}${gapSummary ? `; ${gapSummary}` : ""}${recommendedActionByGap ? `; route=${recommendedActionByGap}` : ""}`,
     handwave: {
       detected: depthAssessment.handwave,
       depth: depthAssessment.depth,

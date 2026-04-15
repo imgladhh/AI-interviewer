@@ -406,6 +406,8 @@ describe("extractCandidateSignals", () => {
     expect(snapshot.designSignals?.handwave?.lowDetailStreak).toBeGreaterThanOrEqual(2);
     expect(snapshot.designSignals?.handwave?.forceDeeperAction).toBe(true);
     expect(snapshot.designSignals?.gapState?.missing_tradeoff).toBe(true);
+    expect(snapshot.designSignals?.primaryGap).toBe("capacity");
+    expect(snapshot.designSignals?.recommendedActionByGap).toBe("ASK_CAPACITY");
   });
 });
 

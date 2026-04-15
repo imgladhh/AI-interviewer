@@ -3,6 +3,7 @@ import {
   derivePolicyTuningSuggestions,
   evaluatePolicyScenario,
   evaluateSystemDesignScenario,
+  evaluateSystemDesignRegressionHealth,
   POLICY_REGRESSION_SCENARIOS,
   runSystemDesignRegressionLab,
   runPolicyRegressionLab,
@@ -163,5 +164,20 @@ describe("policy regression lab", () => {
         item.result.decisionTimeline.every((turn) => Array.isArray(turn.scoreBreakdown)),
       ),
     ).toBe(true);
+    expect(reports.every((item) => typeof item.expectationMet === "boolean")).toBe(true);
+    expect(reports.every((item) => typeof item.expectationNote === "string")).toBe(true);
+  });
+
+  it("summarizes scenario-level health checks for late bloomer, bullshitter, and rigid coder", () => {
+    const reports = runSystemDesignRegressionLab();
+    const health = evaluateSystemDesignRegressionHealth(reports);
+
+    expect(typeof health.lateBloomerRecovered).toBe("boolean");
+    expect(typeof health.bullshitterSuppressed).toBe("boolean");
+    expect(typeof health.rigidCapped).toBe("boolean");
+    expect(typeof health.passRate).toBe("number");
+    expect(health.passRate).toBeGreaterThanOrEqual(0);
+    expect(health.passRate).toBeLessThanOrEqual(1);
+    expect(typeof health.summary).toBe("string");
   });
 });

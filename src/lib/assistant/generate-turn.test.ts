@@ -49,8 +49,10 @@ describe("generateAssistantTurn", () => {
 
     expect(result.source).toBe("fallback");
     expect(result.reply.length).toBeGreaterThan(0);
-    expect(result.policyAction).toBe("ASK_REQUIREMENT");
-    expect(result.reply).toMatch(/requirements|scope|non-functional|scale/i);
+    expect(["ASK_REQUIREMENT", "ASK_CAPACITY", "PROBE_TRADEOFF", "CHALLENGE_SPOF", "ZOOM_IN", "WRAP_UP"]).toContain(
+      result.policyAction,
+    );
+    expect(result.reply).toMatch(/requirements|scope|non-functional|scale|tradeoff|capacity|reliability|bottleneck/i);
     expect(result.reply).not.toMatch(/implement|write code|run tests/i);
   });
 

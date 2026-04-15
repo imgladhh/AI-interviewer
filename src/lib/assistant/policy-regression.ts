@@ -126,6 +126,16 @@ export type SystemDesignRegressionReport = {
   result: SystemDesignRegressionResult;
   scoreDiffFromBest: number;
   rewardDiffFromBest: number;
+  expectationMet: boolean;
+  expectationNote: string;
+};
+
+export type SystemDesignRegressionHealth = {
+  lateBloomerRecovered: boolean;
+  bullshitterSuppressed: boolean;
+  rigidCapped: boolean;
+  passRate: number;
+  summary: string;
 };
 
 const baseSignals: CandidateSignalSnapshot = {
@@ -904,13 +914,41 @@ export function runSystemDesignRegressionLab(
   const bestScore = Math.max(...results.map((item) => item.totalScore));
   const bestReward = Math.max(...results.map((item) => item.averageReward));
 
-  return results.map((result) => ({
-    scenarioId: result.scenarioId,
-    label: result.label,
-    result,
-    scoreDiffFromBest: Number((bestScore - result.totalScore).toFixed(2)),
-    rewardDiffFromBest: Number((bestReward - result.averageReward).toFixed(2)),
-  }));
+  return results.map((result) => {
+    const expectation = evaluateSystemDesignExpectation(result);
+    return {
+      scenarioId: result.scenarioId,
+      label: result.label,
+      result,
+      scoreDiffFromBest: Number((bestScore - result.totalScore).toFixed(2)),
+      rewardDiffFromBest: Number((bestReward - result.averageReward).toFixed(2)),
+      expectationMet: expectation.met,
+      expectationNote: expectation.note,
+    };
+  });
+}
+
+export function evaluateSystemDesignRegressionHealth(
+  reports: SystemDesignRegressionReport[],
+): SystemDesignRegressionHealth {
+  const lateBloomerRecovered = reports.find((item) => item.scenarioId === "late_bloomer")?.expectationMet ?? false;
+  const bullshitterSuppressed =
+    reports.find((item) => item.scenarioId === "confident_bullshitter")?.expectationMet ?? false;
+  const rigidCapped = reports.find((item) => item.scenarioId === "rigid_coder")?.expectationMet ?? false;
+  const passedCount = [lateBloomerRecovered, bullshitterSuppressed, rigidCapped].filter(Boolean).length;
+  const passRate = Number((passedCount / 3).toFixed(2));
+  const summary =
+    passRate === 1
+      ? "All system-design regression expectations passed (late bloomer recovered, bullshitter suppressed, rigid coder capped)."
+      : `System-design regression expectations passed ${passedCount}/3 checks; inspect expectation notes for failed scenarios.`;
+
+  return {
+    lateBloomerRecovered,
+    bullshitterSuppressed,
+    rigidCapped,
+    passRate,
+    summary,
+  };
 }
 
 function runSystemDesignScenarioTimeline(
@@ -1013,5 +1051,49 @@ function runSystemDesignScenarioTimeline(
   }
 
   return timeline;
+}
+
+function evaluateSystemDesignExpectation(result: SystemDesignRegressionResult): { met: boolean; note: string } {
+  const first = result.decisionTimeline[0];
+  const firstAction = first?.systemDesignActionType;
+  const firstIsDeepProbe = firstAction === "ASK_CAPACITY" || firstAction === "PROBE_TRADEOFF" || firstAction === "CHALLENGE_SPOF" || firstAction === "ZOOM_IN";
+  const anyWrapUp = result.decisionTimeline.some((item) => item.systemDesignActionType === "WRAP_UP");
+  const anyTradeoffProbe = result.decisionTimeline.some((item) => item.systemDesignActionType === "PROBE_TRADEOFF");
+  const positiveRecovery = result.cumulativeReward > 0 || result.averageReward >= 0.1;
+
+  switch (result.scenarioId) {
+    case "late_bloomer": {
+      const met = firstIsDeepProbe && positiveRecovery;
+      return {
+        met,
+        note: met
+          ? "Late bloomer recovered: interviewer stayed in deep probing and reward trended positive."
+          : "Late bloomer failed recovery: expected deep probing plus positive reward recovery.",
+      };
+    }
+    case "confident_bullshitter": {
+      const met = firstIsDeepProbe && !anyWrapUp;
+      return {
+        met,
+        note: met
+          ? "Bullshitter suppression passed: interviewer held deep pressure and avoided premature wrap-up."
+          : "Bullshitter suppression failed: expected deep-pressure action without early wrap-up.",
+      };
+    }
+    case "rigid_coder": {
+      const met = anyTradeoffProbe && !anyWrapUp;
+      return {
+        met,
+        note: met
+          ? "Rigid-coder cap passed: interviewer forced tradeoff depth before closure."
+          : "Rigid-coder cap failed: expected tradeoff probing and no early wrap-up.",
+      };
+    }
+    default:
+      return {
+        met: false,
+        note: "Unknown scenario.",
+      };
+  }
 }
 

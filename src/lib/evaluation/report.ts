@@ -367,6 +367,12 @@ type SystemDesignDna = {
     snapshotId: string | null;
     turnIds: string[];
     evidenceRefs: string[];
+    textPointers: Array<{
+      turnId: string;
+      start: number;
+      length: number;
+      excerpt: string;
+    }>;
   }>;
 };
 
@@ -534,6 +540,7 @@ export function generateSessionReport(input: SessionReportInput): GeneratedSessi
           latestSignal,
           latestSignalSnapshotId: latestSignalSnapshotRow?.id ?? null,
           events: input.events,
+          transcripts: input.transcripts,
         })
       : null;
   const whiteboardObservability =
@@ -2189,6 +2196,7 @@ function buildSystemDesignDna(input: {
   latestSignal: CandidateSignalSummary | null;
   latestSignalSnapshotId: string | null;
   events: SessionEventLike[];
+  transcripts: TranscriptLike[];
 }): SystemDesignDna {
   const signalValues = asRecord(input.latestSignal?.designSignals?.signals);
   const refs = asRecord(input.latestSignal?.designSignals?.evidenceRefs);
@@ -2273,6 +2281,11 @@ function buildSystemDesignDna(input: {
         snapshotId: input.latestSignalSnapshotId,
         turnIds: turnPins.requirement,
         evidenceRefs: asStringArray(refs.requirement_missing),
+        textPointers: buildTextPointers({
+          evidenceRefs: asStringArray(refs.requirement_missing),
+          turnIds: turnPins.requirement,
+          transcripts: input.transcripts,
+        }),
       },
       {
         dimension: "capacity_instinct",
@@ -2280,6 +2293,11 @@ function buildSystemDesignDna(input: {
         snapshotId: input.latestSignalSnapshotId,
         turnIds: turnPins.capacity,
         evidenceRefs: asStringArray(refs.capacity_missing),
+        textPointers: buildTextPointers({
+          evidenceRefs: asStringArray(refs.capacity_missing),
+          turnIds: turnPins.capacity,
+          transcripts: input.transcripts,
+        }),
       },
       {
         dimension: "tradeoff_depth",
@@ -2287,6 +2305,11 @@ function buildSystemDesignDna(input: {
         snapshotId: input.latestSignalSnapshotId,
         turnIds: turnPins.tradeoff,
         evidenceRefs: asStringArray(refs.tradeoff_missed),
+        textPointers: buildTextPointers({
+          evidenceRefs: asStringArray(refs.tradeoff_missed),
+          turnIds: turnPins.tradeoff,
+          transcripts: input.transcripts,
+        }),
       },
       {
         dimension: "reliability_awareness",
@@ -2294,6 +2317,11 @@ function buildSystemDesignDna(input: {
         snapshotId: input.latestSignalSnapshotId,
         turnIds: turnPins.spof,
         evidenceRefs: asStringArray(refs.spof_missed),
+        textPointers: buildTextPointers({
+          evidenceRefs: asStringArray(refs.spof_missed),
+          turnIds: turnPins.spof,
+          transcripts: input.transcripts,
+        }),
       },
       {
         dimension: "bottleneck_sensitivity",
@@ -2301,6 +2329,11 @@ function buildSystemDesignDna(input: {
         snapshotId: input.latestSignalSnapshotId,
         turnIds: turnPins.bottleneck,
         evidenceRefs: asStringArray(refs.bottleneck_unexamined),
+        textPointers: buildTextPointers({
+          evidenceRefs: asStringArray(refs.bottleneck_unexamined),
+          turnIds: turnPins.bottleneck,
+          transcripts: input.transcripts,
+        }),
       },
     ],
   };
@@ -2395,6 +2428,80 @@ function summarizeSystemDesignPivot(events: SessionEventLike[]) {
   return {
     count: impacts.length,
     averageImpact: Number((sum / impacts.length).toFixed(2)),
+  };
+}
+
+function buildTextPointers(input: {
+  evidenceRefs: string[];
+  turnIds: string[];
+  transcripts: TranscriptLike[];
+}) {
+  const pointers: Array<{
+    turnId: string;
+    start: number;
+    length: number;
+    excerpt: string;
+  }> = [];
+  const bySpeaker: Record<"USER" | "AI" | "SYSTEM", TranscriptLike[]> = {
+    USER: [],
+    AI: [],
+    SYSTEM: [],
+  };
+  for (const transcript of input.transcripts) {
+    bySpeaker[transcript.speaker].push(transcript);
+  }
+
+  for (const ref of input.evidenceRefs) {
+    const parsed = parseEvidenceTurnRef(ref);
+    if (!parsed) {
+      continue;
+    }
+    const transcript = bySpeaker[parsed.speaker][parsed.index - 1];
+    if (!transcript) {
+      continue;
+    }
+    const fallbackLength = Math.min(transcript.text.length, 80);
+    const snippetLower = parsed.snippet.toLowerCase();
+    const textLower = transcript.text.toLowerCase();
+    const snippetStart = snippetLower.length > 0 ? textLower.indexOf(snippetLower) : -1;
+    const start = snippetStart >= 0 ? snippetStart : 0;
+    const length = snippetStart >= 0 ? parsed.snippet.length : fallbackLength;
+    const excerpt = transcript.text.slice(start, Math.min(transcript.text.length, start + Math.max(length, 1)));
+    pointers.push({
+      turnId: `${parsed.speaker}#${parsed.index}`,
+      start,
+      length: Math.max(1, Math.min(length, transcript.text.length - start)),
+      excerpt: excerpt || transcript.text.slice(0, fallbackLength),
+    });
+  }
+
+  if (pointers.length > 0) {
+    return pointers;
+  }
+
+  return input.turnIds.slice(0, 2).map((turnId) => ({
+    turnId,
+    start: 0,
+    length: 0,
+    excerpt: "",
+  }));
+}
+
+function parseEvidenceTurnRef(ref: string): { speaker: "USER" | "AI" | "SYSTEM"; index: number; snippet: string } | null {
+  const match = /^(USER|AI|SYSTEM)#(\d+)\s*:\s*(.+)$/i.exec(ref.trim());
+  if (!match) {
+    return null;
+  }
+  const speaker = match[1]?.toUpperCase();
+  const index = Number(match[2]);
+  const snippet = match[3]?.trim() ?? "";
+  if ((speaker !== "USER" && speaker !== "AI" && speaker !== "SYSTEM") || !Number.isFinite(index) || index < 1) {
+    return null;
+  }
+  return {
+    speaker,
+    index,
+    snippet,
   };
 }
 

@@ -746,6 +746,20 @@ it("emits system design DNA with evidence pinning when mode is SYSTEM_DESIGN", (
         (item.turnIds as string[]).includes("seg-sd-42"),
     ),
   ).toBe(true);
+  expect(
+    evidencePins.some((item) => {
+      if (item.dimension !== "requirement_clarity" || !Array.isArray(item.textPointers)) {
+        return false;
+      }
+      const first = (item.textPointers as Array<Record<string, unknown>>)[0] ?? {};
+      return (
+        (first.turnId as string) === "USER#1" &&
+        typeof first.start === "number" &&
+        typeof first.length === "number" &&
+        typeof first.excerpt === "string"
+      );
+    }),
+  ).toBe(true);
 });
 
 it("applies non-linear cap to system design level recommendation when tradeoff depth is missing", () => {
