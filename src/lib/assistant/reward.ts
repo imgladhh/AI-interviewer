@@ -1,4 +1,5 @@
 import { detectPivotMoment, type NoiseTag } from "@/lib/assistant/pivot";
+import { countOpenSystemDesignGaps, deriveSystemDesignGapState } from "@/lib/assistant/system_design_gap";
 
 type SessionEventLike = {
   eventType: string;
@@ -141,12 +142,25 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
   const designEvidenceTypes = new Set<"requirement" | "capacity" | "tradeoff" | "spof" | "bottleneck" | "handwave">();
 
   if (isSystemDesignReward && noiseTags.length === 0) {
-    const missingCount =
-      (latestDesignSignals?.requirement_missing ? 1 : 0) +
-      (latestDesignSignals?.capacity_missing ? 1 : 0) +
-      (latestDesignSignals?.tradeoff_missed ? 1 : 0) +
-      (latestDesignSignals?.spof_missed ? 1 : 0) +
-      (latestDesignSignals?.bottleneck_unexamined ? 1 : 0);
+    const gapState =
+      latestDesignSignals
+        ? deriveSystemDesignGapState({
+            signals: {
+              capacity_missing: latestDesignSignals.capacity_missing,
+              tradeoff_missed: latestDesignSignals.tradeoff_missed,
+              spof_missed: latestDesignSignals.spof_missed,
+              bottleneck_unexamined: latestDesignSignals.bottleneck_unexamined,
+            },
+            handwaveCategories: latestDesignSignals.handwave_categories,
+          })
+        : null;
+    const missingCount = gapState
+      ? countOpenSystemDesignGaps(gapState) + (latestDesignSignals?.requirement_missing ? 1 : 0)
+      : (latestDesignSignals?.requirement_missing ? 1 : 0) +
+        (latestDesignSignals?.capacity_missing ? 1 : 0) +
+        (latestDesignSignals?.tradeoff_missed ? 1 : 0) +
+        (latestDesignSignals?.spof_missed ? 1 : 0) +
+        (latestDesignSignals?.bottleneck_unexamined ? 1 : 0);
 
     if (hasAny(target ?? "", ["spof", "bottleneck", "correctness"]) || hasAny(action ?? "", ["challenge", "zoom"])) {
       riskIdentified = 0.35;
@@ -200,9 +214,10 @@ export function evaluateTurnReward(input: RewardInput): RewardResult {
       designEvidenceTypes.add("handwave");
     }
 
-    const capacityReady = latestDesignSignals?.capacity_missing === false;
-    const reliabilityGapOpen =
-      latestDesignSignals?.spof_missed === true || latestDesignSignals?.bottleneck_unexamined === true;
+    const capacityReady = gapState ? !gapState.missing_capacity : latestDesignSignals?.capacity_missing === false;
+    const reliabilityGapOpen = gapState
+      ? gapState.missing_reliability || gapState.missing_bottleneck
+      : latestDesignSignals?.spof_missed === true || latestDesignSignals?.bottleneck_unexamined === true;
     const addressesReliabilityGap =
       hasAny(target ?? "", ["spof", "bottleneck", "reliability", "correctness"]) ||
       hasAny(action ?? "", ["challenge", "zoom"]);

@@ -2,7 +2,9 @@ import type { CandidateDecision } from "@/lib/assistant/decision_engine";
 import type { CodingInterviewPolicyAction, SystemDesignPolicyAction } from "@/lib/assistant/policy";
 import type { CandidateSignalSnapshot, GapState } from "@/lib/assistant/signal_extractor";
 import {
+  countOpenSystemDesignGaps,
   deriveSystemDesignGapState,
+  pickPrimarySystemDesignGap,
   routeSystemDesignActionByGap,
 } from "@/lib/assistant/system_design_gap";
 import type { SystemDesignStage } from "@/lib/assistant/stages";
@@ -69,10 +71,18 @@ export function makeSystemDesignDecision(input: {
   const assumptionEscapeHatch = hasExplicitScopedAssumption(input.recentTranscripts, input.recentEvents);
   const capacityGateStage = ["DEEP_DIVE", "REFINEMENT", "WRAP_UP"].includes(input.currentStage);
   const routedAction = routeSystemDesignActionByGap(gapState);
+  const primaryGap = pickPrimarySystemDesignGap(gapState);
+  const openGapCount = countOpenSystemDesignGaps(gapState);
   const safetyOverride = detectSafetyOverride({
     recentEvents: input.recentEvents,
     fallbackAction: routedAction ?? selected.actionType,
   });
+  const decisionContext = {
+    gapState,
+    routedAction,
+    primaryGap,
+    openGapCount,
+  };
 
   if (safetyOverride) {
     const safetyCandidate = sortedScores.find((item) => item.actionType === safetyOverride.actionType) ?? selected;
@@ -84,7 +94,7 @@ export function makeSystemDesignDecision(input: {
         kind: "signal",
         detail: safetyOverride.detail,
       },
-    ]);
+    ], decisionContext);
   }
 
   if (capacityGateStage && designSignals.capacity_missing && !assumptionEscapeHatch) {
@@ -97,7 +107,7 @@ export function makeSystemDesignDecision(input: {
         kind: "signal",
         detail: "Capacity is missing before deep-dive/refinement/wrap-up, so ASK_CAPACITY is forced by causal loop policy.",
       },
-    ]);
+    ], decisionContext);
   }
 
   if (
@@ -125,7 +135,7 @@ export function makeSystemDesignDecision(input: {
             },
           ]
         : []),
-    ]);
+    ], decisionContext);
   }
 
   if (!chainContext.sameChain && chainContext.previousActionType) {
@@ -138,10 +148,10 @@ export function makeSystemDesignDecision(input: {
         kind: "signal",
         detail: `Stability reset: previous action ${chainContext.previousActionType} belongs to a different problem chain (${chainContext.previousGap ?? "unknown"} -> ${chainContext.currentGap ?? "none"}).`,
       },
-    ]);
+    ], decisionContext);
   }
 
-  return toDecision(selected.actionType, sortedScores);
+  return toDecision(selected.actionType, sortedScores, undefined, decisionContext);
 }
 
 function score(
@@ -486,12 +496,30 @@ function toDecision(
     totalScore: number;
   }>,
   overrideReasons?: Array<{ key: string; magnitude: number; kind: "signal"; detail: string }>,
+  context?: {
+    gapState: GapState;
+    routedAction: SystemDesignPolicyAction | null;
+    primaryGap: "capacity" | "tradeoff" | "reliability" | "bottleneck" | null;
+    openGapCount: number;
+  },
 ): SystemDesignDecision {
   const selected = scores.find((item) => item.actionType === actionType) ?? scores[0];
+  const contextReason =
+    context
+      ? {
+          key: "gap_state_baseline",
+          magnitude: context.openGapCount,
+          kind: "signal" as const,
+          detail: `GapState baseline: open=${context.openGapCount}, primary=${context.primaryGap ?? "none"}, routed=${context.routedAction ?? "none"}, flags={capacity:${context.gapState.missing_capacity},tradeoff:${context.gapState.missing_tradeoff},reliability:${context.gapState.missing_reliability},bottleneck:${context.gapState.missing_bottleneck}}.`,
+        }
+      : null;
   const common = {
     confidence: 0.86,
     reason: `System design argmax selected ${actionType}.`,
-    scoreBreakdown: overrideReasons ?? selected?.reasons ?? [],
+    scoreBreakdown: [
+      ...(overrideReasons ?? selected?.reasons ?? []),
+      ...(contextReason ? [contextReason] : []),
+    ],
     candidateScores: [],
     totalScore: selected?.totalScore ?? 0,
     systemDesignActionType: actionType,

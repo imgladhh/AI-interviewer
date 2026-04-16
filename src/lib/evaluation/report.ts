@@ -2225,6 +2225,7 @@ function buildSystemDesignDna(input: {
     avgScore >= 4.2 ? "Staff" : avgScore >= 3.4 ? "Senior" : "Mid-level";
   const levelCapResult = applySystemDesignLevelCap({
     baseLevel: baseLevelRecommendation,
+    requirementScore,
     tradeoffScore,
     capacityScore,
     reliabilityScore,
@@ -2342,6 +2343,7 @@ function buildSystemDesignDna(input: {
 
 function applySystemDesignLevelCap(input: {
   baseLevel: SystemDesignDna["levelRecommendation"];
+  requirementScore: number;
   tradeoffScore: number;
   capacityScore: number;
   reliabilityScore: number;
@@ -2386,9 +2388,30 @@ function applySystemDesignLevelCap(input: {
   }
 
   const pivotStrong = input.pivotSummary.count >= 2 && input.pivotSummary.averageImpact >= 0.35;
+  const pivotExceptional = input.pivotSummary.count >= 3 && input.pivotSummary.averageImpact >= 0.5;
   if (pivotStrong && level === "Mid-level" && !tradeoffWeak && !capacityWeak) {
     level = "Senior";
     notes.push("Pivot boost applied: sustained hint-to-insight conversion improved level recommendation within guardrails.");
+  }
+  if (
+    pivotExceptional &&
+    level === "Senior" &&
+    input.baseLevel === "Senior" &&
+    !tradeoffWeak &&
+    !capacityWeak &&
+    !reliabilityWeak &&
+    !bottleneckWeak &&
+    input.requirementScore >= 2
+  ) {
+    level = "Staff";
+    notes.push("Pivot boost applied: exceptional sustained insight conversion upgraded recommendation to Staff within guardrails.");
+  } else if (
+    pivotExceptional &&
+    level === "Senior" &&
+    input.baseLevel === "Senior" &&
+    (tradeoffWeak || capacityWeak || reliabilityWeak || bottleneckWeak)
+  ) {
+    notes.push("Pivot boost withheld by guardrails: core system-design dimensions must stay strong before Staff promotion.");
   }
 
   return {

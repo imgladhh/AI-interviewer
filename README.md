@@ -403,8 +403,11 @@ Transcript-native drill-down (`P1.5`):
 
 Three open closure gaps to resolve next:
 1. unify `GapState` as a first-class layer before decision routing
+   - status: closed (`GapState` now has shared open-gap counting and is surfaced in decision explainability baseline).
 2. enforce cross-stage reward consistency (not only per-stage scoring)
+   - status: closed (reward now uses unified gap-state consistency checks, not only stage-local heuristics).
 3. bind pivot strength into level mapping (with cap guardrails)
+   - status: closed (pivot boost now supports Senior->Staff under strict core-dimension guardrails, with explicit withheld notes when blocked).
 
 Next single commit to start:
 - `Handwave v2 + Gap Routing + Depth Score` (system-design path first)

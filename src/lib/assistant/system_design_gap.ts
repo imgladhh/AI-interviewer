@@ -61,6 +61,15 @@ export function pickPrimarySystemDesignGap(
   return null;
 }
 
+export function countOpenSystemDesignGaps(gapState: SystemDesignGapState) {
+  return [
+    gapState.missing_capacity,
+    gapState.missing_tradeoff,
+    gapState.missing_reliability,
+    gapState.missing_bottleneck,
+  ].filter(Boolean).length;
+}
+
 export function routeSystemDesignActionByGap(
   gapState: SystemDesignGapState,
 ): SystemDesignPolicyAction | null {
@@ -78,4 +87,3 @@ export function routeSystemDesignActionByGap(
       return null;
   }
 }
-

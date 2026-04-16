@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  countOpenSystemDesignGaps,
   deriveSystemDesignGapState,
   pickPrimarySystemDesignGap,
   routeSystemDesignActionByGap,
@@ -65,5 +66,15 @@ describe("system design gap routing", () => {
       }),
     ).toBe("PROBE_TRADEOFF");
   });
-});
 
+  it("counts open gaps for unified decision and reward layers", () => {
+    expect(
+      countOpenSystemDesignGaps({
+        missing_capacity: true,
+        missing_tradeoff: true,
+        missing_reliability: false,
+        missing_bottleneck: true,
+      }),
+    ).toBe(3);
+  });
+});

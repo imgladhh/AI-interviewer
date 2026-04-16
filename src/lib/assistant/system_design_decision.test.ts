@@ -91,6 +91,7 @@ describe("makeSystemDesignDecision level adaptation", () => {
     });
 
     expect(["PROBE_TRADEOFF", "WRAP_UP"]).toContain(decision.systemDesignActionType);
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "gap_state_baseline")).toBe(true);
   });
 
   it("boosts probing actions when stage-aware handwave is detected", () => {

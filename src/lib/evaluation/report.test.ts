@@ -1086,6 +1086,134 @@ it("applies pivot boost within guardrails when hint-to-insight conversion is sus
   expect(calibrationNotes.some((note) => /pivot boost applied/i.test(note))).toBe(true);
 });
 
+it("upgrades Senior to Staff when pivot conversion is exceptional and core dimensions remain strong", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-pivot-staff-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design Multi-Region Storage",
+    transcripts: [{ speaker: "USER", text: "I can compare quorum and async replication while handling failover." }],
+    events: [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          stage: "DEEP_DIVE",
+          signals: {
+            designSignals: {
+              signals: {
+                requirement_missing: true,
+                capacity_missing: false,
+                tradeoff_missed: false,
+                spof_missed: false,
+                bottleneck_unexamined: false,
+              },
+              evidenceRefs: {
+                requirement_missing: ["No direct candidate evidence in recent turns."],
+                capacity_missing: ["USER#1: 100k qps"],
+                tradeoff_missed: ["USER#1: quorum vs async tradeoff"],
+                spof_missed: ["USER#1: multi-region failover"],
+                bottleneck_unexamined: ["USER#1: metadata shard hotspot mitigation"],
+              },
+            },
+          },
+        },
+      },
+      ...[0.62, 0.55, 0.52].map((pivotImpact, index) => ({
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: {
+            total: 0.4,
+            components: {
+              evidenceGain: 0.25,
+              redundancy: 0,
+              badInterruption: 0,
+              flowPreservation: 0,
+              cleanClosure: 0,
+              riskIdentified: 0.2,
+              tradeoffDepth: 0.2,
+              handwavePenalty: 0,
+              pivotImpact,
+            },
+          },
+          trace: { transcriptSegmentId: `seg-pivot-staff-${index + 1}` },
+        },
+      })),
+    ],
+    executionRuns: [],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
+  const levelRecommendation = systemDesignDna.levelRecommendation as string;
+  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+
+  expect(levelRecommendation).toBe("Staff");
+  expect(calibrationNotes.some((note) => /exceptional sustained insight conversion/i.test(note))).toBe(true);
+});
+
+it("keeps Staff pivot boost blocked when core dimensions are still weak", () => {
+  const report = generateSessionReport({
+    sessionId: "session-sd-pivot-guardrail-1",
+    mode: "SYSTEM_DESIGN",
+    questionTitle: "Design Messaging Bus",
+    transcripts: [{ speaker: "USER", text: "Let's reason through throughput and replication strategy." }],
+    events: [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          stage: "DEEP_DIVE",
+          signals: {
+            designSignals: {
+              signals: {
+                requirement_missing: true,
+                capacity_missing: false,
+                tradeoff_missed: false,
+                spof_missed: true,
+                bottleneck_unexamined: false,
+              },
+              evidenceRefs: {
+                requirement_missing: ["No direct candidate evidence in recent turns."],
+                capacity_missing: ["USER#1: 60k qps"],
+                tradeoff_missed: ["USER#1: log compaction tradeoff"],
+                spof_missed: ["No direct candidate evidence in recent turns."],
+                bottleneck_unexamined: ["USER#1: broker hotspot mitigation"],
+              },
+            },
+          },
+        },
+      },
+      ...[0.6, 0.53, 0.5].map((pivotImpact, index) => ({
+        eventType: "REWARD_RECORDED",
+        payloadJson: {
+          reward: {
+            total: 0.36,
+            components: {
+              evidenceGain: 0.24,
+              redundancy: 0,
+              badInterruption: 0,
+              flowPreservation: 0,
+              cleanClosure: 0,
+              riskIdentified: 0.18,
+              tradeoffDepth: 0.18,
+              handwavePenalty: 0,
+              pivotImpact,
+            },
+          },
+          trace: { transcriptSegmentId: `seg-pivot-guardrail-${index + 1}` },
+        },
+      })),
+    ],
+    executionRuns: [],
+  });
+
+  const reportJson = report.reportJson as Record<string, unknown>;
+  const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
+  const levelRecommendation = systemDesignDna.levelRecommendation as string;
+  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+
+  expect(levelRecommendation).not.toBe("Staff");
+  expect(calibrationNotes.some((note) => /pivot boost withheld by guardrails/i.test(note))).toBe(true);
+});
+
 it("keeps system design DNA scores low when no candidate evidence is available", () => {
   const report = generateSessionReport({
     sessionId: "session-sd-empty-1",
