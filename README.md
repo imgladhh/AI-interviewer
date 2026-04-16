@@ -330,95 +330,127 @@ This README is intentionally condensed for fast context loading.
 - Current system-design execution status and phase notes:
   - [System Design Execution Plan](docs/roadmaps/roadmap-archive-2026-04-12.md#system-design-interviewer-execution-roadmap-v2-final-executable)
 
-### Final Polish Roadmap (v2.1)
+### Roadmap v2.3: Unified Scoring & Calibration Phase (Execution)
 
-Goal:
-- move from "behavior looks right" to "decision quality is measurable and auditable"
+North-star goal:
+- Build a deterministic, explainable, replayable unified scoring core with asymmetric scoring logic.
+- Distinguish talent-led vs hint-led progress.
+- Explain why each level/verdict was assigned.
+- Keep behavior stable in Regression Lab (low variance, low drift).
 
-Priority track (`P0 + P2`, parallel, highest):
-- Calibration x Regression hardening
-  - build transcript-based calibration evaluation packs (real-session stratified samples by level)
-  - add `NoiseTag`:
-    - `STT_CORRUPTION`
-    - `PARTIAL_TRANSCRIPT`
-    - `INTERRUPTED_TURN`
-  - invariants:
-    - noise-tagged turns do not contribute to handwave penalty
-    - noise-tagged turns do not trigger pivot accounting
-    - noise-tagged turns do not contaminate reward attribution
-  - strengthen pivot metrics:
-    - `trigger_action`
-    - `delta_time` (turns/seconds)
-    - `dimension_jump`
-    - `impact_score` (0-1)
-  - expose `Nudge Conversion Rate`:
-    - `conversion_rate = pivot_count / guide_count`
-  - regression targets:
-    - `late_bloomer` can recover
-    - `bullshitter` gets suppressed
-    - `rigid` behavior is capped correctly
-  - operating cadence:
-    - run weekly policy-regression snapshots and track drift trends
-- status:
-  - closed in current baseline (calibration pack, noise tags, pivot metrics, nudge conversion, regression scenarios, and weekly drift snapshots are wired and test-covered).
+`P0` Scoring Core Definition:
+- Define unified IO in `src/lib/scoring/types.ts`:
+  - `ScoringInput { signals, gapState, pivots, noiseTags, metadata, decisionTrace, rewardTrace }`
+  - `EvaluationResult { rawLevel, cappedLevel, verdict, confidence, dimensionScores, appliedCaps, explanation }`
+- Implement scoring pipeline skeleton in `src/lib/scoring/calculateUnifiedScore.ts`:
+  - `prepareCleanContext`
+  - `aggregateDimensions`
+  - `calculatePivotAdjustment`
+  - `calculateGapPenalty`
+  - `applyHardCaps`
+  - `calculateConfidence`
+- DoD:
+  - idempotent output for identical input
+  - pure-function behavior (no DB/external dependency)
+  - unit-testable with mock input
 
-Priority track (`P1`):
-- Handwave v2 + Gap Routing
-  - `Depth Score` dimensions:
-    - `numeric_density` (QPS/GB/ms)
-    - `constraint_binding` (ties to requirement)
-    - `causal_chain` (`because -> therefore`)
-    - `specificity` (concrete components/terms)
-  - semantic decay:
-    - increase handwave score when language is vague (`maybe/probably/usually`) without numbers
-  - gap-aware action routing:
-    - capacity gap -> `ask_back_of_envelope`
-    - reliability gap -> `challenge_spof`
-    - component gap -> `probe_tradeoff`
-    - bottleneck gap -> `challenge_bottleneck`
-  - depth expectation counter:
-    - if `low_detail_streak >= 2`, force deeper probing action
-- status:
-  - closed in current baseline (depth scoring + vague-language decay + gap routing + streak-based deeper forcing are implemented and exercised by tests).
+`P1` Pivot & Asymmetric Reward (Insight Engine):
+- Extend extraction and scoring:
+  - `insight_detected`, `pivot_moment`
+  - `src/lib/scoring/pivot.ts` with `calculatePivotAdjustment(pivots, decisionTrace)`
+- Encode:
+  - nudge strength (`NONE/LIGHT/HEAVY`)
+  - dimension weights
+  - impact thresholds
+  - `time_to_insight`
+  - `hints_before_insight`
+- DoD:
+  - no-hint insight increases raw level
+  - heavy rescue gives near-zero pivot lift
 
-Decision stability (`P3`, maintain):
-- keep inertia + hysteresis + safety override
-- constraints:
-  - inertia only applies inside same problem chain
-  - hysteresis uses explicit delta threshold
-  - hard invariant or budget override always wins
-- status:
-  - closed in current baseline and maintained (chain-aware stability + safety overrides are active and regression-tested).
+`P2` Confidence Engine:
+- Implement `calculateConfidence()` with:
+  - signal density (`signals.length / expectedSignals`)
+  - noise ratio
+  - gap coverage (`closedGaps / totalGaps`)
+  - recovery-failure penalty (`heavy_rescue && gap_not_closed`)
+- Add dedupe, caps, and bounds.
+- DoD:
+  - talkative bullshitter => low confidence
+  - silent strong candidate => high confidence
 
-System-design causal loop (`P4`, maintain):
-- hard gate:
-  - block deep-dive when capacity prerequisite is missing
-- soft consistency penalty:
-  - penalize reliability/quality when architecture contradicts stated capacity
-- status:
-  - closed in current baseline (hard gate in decision path + soft consistency penalty in reward/report calibration)
+`P3` Hard Caps (Invariant Veto):
+- Implement in `src/lib/scoring/caps.ts`:
+  - `capByCapacityInstinct()`
+  - `capByTradeoffDepth()`
+  - `capByBottleneckSensitivity()`
+- Rule shape:
+  - `finalLevel = min(rawLevel, invariantCap)`
+  - examples: no capacity => cap `L4`, no tradeoff => cap `L5`, no bottleneck => cap `L4`
+- DoD:
+  - strong coding but weak design gets capped
+  - `appliedCaps` and explanation are explicit
 
-Transcript-native drill-down (`P1.5`):
-- add pointer model:
-  - `TextPointer { turnId, start, length }`
-- use in report/admin/calibration:
-  - report-side drill-down links each system-design evidence pin to exact transcript turn spans
-  - click evidence -> highlight exact source span
-- status:
-  - closed in current baseline (evidence pin pointers can jump to transcript drill-down highlights)
+`P4` Gap->Score Causal Integration:
+- Implement `src/lib/scoring/gap.ts`:
+  - `penalty = f(severity, stage)`
+  - stage-aware weighting (early gap lighter, late gap heavier)
+- Keep decision linkage:
+  - capacity gate
+  - deep-dive guard
+- DoD:
+  - skipping capacity causes visible score drop
+  - late-stage unresolved gaps incur strong penalty
 
-Closure gaps (resolved):
-1. unify `GapState` as a first-class layer before decision routing
-   - status: closed (`GapState` now has shared open-gap counting and is surfaced in decision explainability baseline).
-2. enforce cross-stage reward consistency (not only per-stage scoring)
-   - status: closed (reward now uses unified gap-state consistency checks, not only stage-local heuristics).
-3. bind pivot strength into level mapping (with cap guardrails)
-   - status: closed (pivot boost now supports Senior->Staff under strict core-dimension guardrails, with explicit withheld notes when blocked).
+`P5` Regression Lab (Convergence):
+- Build >=20 replay scenarios:
+  - Late Bloomer
+  - Bullshitter
+  - Strong Silent
+  - Rigid Coder
+  - Rescue-dependent
+- Track:
+  - level variance
+  - confidence variance
+  - diff before/after policy changes
+- DoD:
+  - low variance for repeated runs on same case
+  - diff report remains explainable
 
-Starter commit (completed):
-- `Handwave v2 + Gap Routing + Depth Score` (system-design path first)
-  - `src/lib/assistant/signal_extractor.ts`
-  - `src/lib/assistant/system_design_decision.ts`
-  - `src/lib/assistant/reward.ts`
-  - status: closed (implemented in current baseline with tests passing).
+`P6` Grilling Phase (Strong-only Pressure Test):
+- Trigger:
+  - `rawLevel >= L5 && confidence > threshold`
+- Behavior changes (evidence collection only):
+  - more bottleneck challenges
+  - lower pacing softness
+  - higher tradeoff probing intensity
+- Constraint:
+  - affects probing/collection only, not scoring math itself
+- DoD:
+  - strong candidates are pressure-tested
+  - average candidates are not over-pressured
+
+`P7` Report & Audit:
+- Turn report into an auditable verdict document:
+  - `strongest_signals`
+  - `blocking_dimensions`
+  - `pivot_effects`
+- Keep evidence drill-down with `TextPointer { turnId, start, length }`.
+- DoD:
+  - every conclusion has linked evidence
+  - click-through jump/highlight works end-to-end
+
+Execution order:
+- Week 1:
+  - `P0` scoring core skeleton
+  - `P3` hard caps
+- Week 2:
+  - `P1` pivot
+  - `P2` confidence
+- Week 3:
+  - `P4` gap integration
+  - `P5` regression lab
+- Week 4:
+  - `P6` grilling
+  - `P7` report & audit
 
