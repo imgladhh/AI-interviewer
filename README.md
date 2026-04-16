@@ -359,6 +359,8 @@ Priority track (`P0 + P2`, parallel, highest):
     - `rigid` behavior is capped correctly
   - operating cadence:
     - run weekly policy-regression snapshots and track drift trends
+- status:
+  - closed in current baseline (calibration pack, noise tags, pivot metrics, nudge conversion, regression scenarios, and weekly drift snapshots are wired and test-covered).
 
 Priority track (`P1`):
 - Handwave v2 + Gap Routing
@@ -376,6 +378,8 @@ Priority track (`P1`):
     - bottleneck gap -> `challenge_bottleneck`
   - depth expectation counter:
     - if `low_detail_streak >= 2`, force deeper probing action
+- status:
+  - closed in current baseline (depth scoring + vague-language decay + gap routing + streak-based deeper forcing are implemented and exercised by tests).
 
 Decision stability (`P3`, maintain):
 - keep inertia + hysteresis + safety override
@@ -383,14 +387,16 @@ Decision stability (`P3`, maintain):
   - inertia only applies inside same problem chain
   - hysteresis uses explicit delta threshold
   - hard invariant or budget override always wins
+- status:
+  - closed in current baseline and maintained (chain-aware stability + safety overrides are active and regression-tested).
 
 System-design causal loop (`P4`, maintain):
 - hard gate:
   - block deep-dive when capacity prerequisite is missing
 - soft consistency penalty:
   - penalize reliability/quality when architecture contradicts stated capacity
- - status:
-   - closed in current baseline (hard gate in decision path + soft consistency penalty in reward/report calibration)
+- status:
+  - closed in current baseline (hard gate in decision path + soft consistency penalty in reward/report calibration)
 
 Transcript-native drill-down (`P1.5`):
 - add pointer model:
@@ -398,10 +404,10 @@ Transcript-native drill-down (`P1.5`):
 - use in report/admin/calibration:
   - report-side drill-down links each system-design evidence pin to exact transcript turn spans
   - click evidence -> highlight exact source span
- - status:
-   - closed in current baseline (evidence pin pointers can jump to transcript drill-down highlights)
+- status:
+  - closed in current baseline (evidence pin pointers can jump to transcript drill-down highlights)
 
-Three open closure gaps to resolve next:
+Closure gaps (resolved):
 1. unify `GapState` as a first-class layer before decision routing
    - status: closed (`GapState` now has shared open-gap counting and is surfaced in decision explainability baseline).
 2. enforce cross-stage reward consistency (not only per-stage scoring)
@@ -409,9 +415,10 @@ Three open closure gaps to resolve next:
 3. bind pivot strength into level mapping (with cap guardrails)
    - status: closed (pivot boost now supports Senior->Staff under strict core-dimension guardrails, with explicit withheld notes when blocked).
 
-Next single commit to start:
+Starter commit (completed):
 - `Handwave v2 + Gap Routing + Depth Score` (system-design path first)
   - `src/lib/assistant/signal_extractor.ts`
   - `src/lib/assistant/system_design_decision.ts`
   - `src/lib/assistant/reward.ts`
+  - status: closed (implemented in current baseline with tests passing).
 
