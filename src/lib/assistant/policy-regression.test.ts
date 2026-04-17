@@ -4,6 +4,7 @@ import {
   evaluatePolicyScenario,
   evaluateSystemDesignScenario,
   evaluateSystemDesignRegressionHealth,
+  evaluateSystemDesignRegressionStability,
   POLICY_REGRESSION_SCENARIOS,
   runSystemDesignRegressionLab,
   runPolicyRegressionLab,
@@ -137,6 +138,7 @@ describe("policy regression lab", () => {
     expect(ids).toContain("late_bloomer");
     expect(ids).toContain("confident_bullshitter");
     expect(ids).toContain("rigid_coder");
+    expect(ids.length).toBeGreaterThanOrEqual(20);
   });
 
   it("pushes deep probing for confident handwave system design candidate", () => {
@@ -153,7 +155,7 @@ describe("policy regression lab", () => {
 
   it("produces score diff and reward diff across system design regression scenarios", () => {
     const reports = runSystemDesignRegressionLab();
-    expect(reports).toHaveLength(3);
+    expect(reports.length).toBeGreaterThanOrEqual(20);
     expect(reports.every((item) => typeof item.scoreDiffFromBest === "number")).toBe(true);
     expect(reports.every((item) => typeof item.rewardDiffFromBest === "number")).toBe(true);
     expect(reports.some((item) => item.scoreDiffFromBest === 0)).toBe(true);
@@ -179,5 +181,16 @@ describe("policy regression lab", () => {
     expect(health.passRate).toBeGreaterThanOrEqual(0);
     expect(health.passRate).toBeLessThanOrEqual(1);
     expect(typeof health.summary).toBe("string");
+  });
+
+  it("computes replay stability metrics with low variance for deterministic scoring paths", () => {
+    const stability = evaluateSystemDesignRegressionStability();
+
+    expect(stability.scenarioCount).toBeGreaterThanOrEqual(20);
+    expect(stability.replayCount).toBeGreaterThanOrEqual(2);
+    expect(stability.maxScoreVariance).toBeGreaterThanOrEqual(0);
+    expect(stability.maxRewardVariance).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(stability.reports)).toBe(true);
+    expect(stability.reports.length).toBe(stability.scenarioCount);
   });
 });

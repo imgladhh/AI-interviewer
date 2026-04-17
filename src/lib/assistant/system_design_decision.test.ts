@@ -344,4 +344,43 @@ describe("makeSystemDesignDecision level adaptation", () => {
     expect(decision.systemDesignActionType).toBe("CHALLENGE_SPOF");
     expect((decision.scoreBreakdown ?? []).some((item) => item.key === "safety_invariant_override")).toBe(true);
   });
+
+  it("enables grilling pressure for strong senior/staff candidates in deep dive to favor deeper probes", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "STAFF",
+      signals: {
+        ...createSnapshot({
+          requirement_missing: false,
+          capacity_missing: false,
+          tradeoff_missed: false,
+          spof_missed: true,
+          bottleneck_unexamined: true,
+        }),
+        confidence: 0.9,
+      },
+    });
+
+    expect(["CHALLENGE_SPOF", "ZOOM_IN", "PROBE_TRADEOFF"]).toContain(decision.systemDesignActionType);
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "grilling_pressure")).toBe(true);
+  });
+
+  it("does not activate grilling pressure for non-strong candidates", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SDE1",
+      signals: {
+        ...createSnapshot({
+          requirement_missing: false,
+          capacity_missing: false,
+          tradeoff_missed: true,
+          spof_missed: false,
+          bottleneck_unexamined: false,
+        }),
+        confidence: 0.72,
+      },
+    });
+
+    expect((decision.scoreBreakdown ?? []).some((item) => item.key === "grilling_pressure")).toBe(false);
+  });
 });

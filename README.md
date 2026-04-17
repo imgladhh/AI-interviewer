@@ -454,3 +454,26 @@ Execution order:
   - `P6` grilling
   - `P7` report & audit
 
+Current progress:
+- Completed:
+  - `P0` scoring core skeleton (`src/lib/scoring/types.ts`, `src/lib/scoring/calculateUnifiedScore.ts`)
+  - `P3` hard caps (`src/lib/scoring/caps.ts`, wired through unified scoring)
+  - `P1` pivot asymmetry integration (`src/lib/scoring/pivot.ts`, nudge conversion/time-to-insight/hints-before-insight outputs)
+  - `P2` confidence engine (`src/lib/scoring/confidence.ts`, signal density + noise ratio + gap coverage + recovery-failure penalty)
+  - `P4` gap->score causal integration (`src/lib/scoring/gap.ts`, severity × stage-aware penalties wired into unified scoring)
+  - `P5` regression lab expansion (`src/lib/assistant/policy-regression.ts`) with 20+ system-design scenarios, replay stability (variance) metrics, and eval-script outputs
+  - `P6` grilling phase trigger in system-design decisioning (`src/lib/assistant/system_design_decision.ts`) for strong senior/staff candidates during deep evidence collection
+  - `P7` report/audit enrichment (`src/lib/evaluation/report.ts`, `src/app/report/[id]/page.tsx`) with `strongest_signals`, `blocking_dimensions`, `pivot_effects` and evidence-linked drilldown
+- In progress:
+  - None (Roadmap v2.3 execution scope closed)
+
+Closure verification (2026-04-17):
+- Vitest matrix passed (`61` tests): scoring core (`caps/pivot/confidence/gap`), system-design decisioning, policy regression, report, and drift modules.
+- `npm run eval:system-design` completed with:
+  - regression health pass rate `1.00`
+  - replay stability across `21` scenarios with zero expectation flips and zero score/reward variance in deterministic replay.
+- `npm run eval:system-design:weekly` completed and generated:
+  - [snapshot-2026-04-17.json](docs/metrics/system-design-weekly/snapshot-2026-04-17.json)
+  - [latest.json](docs/metrics/system-design-weekly/latest.json)
+  - drift summary: stable (`calibration_delta=0.00`, `pass_rate_delta=0.00`).
+

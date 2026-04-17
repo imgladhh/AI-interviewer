@@ -1,6 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { evaluateSystemDesignRegressionHealth, runSystemDesignRegressionLab } from "@/lib/assistant/policy-regression";
+import {
+  evaluateSystemDesignRegressionHealth,
+  evaluateSystemDesignRegressionStability,
+  runSystemDesignRegressionLab,
+} from "@/lib/assistant/policy-regression";
 import {
   evaluateSystemDesignCalibrationPack,
   summarizeSystemDesignCalibrationPack,
@@ -33,6 +37,7 @@ function buildCurrentSnapshot(): SystemDesignWeeklySnapshot {
     rewardDiffFromBest: item.rewardDiffFromBest,
   }));
   const health = evaluateSystemDesignRegressionHealth(lab);
+  const stability = evaluateSystemDesignRegressionStability();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -44,6 +49,14 @@ function buildCurrentSnapshot(): SystemDesignWeeklySnapshot {
     calibrationCoverage: coverage,
     regression: {
       health,
+      stability: {
+        replayCount: stability.replayCount,
+        scenarioCount: stability.scenarioCount,
+        maxScoreVariance: stability.maxScoreVariance,
+        maxRewardVariance: stability.maxRewardVariance,
+        expectationFlipCount: stability.expectationFlipCount,
+        summary: stability.summary,
+      },
       reports,
     },
   };

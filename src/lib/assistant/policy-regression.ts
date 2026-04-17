@@ -89,10 +89,7 @@ export type PolicyTuningSuggestion = {
   recommendedAdjustments: string[];
 };
 
-export type SystemDesignRegressionScenarioId =
-  | "late_bloomer"
-  | "confident_bullshitter"
-  | "rigid_coder";
+export type SystemDesignRegressionScenarioId = string;
 
 export type SystemDesignRegressionScenario = {
   id: SystemDesignRegressionScenarioId;
@@ -135,6 +132,22 @@ export type SystemDesignRegressionHealth = {
   bullshitterSuppressed: boolean;
   rigidCapped: boolean;
   passRate: number;
+  summary: string;
+};
+
+export type SystemDesignRegressionStabilityReport = {
+  replayCount: number;
+  scenarioCount: number;
+  maxScoreVariance: number;
+  maxRewardVariance: number;
+  expectationFlipCount: number;
+  reports: Array<{
+    scenarioId: string;
+    scoreVariance: number;
+    rewardVariance: number;
+    expectationVariance: number;
+    stable: boolean;
+  }>;
   summary: string;
 };
 
@@ -464,7 +477,7 @@ export const POLICY_REGRESSION_SCENARIOS: PolicyRegressionScenario[] = [
   },
 ];
 
-export const SYSTEM_DESIGN_REGRESSION_SCENARIOS: SystemDesignRegressionScenario[] = [
+const CORE_SYSTEM_DESIGN_REGRESSION_SCENARIOS: SystemDesignRegressionScenario[] = [
   {
     id: "late_bloomer",
     label: "Late bloomer (pivot)",
@@ -604,6 +617,105 @@ export const SYSTEM_DESIGN_REGRESSION_SCENARIOS: SystemDesignRegressionScenario[
     },
   },
 ];
+
+type SystemDesignScenarioVariant = {
+  baseId: "late_bloomer" | "confident_bullshitter" | "rigid_coder";
+  suffix: string;
+  stage?: SystemDesignStage;
+  confidence?: number;
+  reasoningDepth?: CandidateSignalSnapshot["reasoningDepth"];
+  communication?: CandidateSignalSnapshot["communication"];
+  missing?: Partial<{
+    requirement_missing: boolean;
+    capacity_missing: boolean;
+    tradeoff_missed: boolean;
+    spof_missed: boolean;
+    bottleneck_unexamined: boolean;
+  }>;
+  handwaveDepth?: number;
+  handwaveExpectedDepth?: number;
+};
+
+const SYSTEM_DESIGN_SCENARIO_VARIANTS: SystemDesignScenarioVariant[] = [
+  { baseId: "late_bloomer", suffix: "requirements_recovery", stage: "REQUIREMENTS", missing: { requirement_missing: true, capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.24, handwaveExpectedDepth: 0.55, confidence: 0.58 },
+  { baseId: "late_bloomer", suffix: "api_contract_gate", stage: "API_CONTRACT_CHECK", missing: { requirement_missing: false, capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.28, handwaveExpectedDepth: 0.68 },
+  { baseId: "late_bloomer", suffix: "capacity_focus", stage: "CAPACITY", missing: { capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.3, handwaveExpectedDepth: 0.8 },
+  { baseId: "late_bloomer", suffix: "deep_dive_rebound", stage: "DEEP_DIVE", missing: { capacity_missing: false, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.34, handwaveExpectedDepth: 0.9, confidence: 0.64 },
+  { baseId: "late_bloomer", suffix: "refinement_rebound", stage: "REFINEMENT", missing: { capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.38, handwaveExpectedDepth: 0.85 },
+  { baseId: "late_bloomer", suffix: "wrap_guard", stage: "WRAP_UP", missing: { capacity_missing: false, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.35, handwaveExpectedDepth: 0.82 },
+
+  { baseId: "confident_bullshitter", suffix: "requirements_smokescreen", stage: "REQUIREMENTS", missing: { requirement_missing: false, capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.26, handwaveExpectedDepth: 0.52, confidence: 0.9 },
+  { baseId: "confident_bullshitter", suffix: "api_contract_handwave", stage: "API_CONTRACT_CHECK", missing: { requirement_missing: false, capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.24, handwaveExpectedDepth: 0.66 },
+  { baseId: "confident_bullshitter", suffix: "capacity_handwave", stage: "CAPACITY", missing: { capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.22, handwaveExpectedDepth: 0.84 },
+  { baseId: "confident_bullshitter", suffix: "high_level_overclaim", stage: "HIGH_LEVEL", missing: { capacity_missing: true, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.24, handwaveExpectedDepth: 0.75 },
+  { baseId: "confident_bullshitter", suffix: "refinement_evasion", stage: "REFINEMENT", missing: { capacity_missing: false, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.3, handwaveExpectedDepth: 0.82 },
+  { baseId: "confident_bullshitter", suffix: "wrap_up_escape", stage: "WRAP_UP", missing: { capacity_missing: false, tradeoff_missed: true, spof_missed: true, bottleneck_unexamined: true }, handwaveDepth: 0.29, handwaveExpectedDepth: 0.8 },
+
+  { baseId: "rigid_coder", suffix: "requirements_skip_tradeoff", stage: "REQUIREMENTS", missing: { requirement_missing: false, capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.38, handwaveExpectedDepth: 0.5, confidence: 0.74 },
+  { baseId: "rigid_coder", suffix: "api_contract_skip_tradeoff", stage: "API_CONTRACT_CHECK", missing: { requirement_missing: false, capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.4, handwaveExpectedDepth: 0.6 },
+  { baseId: "rigid_coder", suffix: "capacity_done_tradeoff_missing", stage: "CAPACITY", missing: { requirement_missing: false, capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.42, handwaveExpectedDepth: 0.75 },
+  { baseId: "rigid_coder", suffix: "high_level_fixed_design", stage: "HIGH_LEVEL", missing: { requirement_missing: false, capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.41, handwaveExpectedDepth: 0.72 },
+  { baseId: "rigid_coder", suffix: "deep_dive_fixed_design", stage: "DEEP_DIVE", missing: { requirement_missing: false, capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.44, handwaveExpectedDepth: 0.9 },
+  { baseId: "rigid_coder", suffix: "wrap_up_without_tradeoff", stage: "WRAP_UP", missing: { requirement_missing: false, capacity_missing: false, tradeoff_missed: true, spof_missed: false, bottleneck_unexamined: true }, handwaveDepth: 0.43, handwaveExpectedDepth: 0.82 },
+];
+
+export const SYSTEM_DESIGN_REGRESSION_SCENARIOS: SystemDesignRegressionScenario[] = [
+  ...CORE_SYSTEM_DESIGN_REGRESSION_SCENARIOS,
+  ...SYSTEM_DESIGN_SCENARIO_VARIANTS.map((variant) => buildSystemDesignScenarioVariant(variant)),
+];
+
+function buildSystemDesignScenarioVariant(variant: SystemDesignScenarioVariant): SystemDesignRegressionScenario {
+  const base = CORE_SYSTEM_DESIGN_REGRESSION_SCENARIOS.find((item) => item.id === variant.baseId);
+  if (!base) {
+    throw new Error(`Unknown system-design regression base scenario: ${variant.baseId}`);
+  }
+
+  const scenario = JSON.parse(JSON.stringify(base)) as SystemDesignRegressionScenario;
+  scenario.id = `${variant.baseId}__${variant.suffix}`;
+  scenario.label = `${base.label} (${variant.suffix.replace(/_/g, " ")})`;
+  if (variant.stage) {
+    scenario.currentStage = variant.stage;
+  }
+  if (typeof variant.confidence === "number") {
+    scenario.signals.confidence = variant.confidence;
+  }
+  if (variant.reasoningDepth) {
+    scenario.signals.reasoningDepth = variant.reasoningDepth;
+  }
+  if (variant.communication) {
+    scenario.signals.communication = variant.communication;
+  }
+
+  const designSignals = scenario.signals.designSignals?.signals;
+  if (designSignals && variant.missing) {
+    if (typeof variant.missing.requirement_missing === "boolean") {
+      designSignals.requirement_missing = variant.missing.requirement_missing;
+    }
+    if (typeof variant.missing.capacity_missing === "boolean") {
+      designSignals.capacity_missing = variant.missing.capacity_missing;
+    }
+    if (typeof variant.missing.tradeoff_missed === "boolean") {
+      designSignals.tradeoff_missed = variant.missing.tradeoff_missed;
+    }
+    if (typeof variant.missing.spof_missed === "boolean") {
+      designSignals.spof_missed = variant.missing.spof_missed;
+    }
+    if (typeof variant.missing.bottleneck_unexamined === "boolean") {
+      designSignals.bottleneck_unexamined = variant.missing.bottleneck_unexamined;
+    }
+  }
+
+  if (scenario.signals.designSignals?.handwave) {
+    if (typeof variant.handwaveDepth === "number") {
+      scenario.signals.designSignals.handwave.depth = variant.handwaveDepth;
+    }
+    if (typeof variant.handwaveExpectedDepth === "number") {
+      scenario.signals.designSignals.handwave.expectedDepth = variant.handwaveExpectedDepth;
+    }
+  }
+
+  return scenario;
+}
 
 export function evaluatePolicyScenario(
   scenario: PolicyRegressionScenario,
@@ -928,6 +1040,49 @@ export function runSystemDesignRegressionLab(
   });
 }
 
+export function evaluateSystemDesignRegressionStability(input?: {
+  scenarios?: SystemDesignRegressionScenario[];
+  replayCount?: number;
+}): SystemDesignRegressionStabilityReport {
+  const scenarios = input?.scenarios ?? SYSTEM_DESIGN_REGRESSION_SCENARIOS;
+  const replayCount = Math.max(2, input?.replayCount ?? 3);
+
+  const reports = scenarios.map((scenario) => {
+    const runs = Array.from({ length: replayCount }, () => evaluateSystemDesignScenario(scenario));
+    const scoreSeries = runs.map((item) => item.totalScore);
+    const rewardSeries = runs.map((item) => item.averageReward);
+    const expectationSeries = runs.map((item) => Number(evaluateSystemDesignExpectation(item).met));
+    const scoreVariance = variance(scoreSeries);
+    const rewardVariance = variance(rewardSeries);
+    const expectationVariance = variance(expectationSeries);
+
+    return {
+      scenarioId: scenario.id,
+      scoreVariance,
+      rewardVariance,
+      expectationVariance,
+      stable: scoreVariance <= 0.02 && rewardVariance <= 0.02 && expectationVariance === 0,
+    };
+  });
+
+  const maxScoreVariance = Math.max(...reports.map((item) => item.scoreVariance), 0);
+  const maxRewardVariance = Math.max(...reports.map((item) => item.rewardVariance), 0);
+  const expectationFlipCount = reports.filter((item) => item.expectationVariance > 0).length;
+
+  return {
+    replayCount,
+    scenarioCount: scenarios.length,
+    maxScoreVariance: Number(maxScoreVariance.toFixed(4)),
+    maxRewardVariance: Number(maxRewardVariance.toFixed(4)),
+    expectationFlipCount,
+    reports,
+    summary:
+      expectationFlipCount === 0
+        ? `Regression replay stable across ${scenarios.length} scenarios (max_score_var=${maxScoreVariance.toFixed(4)}, max_reward_var=${maxRewardVariance.toFixed(4)}).`
+        : `Regression replay unstable on ${expectationFlipCount} scenario(s); inspect per-scenario variance report.`,
+  };
+}
+
 export function evaluateSystemDesignRegressionHealth(
   reports: SystemDesignRegressionReport[],
 ): SystemDesignRegressionHealth {
@@ -1061,8 +1216,7 @@ function evaluateSystemDesignExpectation(result: SystemDesignRegressionResult): 
   const anyTradeoffProbe = result.decisionTimeline.some((item) => item.systemDesignActionType === "PROBE_TRADEOFF");
   const positiveRecovery = result.cumulativeReward > 0 || result.averageReward >= 0.1;
 
-  switch (result.scenarioId) {
-    case "late_bloomer": {
+  if (result.scenarioId.startsWith("late_bloomer")) {
       const met = firstIsDeepProbe && positiveRecovery;
       return {
         met,
@@ -1070,8 +1224,8 @@ function evaluateSystemDesignExpectation(result: SystemDesignRegressionResult): 
           ? "Late bloomer recovered: interviewer stayed in deep probing and reward trended positive."
           : "Late bloomer failed recovery: expected deep probing plus positive reward recovery.",
       };
-    }
-    case "confident_bullshitter": {
+  }
+  if (result.scenarioId.startsWith("confident_bullshitter")) {
       const met = firstIsDeepProbe && !anyWrapUp;
       return {
         met,
@@ -1079,8 +1233,8 @@ function evaluateSystemDesignExpectation(result: SystemDesignRegressionResult): 
           ? "Bullshitter suppression passed: interviewer held deep pressure and avoided premature wrap-up."
           : "Bullshitter suppression failed: expected deep-pressure action without early wrap-up.",
       };
-    }
-    case "rigid_coder": {
+  }
+  if (result.scenarioId.startsWith("rigid_coder")) {
       const met = anyTradeoffProbe && !anyWrapUp;
       return {
         met,
@@ -1088,12 +1242,20 @@ function evaluateSystemDesignExpectation(result: SystemDesignRegressionResult): 
           ? "Rigid-coder cap passed: interviewer forced tradeoff depth before closure."
           : "Rigid-coder cap failed: expected tradeoff probing and no early wrap-up.",
       };
-    }
-    default:
-      return {
-        met: false,
-        note: "Unknown scenario.",
-      };
   }
+
+  return {
+    met: false,
+    note: "Unknown scenario.",
+  };
+}
+
+function variance(values: number[]) {
+  if (values.length <= 1) {
+    return 0;
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const squared = values.map((value) => (value - mean) ** 2);
+  return Number((squared.reduce((sum, value) => sum + value, 0) / values.length).toFixed(4));
 }
 

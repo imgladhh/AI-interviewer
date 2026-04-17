@@ -725,6 +725,9 @@ it("emits system design DNA with evidence pinning when mode is SYSTEM_DESIGN", (
   const reportJson = report.reportJson as Record<string, unknown>;
   const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
   const evidencePins = (systemDesignDna.evidencePins as Array<Record<string, unknown>>) ?? [];
+  const strongestSignals = (systemDesignDna.strongest_signals as Array<Record<string, unknown>>) ?? [];
+  const blockingDimensions = (systemDesignDna.blocking_dimensions as Array<Record<string, unknown>>) ?? [];
+  const pivotEffects = (systemDesignDna.pivot_effects as Array<Record<string, unknown>>) ?? [];
 
   expect(reportJson.mode).toBe("SYSTEM_DESIGN");
   expect(typeof systemDesignDna.requirement_clarity).toBe("number");
@@ -735,8 +738,17 @@ it("emits system design DNA with evidence pinning when mode is SYSTEM_DESIGN", (
   expect((systemDesignDna.levelRecommendation as string)).toMatch(/Mid-level|Senior|Staff/);
   expect(Array.isArray(systemDesignDna.strengths)).toBe(true);
   expect(Array.isArray(systemDesignDna.weaknesses)).toBe(true);
+  expect(Array.isArray(strongestSignals)).toBe(true);
+  expect(Array.isArray(blockingDimensions)).toBe(true);
+  expect(Array.isArray(pivotEffects)).toBe(true);
   expect(Array.isArray(evidencePins)).toBe(true);
   expect(evidencePins.length).toBe(5);
+  expect(strongestSignals.length).toBeGreaterThan(0);
+  expect(blockingDimensions.length).toBeGreaterThan(0);
+  expect(pivotEffects.length).toBeGreaterThan(0);
+  expect(typeof strongestSignals[0]?.rationale).toBe("string");
+  expect(typeof blockingDimensions[0]?.reason).toBe("string");
+  expect(typeof pivotEffects[0]?.title).toBe("string");
   expect(evidencePins.some((item) => item.snapshotId === "snap-sd-1")).toBe(true);
   expect(
     evidencePins.some(

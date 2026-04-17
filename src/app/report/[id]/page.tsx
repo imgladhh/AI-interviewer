@@ -159,6 +159,26 @@ type SystemDesignDna = {
   calibrationNotes?: string[];
   strengths?: string[];
   weaknesses?: string[];
+  strongest_signals?: Array<{
+    dimension?: SystemDesignDimensionKey;
+    score?: number;
+    rationale?: string;
+    evidenceRefs?: string[];
+    turnIds?: string[];
+  }>;
+  blocking_dimensions?: Array<{
+    dimension?: SystemDesignDimensionKey;
+    score?: number;
+    reason?: string;
+    evidenceRefs?: string[];
+    turnIds?: string[];
+  }>;
+  pivot_effects?: Array<{
+    title?: string;
+    detail?: string;
+    evidenceRefs?: string[];
+    turnIds?: string[];
+  }>;
   evidencePins: SystemDesignEvidencePin[];
 };
 
@@ -832,6 +852,62 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
                   ) : (
                     (systemDesignDna.weaknesses ?? []).map((item, index) => (
                       <div key={`sd-weakness-${index}`} style={listItemStyle}>{item}</div>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <strong>Strongest Signals</strong>
+                  {(systemDesignDna.strongest_signals ?? []).length === 0 ? (
+                    <p style={mutedParagraphStyle}>No strongest-signal breakdown available.</p>
+                  ) : (
+                    (systemDesignDna.strongest_signals ?? []).map((item, index) => (
+                      <div key={`sd-strongest-${index}`} style={listItemStyle}>
+                        <strong>{systemDesignDimensionLabel(item.dimension)}</strong>
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          score={typeof item.score === "number" ? item.score.toFixed(2) : "n/a"}
+                        </p>
+                        {item.rationale ? <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{item.rationale}</p> : null}
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          refs={(item.evidenceRefs ?? []).join(", ") || "n/a"}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <strong>Blocking Dimensions</strong>
+                  {(systemDesignDna.blocking_dimensions ?? []).length === 0 ? (
+                    <p style={mutedParagraphStyle}>No blocking dimensions detected.</p>
+                  ) : (
+                    (systemDesignDna.blocking_dimensions ?? []).map((item, index) => (
+                      <div key={`sd-blocking-${index}`} style={listItemStyle}>
+                        <strong>{systemDesignDimensionLabel(item.dimension)}</strong>
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          score={typeof item.score === "number" ? item.score.toFixed(2) : "n/a"}
+                        </p>
+                        {item.reason ? <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{item.reason}</p> : null}
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          refs={(item.evidenceRefs ?? []).join(", ") || "n/a"}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <strong>Pivot Effects</strong>
+                  {(systemDesignDna.pivot_effects ?? []).length === 0 ? (
+                    <p style={mutedParagraphStyle}>No pivot-effect analysis available.</p>
+                  ) : (
+                    (systemDesignDna.pivot_effects ?? []).map((item, index) => (
+                      <div key={`sd-pivot-effect-${index}`} style={listItemStyle}>
+                        <strong>{item.title ?? "Pivot Effect"}</strong>
+                        {item.detail ? <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>{item.detail}</p> : null}
+                        <p style={{ ...mutedParagraphStyle, marginTop: 6 }}>
+                          refs={(item.evidenceRefs ?? []).join(", ") || "n/a"}
+                        </p>
+                      </div>
                     ))
                   )}
                 </div>
@@ -2148,6 +2224,38 @@ function normalizeSystemDesignDna(value: unknown): SystemDesignDna | null {
           }),
         )
     : [];
+  const strongestSignals = Array.isArray(record.strongest_signals)
+    ? record.strongest_signals
+        .map((item) => asRecord(item))
+        .map((item) => ({
+          dimension: isSystemDesignDimensionKey(item.dimension) ? item.dimension : undefined,
+          score: numericValue(item.score) ?? undefined,
+          rationale: stringValue(item.rationale) ?? undefined,
+          evidenceRefs: asStringArray(item.evidenceRefs),
+          turnIds: asStringArray(item.turnIds),
+        }))
+    : [];
+  const blockingDimensions = Array.isArray(record.blocking_dimensions)
+    ? record.blocking_dimensions
+        .map((item) => asRecord(item))
+        .map((item) => ({
+          dimension: isSystemDesignDimensionKey(item.dimension) ? item.dimension : undefined,
+          score: numericValue(item.score) ?? undefined,
+          reason: stringValue(item.reason) ?? undefined,
+          evidenceRefs: asStringArray(item.evidenceRefs),
+          turnIds: asStringArray(item.turnIds),
+        }))
+    : [];
+  const pivotEffects = Array.isArray(record.pivot_effects)
+    ? record.pivot_effects
+        .map((item) => asRecord(item))
+        .map((item) => ({
+          title: stringValue(item.title) ?? undefined,
+          detail: stringValue(item.detail) ?? undefined,
+          evidenceRefs: asStringArray(item.evidenceRefs),
+          turnIds: asStringArray(item.turnIds),
+        }))
+    : [];
 
   return {
     requirement_clarity: requirement,
@@ -2159,6 +2267,9 @@ function normalizeSystemDesignDna(value: unknown): SystemDesignDna | null {
     calibrationNotes: asStringArray(record.calibrationNotes),
     strengths: asStringArray(record.strengths),
     weaknesses: asStringArray(record.weaknesses),
+    strongest_signals: strongestSignals,
+    blocking_dimensions: blockingDimensions,
+    pivot_effects: pivotEffects,
     evidencePins,
   };
 }

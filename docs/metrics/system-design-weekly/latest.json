@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-04-15T01:29:59.507Z",
+  "generatedAt": "2026-04-17T01:40:36.142Z",
   "calibration": {
     "total": 60,
     "matched": 35,
@@ -27,24 +27,140 @@
       "passRate": 1,
       "summary": "All system-design regression expectations passed (late bloomer recovered, bullshitter suppressed, rigid coder capped)."
     },
+    "stability": {
+      "replayCount": 3,
+      "scenarioCount": 21,
+      "maxScoreVariance": 0,
+      "maxRewardVariance": 0,
+      "expectationFlipCount": 0,
+      "summary": "Regression replay stable across 21 scenarios (max_score_var=0.0000, max_reward_var=0.0000)."
+    },
     "reports": [
       {
         "scenarioId": "late_bloomer",
         "expectationMet": true,
-        "scoreDiffFromBest": 0.5,
+        "scoreDiffFromBest": 0.84,
         "rewardDiffFromBest": 0
       },
       {
         "scenarioId": "confident_bullshitter",
         "expectationMet": true,
-        "scoreDiffFromBest": 1.19,
-        "rewardDiffFromBest": 0.04
+        "scoreDiffFromBest": 1.53,
+        "rewardDiffFromBest": 0.03
       },
       {
         "scenarioId": "rigid_coder",
         "expectationMet": true,
+        "scoreDiffFromBest": 0.34,
+        "rewardDiffFromBest": 0.08
+      },
+      {
+        "scenarioId": "late_bloomer__requirements_recovery",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.02
+      },
+      {
+        "scenarioId": "late_bloomer__api_contract_gate",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0
+      },
+      {
+        "scenarioId": "late_bloomer__capacity_focus",
+        "expectationMet": true,
         "scoreDiffFromBest": 0,
-        "rewardDiffFromBest": 0.09
+        "rewardDiffFromBest": 0
+      },
+      {
+        "scenarioId": "late_bloomer__deep_dive_rebound",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.34,
+        "rewardDiffFromBest": 0
+      },
+      {
+        "scenarioId": "late_bloomer__refinement_rebound",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.34,
+        "rewardDiffFromBest": 0.07
+      },
+      {
+        "scenarioId": "late_bloomer__wrap_guard",
+        "expectationMet": true,
+        "scoreDiffFromBest": 1.17,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "confident_bullshitter__requirements_smokescreen",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "confident_bullshitter__api_contract_handwave",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "confident_bullshitter__capacity_handwave",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "confident_bullshitter__high_level_overclaim",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "confident_bullshitter__refinement_evasion",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.34,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "confident_bullshitter__wrap_up_escape",
+        "expectationMet": true,
+        "scoreDiffFromBest": 1.17,
+        "rewardDiffFromBest": 0.07
+      },
+      {
+        "scenarioId": "rigid_coder__requirements_skip_tradeoff",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.07
+      },
+      {
+        "scenarioId": "rigid_coder__api_contract_skip_tradeoff",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "rigid_coder__capacity_done_tradeoff_missing",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "rigid_coder__high_level_fixed_design",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.84,
+        "rewardDiffFromBest": 0.03
+      },
+      {
+        "scenarioId": "rigid_coder__deep_dive_fixed_design",
+        "expectationMet": true,
+        "scoreDiffFromBest": 0.34,
+        "rewardDiffFromBest": 0.08
+      },
+      {
+        "scenarioId": "rigid_coder__wrap_up_without_tradeoff",
+        "expectationMet": true,
+        "scoreDiffFromBest": 1.17,
+        "rewardDiffFromBest": 0.1
       }
     ]
   }

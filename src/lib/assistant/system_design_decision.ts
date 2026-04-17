@@ -54,13 +54,20 @@ export function makeSystemDesignDecision(input: {
     score("ZOOM_IN", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
     score("WRAP_UP", input.currentStage, designSignals, targetLevel, handwaveSignal, gapState),
   ];
+  const grillingState = assessSystemDesignGrillingState({
+    targetLevel,
+    currentStage: input.currentStage,
+    signals: input.signals,
+    gapState,
+  });
+  const scoresWithGrilling = applyGrillingPressure(baseScores, grillingState);
 
   const chainContext = assessProblemChainContinuity({
     currentGapState: gapState,
     previousActionType: input.previousActionType ?? null,
   });
   const scoresWithInertia = applyInertia(
-    baseScores,
+    scoresWithGrilling,
     chainContext.sameChain ? input.previousActionType ?? null : null,
   );
   const sortedScores = [...scoresWithInertia].sort((left, right) => right.totalScore - left.totalScore);
@@ -152,6 +159,80 @@ export function makeSystemDesignDecision(input: {
   }
 
   return toDecision(selected.actionType, sortedScores, undefined, decisionContext);
+}
+
+function assessSystemDesignGrillingState(input: {
+  targetLevel: SystemDesignTargetLevel;
+  currentStage: SystemDesignStage;
+  signals: CandidateSignalSnapshot;
+  gapState: GapState;
+}) {
+  const highLevelTarget = input.targetLevel === "SENIOR" || input.targetLevel === "STAFF";
+  const stageEligible = input.currentStage === "DEEP_DIVE" || input.currentStage === "REFINEMENT";
+  const candidateConfidence = typeof input.signals.confidence === "number" ? input.signals.confidence : 0.5;
+  const coreScopeReady =
+    input.signals.designSignals?.signals.requirement_missing === false &&
+    input.signals.designSignals?.signals.capacity_missing === false;
+  const openGapCount = countOpenSystemDesignGaps(input.gapState);
+  const active = highLevelTarget && stageEligible && candidateConfidence >= 0.82 && coreScopeReady && openGapCount <= 2;
+
+  return {
+    active,
+    reason: active
+      ? `Grilling trigger active for ${input.targetLevel}: confidence=${candidateConfidence.toFixed(2)}, stage=${input.currentStage}, openGaps=${openGapCount}.`
+      : null,
+  };
+}
+
+function applyGrillingPressure(
+  scores: Array<{
+    actionType: SystemDesignPolicyAction;
+    reasons: Array<{ key: string; magnitude: number; kind: "signal"; detail: string }>;
+    totalScore: number;
+  }>,
+  grilling: {
+    active: boolean;
+    reason: string | null;
+  },
+) {
+  if (!grilling.active) {
+    return scores;
+  }
+
+  return scores.map((candidate) => {
+    let delta = 0;
+    if (candidate.actionType === "CHALLENGE_SPOF" || candidate.actionType === "ZOOM_IN") {
+      delta += 0.24;
+    }
+    if (candidate.actionType === "PROBE_TRADEOFF") {
+      delta += 0.16;
+    }
+    if (candidate.actionType === "WRAP_UP") {
+      delta -= 0.28;
+    }
+
+    if (delta === 0) {
+      return candidate;
+    }
+
+    const reasons = [
+      ...candidate.reasons,
+      {
+        key: "grilling_pressure",
+        magnitude: delta,
+        kind: "signal" as const,
+        detail:
+          grilling.reason ??
+          "Strong-candidate grilling is active: increase deep probes and reduce early wrap-up bias.",
+      },
+    ];
+
+    return {
+      ...candidate,
+      reasons,
+      totalScore: Number((candidate.totalScore + delta).toFixed(3)),
+    };
+  });
 }
 
 function score(

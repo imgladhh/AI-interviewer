@@ -18,6 +18,14 @@ export type SystemDesignWeeklySnapshot = {
       passRate: number;
       summary: string;
     };
+    stability?: {
+      replayCount: number;
+      scenarioCount: number;
+      maxScoreVariance: number;
+      maxRewardVariance: number;
+      expectationFlipCount: number;
+      summary: string;
+    };
     reports: Array<{
       scenarioId: string;
       expectationMet: boolean;

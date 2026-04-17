@@ -8,6 +8,8 @@ import {
 } from "@/lib/assistant/stages";
 import { buildHintingLedger, type HintLedger } from "@/lib/assistant/hinting_ledger";
 import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
+import { calculateUnifiedScore } from "@/lib/scoring/calculateUnifiedScore";
+import type { ScoringInput } from "@/lib/scoring/types";
 import type { Recommendation } from "@prisma/client";
 
 type TranscriptLike = {
@@ -362,6 +364,26 @@ type SystemDesignDna = {
   calibrationNotes?: string[];
   strengths: string[];
   weaknesses: string[];
+  strongest_signals?: Array<{
+    dimension: "requirement_clarity" | "capacity_instinct" | "tradeoff_depth" | "reliability_awareness" | "bottleneck_sensitivity";
+    score: number;
+    rationale: string;
+    evidenceRefs: string[];
+    turnIds: string[];
+  }>;
+  blocking_dimensions?: Array<{
+    dimension: "requirement_clarity" | "capacity_instinct" | "tradeoff_depth" | "reliability_awareness" | "bottleneck_sensitivity";
+    score: number;
+    reason: string;
+    evidenceRefs: string[];
+    turnIds: string[];
+  }>;
+  pivot_effects?: Array<{
+    title: string;
+    detail: string;
+    evidenceRefs: string[];
+    turnIds: string[];
+  }>;
   evidencePins: Array<{
     dimension: "requirement_clarity" | "capacity_instinct" | "tradeoff_depth" | "reliability_awareness" | "bottleneck_sensitivity";
     score: number;
@@ -2218,9 +2240,10 @@ function buildSystemDesignDna(input: {
   const tradeoffScore = scoreByMissing(signalValues.tradeoff_missed);
   const reliabilityScore = scoreByMissing(signalValues.spof_missed);
   const bottleneckScore = scoreByMissing(signalValues.bottleneck_unexamined);
+  const asStringArray = (value: unknown) =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
   const avgScore = (requirementScore + capacityScore + tradeoffScore + reliabilityScore + bottleneckScore) / 5;
   const pivotSummary = summarizeSystemDesignPivot(input.events);
-
   const baseLevelRecommendation: SystemDesignDna["levelRecommendation"] =
     avgScore >= 4.2 ? "Staff" : avgScore >= 3.4 ? "Senior" : "Mid-level";
   const levelCapResult = applySystemDesignLevelCap({
@@ -2232,6 +2255,50 @@ function buildSystemDesignDna(input: {
     bottleneckScore,
     pivotSummary,
   });
+
+  const scoringInput: ScoringInput = {
+    signals: [
+      {
+        key: "requirement_missing",
+        missing: toMissingBoolean(signalValues.requirement_missing),
+        evidence: asStringArray(refs.requirement_missing),
+      },
+      {
+        key: "capacity_missing",
+        missing: toMissingBoolean(signalValues.capacity_missing),
+        evidence: asStringArray(refs.capacity_missing),
+      },
+      {
+        key: "tradeoff_missed",
+        missing: toMissingBoolean(signalValues.tradeoff_missed),
+        evidence: asStringArray(refs.tradeoff_missed),
+      },
+      {
+        key: "spof_missed",
+        missing: toMissingBoolean(signalValues.spof_missed),
+        evidence: asStringArray(refs.spof_missed),
+      },
+      {
+        key: "bottleneck_unexamined",
+        missing: toMissingBoolean(signalValues.bottleneck_unexamined),
+        evidence: asStringArray(refs.bottleneck_unexamined),
+      },
+    ],
+    gapState: {
+      missing_capacity: toMissingBoolean(signalValues.capacity_missing) ?? true,
+      missing_tradeoff: toMissingBoolean(signalValues.tradeoff_missed) ?? true,
+      missing_reliability: toMissingBoolean(signalValues.spof_missed) ?? true,
+      missing_bottleneck: toMissingBoolean(signalValues.bottleneck_unexamined) ?? true,
+    },
+    pivots: extractPivotInputsFromEvents(input.events),
+    noiseTags: extractNoiseTagsFromEvents(input.events),
+    metadata: {
+      stage: deriveCurrentSystemDesignStage(input.events),
+    },
+    decisionTrace: extractDecisionTrace(input.events),
+    rewardTrace: extractRewardTrace(input.events),
+  };
+  const unifiedScore = calculateUnifiedScore(scoringInput);
   const levelRecommendation = levelCapResult.level;
 
   const strengths: string[] = [];
@@ -2263,82 +2330,288 @@ function buildSystemDesignDna(input: {
     weaknesses.push("Bottleneck analysis is limited; identify likely hotspots and mitigation plans.");
   }
 
-  const asStringArray = (value: unknown) =>
-    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  const evidencePins: SystemDesignDna["evidencePins"] = [
+    {
+      dimension: "requirement_clarity",
+      score: Number(requirementScore.toFixed(2)),
+      snapshotId: input.latestSignalSnapshotId,
+      turnIds: turnPins.requirement,
+      evidenceRefs: asStringArray(refs.requirement_missing),
+      textPointers: buildTextPointers({
+        evidenceRefs: asStringArray(refs.requirement_missing),
+        turnIds: turnPins.requirement,
+        transcripts: input.transcripts,
+      }),
+    },
+    {
+      dimension: "capacity_instinct",
+      score: Number(capacityScore.toFixed(2)),
+      snapshotId: input.latestSignalSnapshotId,
+      turnIds: turnPins.capacity,
+      evidenceRefs: asStringArray(refs.capacity_missing),
+      textPointers: buildTextPointers({
+        evidenceRefs: asStringArray(refs.capacity_missing),
+        turnIds: turnPins.capacity,
+        transcripts: input.transcripts,
+      }),
+    },
+    {
+      dimension: "tradeoff_depth",
+      score: Number(tradeoffScore.toFixed(2)),
+      snapshotId: input.latestSignalSnapshotId,
+      turnIds: turnPins.tradeoff,
+      evidenceRefs: asStringArray(refs.tradeoff_missed),
+      textPointers: buildTextPointers({
+        evidenceRefs: asStringArray(refs.tradeoff_missed),
+        turnIds: turnPins.tradeoff,
+        transcripts: input.transcripts,
+      }),
+    },
+    {
+      dimension: "reliability_awareness",
+      score: Number(reliabilityScore.toFixed(2)),
+      snapshotId: input.latestSignalSnapshotId,
+      turnIds: turnPins.spof,
+      evidenceRefs: asStringArray(refs.spof_missed),
+      textPointers: buildTextPointers({
+        evidenceRefs: asStringArray(refs.spof_missed),
+        turnIds: turnPins.spof,
+        transcripts: input.transcripts,
+      }),
+    },
+    {
+      dimension: "bottleneck_sensitivity",
+      score: Number(bottleneckScore.toFixed(2)),
+      snapshotId: input.latestSignalSnapshotId,
+      turnIds: turnPins.bottleneck,
+      evidenceRefs: asStringArray(refs.bottleneck_unexamined),
+      textPointers: buildTextPointers({
+        evidenceRefs: asStringArray(refs.bottleneck_unexamined),
+        turnIds: turnPins.bottleneck,
+        transcripts: input.transcripts,
+      }),
+    },
+  ];
+  const pivotTurnIds = scoringInput.pivots
+    .map((item) => item.turnId)
+    .filter((item): item is string => typeof item === "string" && item.length > 0);
+  const strongestSignals = buildStrongestSystemDesignSignals(evidencePins);
+  const blockingDimensions = buildBlockingSystemDesignDimensions({
+    evidencePins,
+    appliedCaps: unifiedScore.appliedCaps,
+  });
+  const pivotEffects = buildSystemDesignPivotEffects({
+    pivotSummary: unifiedScore.pivotSummary,
+    confidence: unifiedScore.confidence,
+    turnIds: pivotTurnIds,
+  });
 
   return {
-    requirement_clarity: Number(requirementScore.toFixed(2)),
-    capacity_instinct: Number(capacityScore.toFixed(2)),
-    tradeoff_depth: Number(tradeoffScore.toFixed(2)),
-    reliability_awareness: Number(reliabilityScore.toFixed(2)),
-    bottleneck_sensitivity: Number(bottleneckScore.toFixed(2)),
+    requirement_clarity: Number((unifiedScore.dimensionScores.requirement_clarity ?? requirementScore).toFixed(2)),
+    capacity_instinct: Number((unifiedScore.dimensionScores.capacity_instinct ?? capacityScore).toFixed(2)),
+    tradeoff_depth: Number((unifiedScore.dimensionScores.tradeoff_depth ?? tradeoffScore).toFixed(2)),
+    reliability_awareness: Number((unifiedScore.dimensionScores.reliability_awareness ?? reliabilityScore).toFixed(2)),
+    bottleneck_sensitivity: Number((unifiedScore.dimensionScores.bottleneck_sensitivity ?? bottleneckScore).toFixed(2)),
     levelRecommendation,
-    calibrationNotes: levelCapResult.notes,
+    calibrationNotes: [...levelCapResult.notes, ...unifiedScore.explanation],
     strengths: strengths.slice(0, 3),
     weaknesses: weaknesses.slice(0, 3),
-    evidencePins: [
-      {
-        dimension: "requirement_clarity",
-        score: Number(requirementScore.toFixed(2)),
-        snapshotId: input.latestSignalSnapshotId,
-        turnIds: turnPins.requirement,
-        evidenceRefs: asStringArray(refs.requirement_missing),
-        textPointers: buildTextPointers({
-          evidenceRefs: asStringArray(refs.requirement_missing),
-          turnIds: turnPins.requirement,
-          transcripts: input.transcripts,
-        }),
-      },
-      {
-        dimension: "capacity_instinct",
-        score: Number(capacityScore.toFixed(2)),
-        snapshotId: input.latestSignalSnapshotId,
-        turnIds: turnPins.capacity,
-        evidenceRefs: asStringArray(refs.capacity_missing),
-        textPointers: buildTextPointers({
-          evidenceRefs: asStringArray(refs.capacity_missing),
-          turnIds: turnPins.capacity,
-          transcripts: input.transcripts,
-        }),
-      },
-      {
-        dimension: "tradeoff_depth",
-        score: Number(tradeoffScore.toFixed(2)),
-        snapshotId: input.latestSignalSnapshotId,
-        turnIds: turnPins.tradeoff,
-        evidenceRefs: asStringArray(refs.tradeoff_missed),
-        textPointers: buildTextPointers({
-          evidenceRefs: asStringArray(refs.tradeoff_missed),
-          turnIds: turnPins.tradeoff,
-          transcripts: input.transcripts,
-        }),
-      },
-      {
-        dimension: "reliability_awareness",
-        score: Number(reliabilityScore.toFixed(2)),
-        snapshotId: input.latestSignalSnapshotId,
-        turnIds: turnPins.spof,
-        evidenceRefs: asStringArray(refs.spof_missed),
-        textPointers: buildTextPointers({
-          evidenceRefs: asStringArray(refs.spof_missed),
-          turnIds: turnPins.spof,
-          transcripts: input.transcripts,
-        }),
-      },
-      {
-        dimension: "bottleneck_sensitivity",
-        score: Number(bottleneckScore.toFixed(2)),
-        snapshotId: input.latestSignalSnapshotId,
-        turnIds: turnPins.bottleneck,
-        evidenceRefs: asStringArray(refs.bottleneck_unexamined),
-        textPointers: buildTextPointers({
-          evidenceRefs: asStringArray(refs.bottleneck_unexamined),
-          turnIds: turnPins.bottleneck,
-          transcripts: input.transcripts,
-        }),
-      },
-    ],
+    strongest_signals: strongestSignals,
+    blocking_dimensions: blockingDimensions,
+    pivot_effects: pivotEffects,
+    evidencePins,
   };
+}
+
+function toMissingBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function extractPivotInputsFromEvents(events: SessionEventLike[]): ScoringInput["pivots"] {
+  const pivots: ScoringInput["pivots"] = [];
+  for (const event of events) {
+    if (event.eventType !== "REWARD_RECORDED") {
+      continue;
+    }
+    const payload = asRecord(event.payloadJson);
+    const reward = asRecord(payload.reward);
+    const components = asRecord(reward.components);
+    const impact = numberValue(components.pivotImpact);
+    if (impact <= 0) {
+      continue;
+    }
+    pivots.push({
+      turnId: extractTranscriptSegmentId(payload),
+      triggerAction: "LIGHT",
+      impactScore: impact,
+    });
+  }
+  return pivots;
+}
+
+function extractNoiseTagsFromEvents(events: SessionEventLike[]): ScoringInput["noiseTags"] {
+  const tags = new Set<"STT_CORRUPTION" | "PARTIAL_TRANSCRIPT" | "INTERRUPTED_TURN">();
+  for (const event of events) {
+    if (event.eventType !== "REWARD_RECORDED") {
+      continue;
+    }
+    const reward = asRecord(asRecord(event.payloadJson).reward);
+    const noiseTags = Array.isArray(reward.noiseTags)
+      ? reward.noiseTags.filter((item): item is "STT_CORRUPTION" | "PARTIAL_TRANSCRIPT" | "INTERRUPTED_TURN" => {
+          return item === "STT_CORRUPTION" || item === "PARTIAL_TRANSCRIPT" || item === "INTERRUPTED_TURN";
+        })
+      : [];
+    for (const noiseTag of noiseTags) {
+      tags.add(noiseTag);
+    }
+  }
+  return [...tags];
+}
+
+function extractDecisionTrace(events: SessionEventLike[]): ScoringInput["decisionTrace"] {
+  const trace: ScoringInput["decisionTrace"] = [];
+  for (const event of events) {
+    if (event.eventType !== "DECISION_RECORDED") {
+      continue;
+    }
+    const decision = asRecord(asRecord(event.payloadJson).decision);
+    const rescueMode = stringValue(decision.rescueMode);
+    trace.push({
+      turnId: extractTranscriptSegmentId(asRecord(event.payloadJson)),
+      action: stringValue(decision.action),
+      systemDesignActionType: stringValue(decision.systemDesignActionType),
+      rescueMode:
+        rescueMode === "heavy_rescue" || rescueMode === "light_rescue" || rescueMode === "none"
+          ? rescueMode
+          : null,
+    });
+  }
+  return trace;
+}
+
+function extractRewardTrace(events: SessionEventLike[]): ScoringInput["rewardTrace"] {
+  const trace: ScoringInput["rewardTrace"] = [];
+  for (const event of events) {
+    if (event.eventType !== "REWARD_RECORDED") {
+      continue;
+    }
+    const payload = asRecord(event.payloadJson);
+    const reward = asRecord(payload.reward);
+    const noiseTags = Array.isArray(reward.noiseTags)
+      ? reward.noiseTags.filter((item): item is "STT_CORRUPTION" | "PARTIAL_TRANSCRIPT" | "INTERRUPTED_TURN" => {
+          return item === "STT_CORRUPTION" || item === "PARTIAL_TRANSCRIPT" || item === "INTERRUPTED_TURN";
+        })
+      : [];
+    trace.push({
+      turnId: extractTranscriptSegmentId(payload),
+      total: numberValue(reward.total),
+      noiseTags,
+    });
+  }
+  return trace;
+}
+
+function extractTranscriptSegmentId(payload: Record<string, unknown>) {
+  const trace = asRecord(payload.trace);
+  return stringValue(trace.transcriptSegmentId);
+}
+
+function buildStrongestSystemDesignSignals(
+  evidencePins: SystemDesignDna["evidencePins"],
+): NonNullable<SystemDesignDna["strongest_signals"]> {
+  return [...evidencePins]
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .map((pin) => ({
+      dimension: pin.dimension,
+      score: pin.score,
+      rationale: `${toSystemDesignDimensionLabel(pin.dimension)} scored ${pin.score.toFixed(2)}/5 with evidence-backed coverage.`,
+      evidenceRefs: pin.evidenceRefs,
+      turnIds: pin.turnIds,
+    }));
+}
+
+function buildBlockingSystemDesignDimensions(input: {
+  evidencePins: SystemDesignDna["evidencePins"];
+  appliedCaps: string[];
+}): NonNullable<SystemDesignDna["blocking_dimensions"]> {
+  const capSet = new Set(input.appliedCaps);
+  const blocked = [...input.evidencePins]
+    .filter((pin) => pin.score < 4 || capSet.has(pin.dimension))
+    .sort((left, right) => left.score - right.score)
+    .slice(0, 3)
+    .map((pin) => ({
+      dimension: pin.dimension,
+      score: pin.score,
+      reason: capSet.has(pin.dimension)
+        ? `${toSystemDesignDimensionLabel(pin.dimension)} is currently enforcing a hard cap in unified scoring.`
+        : `${toSystemDesignDimensionLabel(pin.dimension)} remains below strong threshold and is limiting level recommendation.`,
+      evidenceRefs: pin.evidenceRefs,
+      turnIds: pin.turnIds,
+    }));
+  return blocked;
+}
+
+function buildSystemDesignPivotEffects(input: {
+  pivotSummary: { adjustment: number; detectedCount: number; nudgeConversionRate: number; timeToInsight: number | null; hintsBeforeInsight: number } | undefined;
+  confidence: number;
+  turnIds: string[];
+}): NonNullable<SystemDesignDna["pivot_effects"]> {
+  const summary = input.pivotSummary;
+  if (!summary || summary.detectedCount === 0) {
+    return [
+      {
+        title: "No pivot lift detected",
+        detail: "No hint-to-insight pivot satisfied threshold in this session; level lift from pivot remained 0.",
+        evidenceRefs: ["pivot_detected_count=0"],
+        turnIds: [],
+      },
+    ];
+  }
+
+  return [
+    {
+      title: "Hint-to-insight conversion",
+      detail: `Detected ${summary.detectedCount} pivot(s) with adjustment +${summary.adjustment.toFixed(2)} and conversion rate ${(summary.nudgeConversionRate * 100).toFixed(0)}%.`,
+      evidenceRefs: [
+        `pivot_adjustment=${summary.adjustment.toFixed(2)}`,
+        `nudge_conversion_rate=${summary.nudgeConversionRate.toFixed(2)}`,
+      ],
+      turnIds: input.turnIds,
+    },
+    {
+      title: "Pivot latency and dependence",
+      detail: `Time to first insight: ${summary.timeToInsight ?? "n/a"} turn(s); hints before insight: ${summary.hintsBeforeInsight}.`,
+      evidenceRefs: [
+        `time_to_insight=${summary.timeToInsight ?? "n/a"}`,
+        `hints_before_insight=${summary.hintsBeforeInsight}`,
+      ],
+      turnIds: input.turnIds,
+    },
+    {
+      title: "Confidence impact",
+      detail: `Session confidence after pivot accounting is ${(input.confidence * 100).toFixed(0)}%.`,
+      evidenceRefs: [`confidence=${input.confidence.toFixed(2)}`],
+      turnIds: input.turnIds,
+    },
+  ];
+}
+
+function toSystemDesignDimensionLabel(
+  dimension: "requirement_clarity" | "capacity_instinct" | "tradeoff_depth" | "reliability_awareness" | "bottleneck_sensitivity",
+) {
+  switch (dimension) {
+    case "requirement_clarity":
+      return "Requirement Clarity";
+    case "capacity_instinct":
+      return "Capacity Instinct";
+    case "tradeoff_depth":
+      return "Tradeoff Depth";
+    case "reliability_awareness":
+      return "Reliability Awareness";
+    case "bottleneck_sensitivity":
+      return "Bottleneck Sensitivity";
+  }
 }
 
 function applySystemDesignLevelCap(input: {

@@ -1,5 +1,9 @@
 import { writeFile } from "node:fs/promises";
-import { evaluateSystemDesignRegressionHealth, runSystemDesignRegressionLab } from "@/lib/assistant/policy-regression";
+import {
+  evaluateSystemDesignRegressionHealth,
+  evaluateSystemDesignRegressionStability,
+  runSystemDesignRegressionLab,
+} from "@/lib/assistant/policy-regression";
 import {
   evaluateSystemDesignCalibrationPack,
   summarizeSystemDesignCalibrationPack,
@@ -12,6 +16,7 @@ type EvalPayload = {
   regression: {
     reports: ReturnType<typeof runSystemDesignRegressionLab>;
     health: ReturnType<typeof evaluateSystemDesignRegressionHealth>;
+    stability: ReturnType<typeof evaluateSystemDesignRegressionStability>;
   };
 };
 
@@ -28,6 +33,7 @@ async function main() {
   const calibrationCoverage = summarizeSystemDesignCalibrationPack();
   const reports = runSystemDesignRegressionLab();
   const health = evaluateSystemDesignRegressionHealth(reports);
+  const stability = evaluateSystemDesignRegressionStability();
 
   const payload: EvalPayload = {
     generatedAt: new Date().toISOString(),
@@ -36,6 +42,7 @@ async function main() {
     regression: {
       reports,
       health,
+      stability,
     },
   };
 
