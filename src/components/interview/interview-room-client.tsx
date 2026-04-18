@@ -1697,7 +1697,18 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                       </p>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                         {systemDesignExpectation.mustCover.map((item) => (
-                          <span key={item} style={stagePillStyle}>
+                          <span
+                            key={item}
+                            style={{
+                              borderRadius: 999,
+                              border: "1px solid var(--border)",
+                              padding: "5px 10px",
+                              fontSize: 12,
+                              fontWeight: 700,
+                              background: "var(--surface-alt)",
+                              color: "var(--muted)",
+                            }}
+                          >
                             {item}
                           </span>
                         ))}
