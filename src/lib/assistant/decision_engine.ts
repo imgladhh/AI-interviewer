@@ -201,6 +201,7 @@ export function makeCandidateDecision(input: {
   policyConfig?: PolicyConfig;
   signals: CandidateSignalSnapshot;
   recentEvents?: Array<{ eventType: string; eventTime?: Date | string; payloadJson?: unknown }>;
+  recentTranscripts?: Array<{ speaker: "USER" | "AI" | "SYSTEM"; text: string }>;
   latestExecutionRun?: ExecutionRunLike | null;
   intent?: IntentDecision;
   trajectory?: TrajectoryEstimate;
@@ -210,6 +211,7 @@ export function makeCandidateDecision(input: {
   const ledger = buildMemoryLedger({
     currentStage,
     recentEvents: input.recentEvents ?? [],
+    recentTranscripts: input.recentTranscripts ?? [],
     signals,
     latestExecutionRun,
   });
@@ -378,16 +380,16 @@ export function makeCandidateDecision(input: {
         action: "give_hint",
         target: "reasoning",
         question:
-          "Let me unstick this. Start from this seed and finish it: 'Use BFS from beginWord; each expansion changes one letter and stays in dictionary.' Now add one data structure you need and state time/space complexity in one line.",
+          "Let me unstick this. Use this neutral seed and finish it for the current problem: name the core pattern, name the main state or data structure, walk one tiny input through one step, then state time and space complexity in one line.",
         reason:
           "Conversation-health escalated to rescue mode, so the interviewer should provide a concrete starter instead of repeating the same request style.",
         confidence: 0.91,
         echoRecoveryMode: "narrow_format",
         echoRecoveryAttempt: echoRecoveryAttempt + 1,
-        targetCodeLine: "the first BFS expansion step and one data structure choice",
+        targetCodeLine: "one problem-specific core pattern, one state/data-structure choice, and one tiny walkthrough step",
         specificIssue: "The candidate is looping on repeated wording and needs a starter scaffold to produce new evidence.",
         expectedAnswer:
-          "One completed starter statement, one concrete data-structure choice, and explicit time/space complexity.",
+          "One problem-specific starter statement, one concrete data-structure choice, one tiny walkthrough step, and explicit time/space complexity.",
         suggestedStage: "APPROACH_DISCUSSION",
         policyAction: policy.recommendedAction,
       });

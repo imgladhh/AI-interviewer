@@ -38,6 +38,12 @@ const baseLedger: MemoryLedger = {
   candidateDeclaredDone: false,
   implementationAlreadyDone: false,
   finalWrapUpDelivered: false,
+  contentMemory: {
+    candidateTerms: [],
+    latestQuestion: undefined,
+    latestAnswer: undefined,
+    latestAnswerSummary: undefined,
+  },
   summary: [],
   shouldAvoidTarget: () => false,
 };

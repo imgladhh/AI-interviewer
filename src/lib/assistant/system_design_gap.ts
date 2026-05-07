@@ -17,28 +17,32 @@ export function deriveSystemDesignGapState(input: {
     bottleneck_unexamined: boolean;
   };
   handwaveCategories?: HandwaveCategory[];
+  gapClosures?: Partial<Record<SystemDesignGapKind, string>>;
   snapshotGapState?: Partial<SystemDesignGapState> | null;
 }): SystemDesignGapState {
+  const closures = input.gapClosures ?? {};
   if (input.snapshotGapState) {
     return {
-      missing_capacity: Boolean(input.snapshotGapState.missing_capacity),
-      missing_tradeoff: Boolean(input.snapshotGapState.missing_tradeoff),
-      missing_reliability: Boolean(input.snapshotGapState.missing_reliability),
-      missing_bottleneck: Boolean(input.snapshotGapState.missing_bottleneck),
+      missing_capacity: !closures.capacity && Boolean(input.snapshotGapState.missing_capacity),
+      missing_tradeoff: !closures.tradeoff && Boolean(input.snapshotGapState.missing_tradeoff),
+      missing_reliability: !closures.reliability && Boolean(input.snapshotGapState.missing_reliability),
+      missing_bottleneck: !closures.bottleneck && Boolean(input.snapshotGapState.missing_bottleneck),
     };
   }
 
   const categories = input.handwaveCategories ?? [];
   return {
     missing_capacity:
-      input.signals.capacity_missing ||
-      categories.includes("unquantified_scaling_claim"),
+      !closures.capacity &&
+      (input.signals.capacity_missing ||
+        categories.includes("unquantified_scaling_claim")),
     missing_tradeoff:
-      input.signals.tradeoff_missed ||
-      categories.includes("tradeoff_evasion") ||
-      categories.includes("unjustified_component_choice"),
-    missing_reliability: input.signals.spof_missed,
-    missing_bottleneck: input.signals.bottleneck_unexamined,
+      !closures.tradeoff &&
+      (input.signals.tradeoff_missed ||
+        categories.includes("tradeoff_evasion") ||
+        categories.includes("unjustified_component_choice")),
+    missing_reliability: !closures.reliability && input.signals.spof_missed,
+    missing_bottleneck: !closures.bottleneck && input.signals.bottleneck_unexamined,
   };
 }
 

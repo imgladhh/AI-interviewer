@@ -58,6 +58,7 @@ export type DesignSignalSnapshot = {
   signals: DesignSignals;
   evidenceRefs: Record<DesignSignalKey, string[]>;
   gapState?: GapState;
+  gapClosures?: Partial<Record<"capacity" | "tradeoff" | "reliability" | "bottleneck", string>>;
   primaryGap?: "capacity" | "tradeoff" | "reliability" | "bottleneck" | null;
   recommendedActionByGap?: "ASK_CAPACITY" | "PROBE_TRADEOFF" | "CHALLENGE_SPOF" | "ZOOM_IN" | null;
   summary: string;
@@ -251,8 +252,8 @@ export async function extractCandidateSignalsSmart(input: {
       if (observed) {
         return observed;
       }
-    } catch {
-      // Fall through to the next provider or heuristics.
+    } catch (error) {
+      logObserverProviderFailure(provider, error);
     }
   }
 
@@ -272,9 +273,23 @@ function resolveUnderstandingState(
     return "confused";
   }
 
-  if (currentStage !== "PROBLEM_UNDERSTANDING" || hasClarificationSignals) {
+  if (hasClarificationSignals) {
     evidence.push("Candidate referenced constraints, examples, or output expectations.");
     return "clear";
+  }
+
+  if (currentStage !== "PROBLEM_UNDERSTANDING") {
+    const hasLaterStageSolutionSignals =
+      /\b(hash map|hash table|two pointers|sliding window|binary search|dfs|bfs|heap|stack|queue|dynamic programming|prefix sum|sort|loop|iterate|return|complexity|test|edge case|tradeoff)\b/.test(
+        normalizedUserText,
+      );
+    if (hasLaterStageSolutionSignals) {
+      evidence.push("Candidate is discussing later-stage solution details, which suggests the basic prompt framing is workable.");
+      return "clear";
+    }
+
+    evidence.push("Candidate is beyond initial framing, but this turn did not add explicit constraint or example evidence.");
+    return "partial";
   }
 
   evidence.push("Candidate has started reasoning, but prompt framing still looks incomplete.");
@@ -342,6 +357,11 @@ function resolveCodeQualityState(
   evidence: string[],
 ): CandidateCodeQualityState {
   if (!latestRun) {
+    if (/\b(test|edge case|fix|debug)\b/.test(normalizedUserText)) {
+      evidence.push("Candidate is iterating on implementation or validation without a fresh execution signal.");
+      return "partial";
+    }
+
     return "unknown";
   }
 
@@ -355,11 +375,7 @@ function resolveCodeQualityState(
     return "buggy";
   }
 
-  if (/\b(test|edge case|fix|debug)\b/.test(normalizedUserText)) {
-    evidence.push("Candidate is iterating on implementation but does not yet have a passing signal.");
-    return "partial";
-  }
-
+  evidence.push("Execution state was present but not conclusive, so implementation quality remains partial.");
   return "partial";
 }
 
@@ -774,6 +790,11 @@ function resolveObserverProviderSequence() {
   return sequence;
 }
 
+function logObserverProviderFailure(provider: "gemini" | "openai", error: unknown) {
+  const message = error instanceof Error ? error.message : "Unknown observer provider failure.";
+  console.warn(`[assistant:signal-observer] ${provider} failed; falling back to the next observer or heuristics. ${message}`);
+}
+
 async function observeWithGemini(
   input: {
     currentStage: CodingInterviewStage;
@@ -1006,6 +1027,7 @@ function extractSystemDesignSignals(
     .map((item) => item.segment.text.toLowerCase())
     .join(" ")
     .trim();
+  const gapClosures = detectSystemDesignGapClosures(normalizedText);
 
   const functionalBoundaryPass =
     /\b(requirement|scope|must support|should support|api|read path|write path|service boundary|component)\b/.test(
@@ -1032,23 +1054,26 @@ function extractSystemDesignSignals(
     /\b(shard|partition|replica|cache|node|capacity|autoscal|queue|database|db|throughput|storage)\b[\s\S]{0,80}\b\d+(?:\.\d+)?\s*(qps|rps|tps|req\/s|k|m|b|gb|tb|mb|users|dau|mau)\b/.test(
       normalizedText,
     );
-  const capacityPass = hasEstimate && estimateUsedInDesign;
+  const capacityPass = (hasEstimate && estimateUsedInDesign) || Boolean(gapClosures.capacity);
 
   const tradeoffPass =
-    /\b(vs|versus|alternative|option a|option b|either|instead of)\b/.test(normalizedText) &&
-    /\b(pro|con|advantage|disadvantage|trade-?off|benefit|drawback|however|but)\b/.test(normalizedText);
+    (/\b(vs|versus|alternative|option a|option b|either|instead of)\b/.test(normalizedText) &&
+      /\b(pro|con|advantage|disadvantage|trade-?off|benefit|drawback|however|but)\b/.test(normalizedText)) ||
+    Boolean(gapClosures.tradeoff);
 
   const spofPass =
-    /\b(single point of failure|spof|single node|single leader|single region|single az)\b/.test(normalizedText) &&
-    /\b(replic|multi-az|multi region|failover|redundan|backup|retry|circuit breaker|leader election)\b/.test(
-      normalizedText,
-    );
+    (/\b(single point of failure|spof|single node|single leader|single region|single az)\b/.test(normalizedText) &&
+      /\b(replic|multi-az|multi region|failover|redundan|backup|retry|circuit breaker|leader election)\b/.test(
+        normalizedText,
+      )) ||
+    Boolean(gapClosures.reliability);
 
   const bottleneckPass =
-    /\b(bottleneck|hotspot|hot key|latency spike|queue buildup|backpressure|throughput limit)\b/.test(normalizedText) &&
-    /\b(optimi[sz]|scale out|cache|index|batch|async|partition|shard|cdn|read replica|denormali[sz])\b/.test(
-      normalizedText,
-    );
+    (/\b(bottleneck|hotspot|hot key|latency spike|queue buildup|backpressure|throughput limit)\b/.test(normalizedText) &&
+      /\b(optimi[sz]|scale out|cache|index|batch|async|partition|shard|cdn|read replica|denormali[sz])\b/.test(
+        normalizedText,
+      )) ||
+    Boolean(gapClosures.bottleneck);
 
   const signals: DesignSignals = {
     requirement_missing: !requirementPass,
@@ -1098,6 +1123,7 @@ function extractSystemDesignSignals(
   const gapState = deriveSystemDesignGapState({
     signals,
     handwaveCategories: depthAssessment.categories,
+    gapClosures,
   });
   const primaryGap = pickPrimarySystemDesignGap(gapState);
   const recommendedActionByGap = routeSystemDesignActionByGap(gapState);
@@ -1120,6 +1146,7 @@ function extractSystemDesignSignals(
     signals,
     evidenceRefs,
     gapState,
+    gapClosures,
     primaryGap,
     recommendedActionByGap,
     summary: `${summary}; ${handwaveSummary}${gapSummary ? `; ${gapSummary}` : ""}${recommendedActionByGap ? `; route=${recommendedActionByGap}` : ""}`,
@@ -1158,6 +1185,44 @@ function computePreviousLowDetailStreak(recentEvents: SessionEventLike[]) {
     }
   }
   return streak;
+}
+
+function detectSystemDesignGapClosures(normalizedText: string) {
+  const hasExplicitReasoning =
+    /\b(assume|assuming|given|because|since|for this scope|out of scope|not required|acceptable|guarantee|constraint)\b/.test(
+      normalizedText,
+    );
+  if (!hasExplicitReasoning) {
+    return {};
+  }
+
+  const closures: Partial<Record<"capacity" | "tradeoff" | "reliability" | "bottleneck", string>> = {};
+
+  if (/\b(qps|rps|traffic|scale|capacity|users|dau|mau|throughput|gb|tb|storage)\b/.test(normalizedText)) {
+    closures.capacity = "Candidate provided an explicit scope or sizing assumption that is sufficient for the current design branch.";
+  }
+  if (/\b(tradeoff|instead of|rather than|versus|vs|compared to|option a|option b|alternative)\b/.test(normalizedText)) {
+    closures.tradeoff = "Candidate justified a design choice with an explicit constraint or tradeoff argument.";
+  }
+  if (
+    /\b(single region|single node|spof|availability|reliability|failover|replica|multi-region|multi az|out of scope|acceptable)\b/.test(
+      normalizedText,
+    )
+  ) {
+    closures.reliability = "Candidate addressed reliability scope with either a mitigation or an explicit acceptable-risk assumption.";
+  }
+  if (
+    /\b(bottleneck|hotspot|hot key|fanout|database layer|queue buildup|backpressure|throughput limit)\b/.test(
+      normalizedText,
+    ) &&
+    /\b(cache|index|batch|async|partition|shard|scale out|read replica|denormali[sz]|queue|backpressure|rate limit)\b/.test(
+      normalizedText,
+    )
+  ) {
+    closures.bottleneck = "Candidate addressed the bottleneck through an optimization or a scoped argument for why it is not primary.";
+  }
+
+  return closures;
 }
 
 function collectUserEvidenceRefs(

@@ -48,6 +48,34 @@ describe("system design gap routing", () => {
     });
   });
 
+  it("applies explicit gap closures even when snapshot gap state exists", () => {
+    const gap = deriveSystemDesignGapState({
+      signals: {
+        capacity_missing: true,
+        tradeoff_missed: true,
+        spof_missed: true,
+        bottleneck_unexamined: true,
+      },
+      snapshotGapState: {
+        missing_capacity: true,
+        missing_tradeoff: true,
+        missing_reliability: true,
+        missing_bottleneck: true,
+      },
+      gapClosures: {
+        reliability: "Candidate scoped single-region risk as acceptable.",
+        tradeoff: "Candidate compared two concrete options.",
+      },
+    });
+
+    expect(gap).toEqual({
+      missing_capacity: true,
+      missing_tradeoff: false,
+      missing_reliability: false,
+      missing_bottleneck: true,
+    });
+  });
+
   it("routes to action by primary gap priority", () => {
     expect(
       pickPrimarySystemDesignGap({

@@ -56,6 +56,24 @@ describe("generateAssistantTurn", () => {
     expect(result.reply).not.toMatch(/implement|write code|run tests/i);
   });
 
+  it("maps system design stage into signal extraction instead of using problem-understanding forever", async () => {
+    const result = await generateAssistantTurn({
+      mode: "SYSTEM_DESIGN",
+      questionTitle: "Design News Feed",
+      questionPrompt: "Design a scalable news feed.",
+      currentStage: "DEEP_DIVE",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "We can use cache and queues to handle feed fanout, but I have not quantified the bottleneck yet.",
+        },
+      ],
+    });
+
+    expect(result.signals?.summary).toMatch(/complexity rigor is partial/i);
+    expect(result.signals?.evidence.join(" ")).not.toMatch(/prompt framing still looks incomplete/i);
+  });
+
   it("asks about debugging after an execution error", async () => {
     const result = await generateAssistantTurn({
       mode: "CODING",

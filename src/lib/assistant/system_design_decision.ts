@@ -26,12 +26,20 @@ export function makeSystemDesignDecision(input: {
   recentTranscripts?: Array<{ speaker: "USER" | "AI" | "SYSTEM"; text: string }>;
   recentEvents?: Array<{ eventType: string; payloadJson?: unknown }>;
 }): SystemDesignDecision {
-  const designSignals = input.signals.designSignals?.signals ?? {
+  const rawDesignSignals = input.signals.designSignals?.signals ?? {
     requirement_missing: true,
     capacity_missing: true,
     tradeoff_missed: true,
     spof_missed: true,
     bottleneck_unexamined: true,
+  };
+  const gapClosures = input.signals.designSignals?.gapClosures ?? {};
+  const designSignals = {
+    ...rawDesignSignals,
+    capacity_missing: gapClosures.capacity ? false : rawDesignSignals.capacity_missing,
+    tradeoff_missed: gapClosures.tradeoff ? false : rawDesignSignals.tradeoff_missed,
+    spof_missed: gapClosures.reliability ? false : rawDesignSignals.spof_missed,
+    bottleneck_unexamined: gapClosures.bottleneck ? false : rawDesignSignals.bottleneck_unexamined,
   };
   const handwaveSignal = input.signals.designSignals?.handwave;
   const gapState = deriveSystemDesignGapState({
@@ -42,6 +50,7 @@ export function makeSystemDesignDecision(input: {
       bottleneck_unexamined: designSignals.bottleneck_unexamined,
     },
     handwaveCategories: handwaveSignal?.categories,
+    gapClosures,
     snapshotGapState: input.signals.designSignals?.gapState,
   });
   const targetLevel = normalizeSystemDesignTargetLevel(input.targetLevel);

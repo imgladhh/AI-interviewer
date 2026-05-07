@@ -936,6 +936,7 @@ describe("makeCandidateDecision", () => {
     expect(["give_hint", "ask_for_clarification"]).toContain(result.action);
     expect(result.question).toMatch(/loop|unstick|template|do not repeat|seed/i);
     expect(result.question).not.toMatch(/summarize your approach/i);
+    expect(result.question).not.toMatch(/beginWord|word ladder|changes one letter|dictionary/i);
   });
 
   it("holds and listens when confidence is low but the candidate still has the floor", () => {

@@ -40,6 +40,7 @@ import {
   type SystemDesignStage,
 } from "@/lib/assistant/stages";
 import { makeSystemDesignDecision, type SystemDesignDecision } from "@/lib/assistant/system_design_decision";
+import { extractCandidateTerms } from "@/lib/assistant/candidate_terms";
 import { estimateOpenAiTextCost, estimateTokens } from "@/lib/usage/cost";
 import { assessSessionBudget } from "@/lib/usage/budget";
 import { resolveAssistantLeadInDelayMs } from "@/lib/voice/turn-taking";
@@ -158,7 +159,7 @@ async function generateSystemDesignAssistantTurn(
 ): Promise<GenerateAssistantTurnResult> {
   const currentStage = normalizeSystemDesignStage(input.currentStage);
   const signals = await extractCandidateSignalsSmart({
-    currentStage: "PROBLEM_UNDERSTANDING",
+    currentStage: mapSystemDesignStageToSignalStage(currentStage),
     mode: "SYSTEM_DESIGN",
     systemDesignStage: currentStage,
     recentTranscripts: input.recentTranscripts,
@@ -172,7 +173,11 @@ async function generateSystemDesignAssistantTurn(
     input.recentEvents,
     input.recentTranscripts,
   );
-  const reply = buildSystemDesignFallbackReply(decision, findLatestTurn(input.recentTranscripts, "AI") ?? undefined);
+  const reply = buildSystemDesignFallbackReply(
+    decision,
+    findLatestTurn(input.recentTranscripts, "AI") ?? undefined,
+    buildFollowUpContext(input.recentTranscripts),
+  );
   const suggestedStage = inferSuggestedSystemDesignStage({
     currentStage: currentStage,
     latestUserTurn: findLatestTurn(input.recentTranscripts, "USER"),
@@ -273,7 +278,7 @@ async function* streamSystemDesignAssistantTurn(
 ): AsyncGenerator<StreamingAssistantTurnChunk> {
   const currentStage = normalizeSystemDesignStage(input.currentStage);
   const signals = await extractCandidateSignalsSmart({
-    currentStage: "PROBLEM_UNDERSTANDING",
+    currentStage: mapSystemDesignStageToSignalStage(currentStage),
     mode: "SYSTEM_DESIGN",
     systemDesignStage: currentStage,
     recentTranscripts: input.recentTranscripts,
@@ -287,7 +292,11 @@ async function* streamSystemDesignAssistantTurn(
     input.recentEvents,
     input.recentTranscripts,
   );
-  const reply = buildSystemDesignFallbackReply(decision, findLatestTurn(input.recentTranscripts, "AI") ?? undefined);
+  const reply = buildSystemDesignFallbackReply(
+    decision,
+    findLatestTurn(input.recentTranscripts, "AI") ?? undefined,
+    buildFollowUpContext(input.recentTranscripts),
+  );
   const suggestedStage = inferSuggestedSystemDesignStage({
     currentStage: currentStage,
     latestUserTurn: findLatestTurn(input.recentTranscripts, "USER"),
@@ -989,9 +998,11 @@ function buildInterviewerPrompt(
   const ledger = buildMemoryLedger({
     currentStage: stage,
     recentEvents: input.recentEvents,
+    recentTranscripts: input.recentTranscripts,
     signals,
     latestExecutionRun: input.latestExecutionRun,
   });
+  const followUpContext = buildFollowUpContext(input.recentTranscripts);
   const calibration = assessLatentCalibration({
     signals,
     ledger,
@@ -1064,7 +1075,8 @@ function buildInterviewerPrompt(
     decision.expectedAnswer
       ? `Expected answer contract: push the candidate toward this exact answer shape: ${decision.expectedAnswer}`
       : null,
-    `Reply strategy: ${describeReplyStrategy(decision, signals)}`,
+    `Follow-up continuity context: ${formatFollowUpContext(followUpContext)}`,
+    `Reply strategy: ${describeReplyStrategy(decision, signals, followUpContext)}`,
     decision.hintStyle ? `Required hint style: ${decision.hintStyle}` : null,
     decision.hintLevel ? `Required hint level: ${decision.hintLevel}` : null,
     decision.rescueMode ? `Hint rescue mode: ${decision.rescueMode}` : null,
@@ -1329,6 +1341,7 @@ function generateFallbackTurn(
     signals,
     currentStage,
     previousAiTurn: latestAiTurn?.text,
+    followUpContext: buildFollowUpContext(input.recentTranscripts),
   });
 
   if (strategicReply) {
@@ -1938,6 +1951,22 @@ function normalizeSystemDesignStage(stage: string | null | undefined): SystemDes
   return isSystemDesignStage(stage) ? stage : "REQUIREMENTS";
 }
 
+function mapSystemDesignStageToSignalStage(stage: SystemDesignStage): CodingInterviewStage {
+  switch (stage) {
+    case "REQUIREMENTS":
+      return "PROBLEM_UNDERSTANDING";
+    case "API_CONTRACT_CHECK":
+    case "HIGH_LEVEL":
+      return "APPROACH_DISCUSSION";
+    case "CAPACITY":
+    case "DEEP_DIVE":
+    case "REFINEMENT":
+      return "TESTING_AND_COMPLEXITY";
+    case "WRAP_UP":
+      return "WRAP_UP";
+  }
+}
+
 function buildSystemDesignDecision(
   signals: CandidateSignalSnapshot,
   currentStage: SystemDesignStage,
@@ -2001,12 +2030,57 @@ function findPreviousSystemDesignActionType(
   return null;
 }
 
+function buildFollowUpContext(transcripts: GenerateAssistantTurnInput["recentTranscripts"]) {
+  const previousQuestion = [...transcripts].reverse().find((turn) => turn.speaker === "AI")?.text.trim();
+  const latestAnswer = [...transcripts].reverse().find((turn) => turn.speaker === "USER")?.text.trim();
+  const candidateTerms = extractCandidateTerms(
+    transcripts
+      .filter((turn) => turn.speaker === "USER")
+      .slice(-4)
+      .map((turn) => turn.text)
+      .join(" "),
+  );
+
+  return {
+    previousQuestion: previousQuestion ? truncate(previousQuestion, 180) : undefined,
+    latestAnswer: latestAnswer ? truncate(latestAnswer, 220) : undefined,
+    latestAnswerSummary: latestAnswer ? summarizeFollowUpAnswer(latestAnswer) : undefined,
+    candidateTerms,
+  };
+}
+
+function formatFollowUpContext(context: ReturnType<typeof buildFollowUpContext>) {
+  const parts = [
+    context.previousQuestion ? `previous_question="${context.previousQuestion}"` : null,
+    context.latestAnswerSummary ? `latest_answer="${context.latestAnswerSummary}"` : null,
+    context.candidateTerms.length > 0 ? `candidate_terms=${context.candidateTerms.join(", ")}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : "none";
+}
+
+function summarizeFollowUpAnswer(text: string) {
+  return truncate(text.split(/[.!?]\s+/).find(Boolean) ?? text, 180);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-function buildSystemDesignFallbackReply(decision: CandidateDecision, previousAiTurn?: string) {
-  const primary = decision.question;
+function buildSystemDesignFallbackReply(
+  decision: CandidateDecision,
+  previousAiTurn?: string,
+  followUpContext?: ReturnType<typeof buildFollowUpContext>,
+) {
+  const actionType = asRecord(decision).systemDesignActionType;
+  const anchor = followUpContext?.latestAnswerSummary
+    ? `You just said "${truncate(followUpContext.latestAnswerSummary, 100)}". `
+    : "";
+  const primary =
+    actionType === "PROBE_TRADEOFF" ||
+    actionType === "CHALLENGE_SPOF" ||
+    actionType === "ZOOM_IN"
+      ? `${anchor}${decision.question}`
+      : decision.question;
   const alternate = "Keep this at architecture level. Give one concrete design choice and justify it with tradeoff plus reliability impact.";
   return withVariation(primary, previousAiTurn, alternate);
 }
@@ -2063,6 +2137,7 @@ function buildDecision(input: GenerateAssistantTurnInput, signals: CandidateSign
     policyConfig,
     signals,
     recentEvents: input.recentEvents,
+    recentTranscripts: input.recentTranscripts,
     latestExecutionRun: input.latestExecutionRun,
     intent,
     trajectory,

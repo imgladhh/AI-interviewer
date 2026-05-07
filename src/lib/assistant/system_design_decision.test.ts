@@ -228,6 +228,37 @@ describe("makeSystemDesignDecision level adaptation", () => {
     expect(decision.systemDesignActionType).toBe("CHALLENGE_SPOF");
   });
 
+  it("does not keep challenging SPOF after a scoped reliability assumption closes that gap", () => {
+    const decision = makeSystemDesignDecision({
+      currentStage: "DEEP_DIVE",
+      targetLevel: "SDE2",
+      signals: {
+        ...createSnapshot({
+          requirement_missing: false,
+          capacity_missing: false,
+          tradeoff_missed: false,
+          spof_missed: true,
+          bottleneck_unexamined: false,
+        }),
+        designSignals: {
+          ...createSnapshot({
+            requirement_missing: false,
+            capacity_missing: false,
+            tradeoff_missed: false,
+            spof_missed: true,
+            bottleneck_unexamined: false,
+          }).designSignals!,
+          gapClosures: {
+            reliability: "Candidate scoped single-region risk as acceptable for this problem.",
+          },
+        },
+      },
+    });
+
+    expect(decision.systemDesignActionType).not.toBe("CHALLENGE_SPOF");
+    expect((decision.scoreBreakdown ?? []).some((item) => /reliability:false/.test(item.detail))).toBe(true);
+  });
+
   it("forces deeper follow-up after repeated low-detail streak instead of wrapping up", () => {
     const decision = makeSystemDesignDecision({
       currentStage: "WRAP_UP",

@@ -89,6 +89,26 @@ describe("reply strategy issue shaping", () => {
     expect(reply).toMatch(/be precise|exact|alternative|tradeoff/i);
   });
 
+  it("anchors tradeoff follow-ups in the candidate's latest answer and terminology", () => {
+    const reply = buildFallbackReplyFromDecision({
+      decision: {
+        ...baseDecision,
+        action: "probe_tradeoff",
+        target: "tradeoff",
+      },
+      signals: baseSignals,
+      currentStage: "APPROACH_DISCUSSION",
+      followUpContext: {
+        previousQuestion: "What data structure would you use?",
+        latestAnswerSummary: "I would use a HashMap to store complements while scanning.",
+        candidateTerms: ["hash map", "complement"],
+      },
+    });
+
+    expect(reply).toMatch(/hash map|complement/i);
+    expect(reply).toMatch(/alternative|tradeoff|constraints/i);
+  });
+
   it("keeps clarification gentle when pressure is soft", () => {
     const reply = buildFallbackReplyFromDecision({
       decision: {

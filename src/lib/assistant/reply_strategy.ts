@@ -2,14 +2,23 @@
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
 
+export type FollowUpContext = {
+  previousQuestion?: string;
+  latestAnswer?: string;
+  latestAnswerSummary?: string;
+  candidateTerms?: string[];
+};
+
 export function describeReplyStrategy(
   decision: CandidateDecision,
   signals: CandidateSignalSnapshot,
+  followUpContext?: FollowUpContext,
 ) {
   const trend = signals.trendSummary ?? "No clear trend yet.";
   const issueStyle = describeIssueStyle(decision.specificIssue);
   const pressure = decision.pressure ?? "neutral";
   const intent = decision.intent ?? "guide";
+  const continuity = describeFollowUpContinuity(followUpContext);
 
   switch (decision.action) {
     case "move_to_wrap_up":
@@ -25,9 +34,9 @@ export function describeReplyStrategy(
     case "ask_for_reasoning":
       return `Probe the candidate's reasoning, not just the surface approach. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Ask for one concrete example, invariant, or correctness argument. Trend context: ${trend}`;
     case "probe_tradeoff":
-      return `Press on tradeoffs and algorithm choice. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Compare the current approach against a stronger alternative and ask what efficiency or simplicity tradeoff the candidate is making. Trend context: ${trend}`;
+      return `Press on tradeoffs and algorithm choice. Intent=${intent}. Pressure=${pressure}. ${issueStyle} ${continuity} Compare the current approach against a stronger alternative and ask what efficiency or simplicity tradeoff the candidate is making. Trend context: ${trend}`;
     case "probe_correctness":
-      return `Probe correctness tightly. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Ask how the candidate knows the solution is correct on one example, branch, or invariant before moving on. Trend context: ${trend}`;
+      return `Probe correctness tightly. Intent=${intent}. Pressure=${pressure}. ${issueStyle} ${continuity} Ask how the candidate knows the solution is correct on one example, branch, or invariant before moving on. Trend context: ${trend}`;
     case "ask_for_test_case":
       return `Ask explicitly for high-risk test cases or edge cases. Intent=${intent}. Pressure=${pressure}. ${issueStyle} Do not drift back into a broad approach discussion. Trend context: ${trend}`;
     case "ask_for_complexity":
@@ -42,7 +51,7 @@ export function describeReplyStrategy(
       return `Acknowledge briefly and let the candidate keep momentum. Intent=${intent}. Pressure=${pressure}. Avoid over-talking; one concrete instruction is enough. Trend context: ${trend}`;
     case "ask_followup":
     default:
-      return `Ask one focused follow-up that directly matches the decision target. Intent=${intent}. Pressure=${pressure}. Avoid generic praise or broad prompts. Trend context: ${trend}`;
+      return `Ask one focused follow-up that directly matches the decision target. Intent=${intent}. Pressure=${pressure}. ${continuity} Avoid generic praise or broad prompts. Trend context: ${trend}`;
   }
 }
 
@@ -51,8 +60,9 @@ export function buildFallbackReplyFromDecision(input: {
   signals: CandidateSignalSnapshot;
   currentStage: CodingInterviewStage;
   previousAiTurn?: string;
+  followUpContext?: FollowUpContext;
 }) {
-  const { decision, signals, currentStage, previousAiTurn } = input;
+  const { decision, signals, currentStage, previousAiTurn, followUpContext } = input;
   const pressure = decision.pressure ?? "neutral";
   const improving =
     signals.trendSummary &&
@@ -61,6 +71,7 @@ export function buildFallbackReplyFromDecision(input: {
     );
   const issueType = classifyIssueType(decision.specificIssue);
   const askLead = pressureLead(pressure, decision.action);
+  const contextualLead = buildContextualLead(followUpContext, decision.action);
 
   switch (decision.action) {
     case "move_to_wrap_up":
@@ -89,7 +100,7 @@ export function buildFallbackReplyFromDecision(input: {
       );
     case "ask_for_clarification":
       return chooseVariation(
-        `${askLead} Walk me through one tiny example and tell me the exact state or output you expect there.`,
+        `${contextualLead ?? askLead} Walk me through one tiny example and tell me the exact state or output you expect there.`,
         previousAiTurn,
         "Before I push further, restate the next step on one small example and tell me what you expect to happen.",
       );
@@ -105,7 +116,9 @@ export function buildFallbackReplyFromDecision(input: {
       );
     case "ask_for_reasoning":
       return chooseVariation(
-        improving
+        contextualLead
+          ? `${contextualLead} ${decision.question}`
+          : improving
           ? `You are moving in a better direction now. ${decision.question}`
           : pressure === "surgical"
             ? `Be precise here. ${decision.question}`
@@ -117,7 +130,9 @@ export function buildFallbackReplyFromDecision(input: {
       );
     case "probe_tradeoff":
       return chooseVariation(
-        issueType === "constraint_justification"
+        contextualLead
+          ? `${contextualLead} Compare it against one realistic alternative and justify the tradeoff under the actual constraints.`
+          : issueType === "constraint_justification"
           ? `${askLead} You have named the tradeoff already. Now justify it against the actual constraints for me. Why is that runtime or memory cost acceptable here?`
           : pressure === "surgical"
             ? `${askLead} Do not stop at Big-O. Compare this choice against one realistic alternative and justify the tradeoff.`
@@ -131,7 +146,9 @@ export function buildFallbackReplyFromDecision(input: {
       );
     case "probe_correctness":
       return chooseVariation(
-        issueType === "proof_sketch"
+        contextualLead
+          ? `${contextualLead} Now tell me the invariant or branch that makes that answer correct.`
+          : issueType === "proof_sketch"
           ? `${askLead} I hear the intuition. Now turn that into a proof sketch for me. Why is that argument actually sufficient to guarantee correctness?`
           : issueType === "invariant"
             ? `${askLead} Do not just describe the plan. State the invariant explicitly and tell me why it stays true after each step.`
@@ -210,6 +227,51 @@ function pressureLead(
     default:
       return "Okay.";
   }
+}
+
+function describeFollowUpContinuity(context?: FollowUpContext) {
+  if (!context) {
+    return "Anchor the follow-up in the candidate's latest answer when possible.";
+  }
+
+  const terms = (context.candidateTerms ?? []).slice(0, 4);
+  const pieces = [
+    context.previousQuestion ? `Previous interviewer question: "${truncateContext(context.previousQuestion, 140)}".` : null,
+    context.latestAnswerSummary ? `Latest candidate answer: "${truncateContext(context.latestAnswerSummary, 160)}".` : null,
+    terms.length > 0 ? `Candidate terms to reuse if relevant: ${terms.join(", ")}.` : null,
+  ].filter(Boolean);
+
+  return pieces.length > 0
+    ? `Maintain causal continuity. ${pieces.join(" ")} Ask the next question as a consequence of that answer, not as a fresh template.`
+    : "Anchor the follow-up in the candidate's latest answer when possible.";
+}
+
+function buildContextualLead(context: FollowUpContext | undefined, action: CandidateDecision["action"]) {
+  if (!context?.latestAnswerSummary) {
+    return null;
+  }
+
+  const term = context.candidateTerms?.[0];
+  const anchor = term
+    ? `You just used ${term}`
+    : `You just said "${truncateContext(context.latestAnswerSummary, 90)}"`;
+
+  if (action === "probe_tradeoff") {
+    return `${anchor}.`;
+  }
+  if (action === "probe_correctness" || action === "ask_for_reasoning") {
+    return `${anchor}. State the invariant explicitly.`;
+  }
+  if (action === "ask_for_clarification") {
+    return `${anchor}; before I judge it,`;
+  }
+
+  return null;
+}
+
+function truncateContext(text: string, maxLength: number) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1).trim()}...`;
 }
 
 function buildWrapUpReply(

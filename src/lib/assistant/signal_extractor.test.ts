@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from "vitest";
-import { extractCandidateSignals } from "@/lib/assistant/signal_extractor";
+import { extractCandidateSignals, extractCandidateSignalsSmart } from "@/lib/assistant/signal_extractor";
 
 describe("extractCandidateSignals", () => {
   it("marks a candidate as stuck and buggy after repeated failures", () => {
@@ -308,6 +308,59 @@ describe("extractCandidateSignals", () => {
     expect(snapshot.structuredEvidence.some((item) => /echoed the interviewer question/i.test(item.issue))).toBe(true);
   });
 
+  it("does not mark understanding clear with fake constraint evidence just because the stage is later", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "IMPLEMENTATION",
+      recentTranscripts: [{ speaker: "USER", text: "ok" }],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.understanding).toBe("partial");
+    expect(snapshot.evidence.join(" ")).not.toMatch(/referenced constraints, examples, or output expectations/i);
+  });
+
+  it("marks code quality partial when the candidate is debugging without a fresh execution run", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "IMPLEMENTATION",
+      recentTranscripts: [{ speaker: "USER", text: "I will debug the edge case and fix the branch condition." }],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.codeQuality).toBe("partial");
+    expect(snapshot.evidence.join(" ")).toMatch(/without a fresh execution signal/i);
+  });
+
+  it("logs observer provider failures before falling back to heuristics", async () => {
+    const originalProvider = process.env.LLM_PROVIDER;
+    const originalGeminiKey = process.env.GEMINI_API_KEY;
+    const originalFetch = global.fetch;
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+
+    process.env.LLM_PROVIDER = "gemini";
+    process.env.GEMINI_API_KEY = "fake-key";
+    global.fetch = (() => Promise.reject(new Error("observer down"))) as typeof fetch;
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      const snapshot = await extractCandidateSignalsSmart({
+        currentStage: "APPROACH_DISCUSSION",
+        recentTranscripts: [{ speaker: "USER", text: "I would use a hash map." }],
+        latestExecutionRun: null,
+      });
+
+      expect(snapshot.source).toBe("heuristic");
+      expect(warnings.join(" ")).toMatch(/signal-observer.*gemini.*observer down/i);
+    } finally {
+      process.env.LLM_PROVIDER = originalProvider;
+      process.env.GEMINI_API_KEY = originalGeminiKey;
+      global.fetch = originalFetch;
+      console.warn = originalWarn;
+    }
+  });
+
   it("extracts system design signals and evidence refs in system design mode", () => {
     const snapshot = extractCandidateSignals({
       mode: "SYSTEM_DESIGN",
@@ -408,6 +461,61 @@ describe("extractCandidateSignals", () => {
     expect(snapshot.designSignals?.gapState?.missing_tradeoff).toBe(true);
     expect(snapshot.designSignals?.primaryGap).toBe("capacity");
     expect(snapshot.designSignals?.recommendedActionByGap).toBe("ASK_CAPACITY");
+  });
+
+  it("allows explicit system design assumptions to close a reliability gap instead of forcing SPOF pressure", () => {
+    const snapshot = extractCandidateSignals({
+      mode: "SYSTEM_DESIGN",
+      systemDesignStage: "DEEP_DIVE",
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text:
+            "Because this is an internal admin tool, single-region availability is acceptable for this scope; failover is out of scope and the cost tradeoff is not worth it.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.designSignals?.gapClosures?.reliability).toMatch(/acceptable-risk|reliability/i);
+    expect(snapshot.designSignals?.gapState?.missing_reliability).toBe(false);
+  });
+
+  it("does not close tradeoff gap from a generic because statement without comparison", () => {
+    const snapshot = extractCandidateSignals({
+      mode: "SYSTEM_DESIGN",
+      systemDesignStage: "DEEP_DIVE",
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "Given the scope, I chose this because it is simpler.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.designSignals?.gapClosures?.tradeoff).toBeUndefined();
+    expect(snapshot.designSignals?.gapState?.missing_tradeoff).toBe(true);
+  });
+
+  it("does not close bottleneck gap when candidate only identifies the bottleneck without a mitigation", () => {
+    const snapshot = extractCandidateSignals({
+      mode: "SYSTEM_DESIGN",
+      systemDesignStage: "DEEP_DIVE",
+      currentStage: "TESTING_AND_COMPLEXITY",
+      recentTranscripts: [
+        {
+          speaker: "USER",
+          text: "Given the read traffic, I see a bottleneck at the database layer but I am not sure how to address it.",
+        },
+      ],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.designSignals?.gapClosures?.bottleneck).toBeUndefined();
+    expect(snapshot.designSignals?.gapState?.missing_bottleneck).toBe(true);
   });
 });
 

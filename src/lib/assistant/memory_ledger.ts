@@ -1,5 +1,6 @@
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
+import { extractCandidateTerms } from "@/lib/assistant/candidate_terms";
 
 type SessionEventLike = {
   eventType: string;
@@ -19,6 +20,13 @@ type TranscriptLike = {
 
 type PersistentWeakness = "reasoning" | "testing" | "complexity" | null;
 
+export type CandidateContentMemory = {
+  candidateTerms: string[];
+  latestQuestion?: string;
+  latestAnswer?: string;
+  latestAnswerSummary?: string;
+};
+
 export type MemoryLedger = {
   recentlyProbedTargets: string[];
   recentlyProbedIssues: string[];
@@ -36,6 +44,7 @@ export type MemoryLedger = {
   candidateDeclaredDone: boolean;
   implementationAlreadyDone: boolean;
   finalWrapUpDelivered: boolean;
+  contentMemory: CandidateContentMemory;
   shouldAvoidTarget: (...targets: string[]) => boolean;
   summary: string[];
 };
@@ -129,6 +138,7 @@ export function buildMemoryLedger(input: {
         /\b(implemented|implementation|coded|finished coding|done with my implementation)\b/i.test(text),
       ));
   const finalWrapUpDelivered = recentUserTexts.some((text) => looksLikeFinalWrapUp(text));
+  const contentMemory = buildCandidateContentMemory(recentTranscripts);
 
   const summary = buildLedgerSummary({
     answeredTargets,
@@ -141,6 +151,7 @@ export function buildMemoryLedger(input: {
     candidateDeclaredDone,
     implementationAlreadyDone,
     finalWrapUpDelivered,
+    contentMemory,
   });
   const topicSaturation = buildTopicSaturation(recentDecisions, answeredTargets);
 
@@ -161,6 +172,7 @@ export function buildMemoryLedger(input: {
     candidateDeclaredDone,
     implementationAlreadyDone,
     finalWrapUpDelivered,
+    contentMemory,
     shouldAvoidTarget: (...targets: string[]) => {
       const hits = recentDecisions.filter((decision) => {
         const normalizedIssue = normalizeIssueKey(decision.specificIssue);
@@ -423,6 +435,7 @@ function buildLedgerSummary(input: {
   candidateDeclaredDone: boolean;
   implementationAlreadyDone: boolean;
   finalWrapUpDelivered: boolean;
+  contentMemory: CandidateContentMemory;
 }) {
   const summary: string[] = [];
 
@@ -456,8 +469,41 @@ function buildLedgerSummary(input: {
   if (input.finalWrapUpDelivered) {
     summary.push("Candidate already delivered a final wrap-up.");
   }
+  if (input.contentMemory.candidateTerms.length > 0) {
+    summary.push(`Candidate terms: ${input.contentMemory.candidateTerms.slice(0, 5).join(", ")}`);
+  }
+  if (input.contentMemory.latestQuestion && input.contentMemory.latestAnswerSummary) {
+    summary.push(`Latest follow-up chain: asked="${input.contentMemory.latestQuestion}"; answered="${input.contentMemory.latestAnswerSummary}"`);
+  }
 
   return summary;
+}
+
+function buildCandidateContentMemory(recentTranscripts: TranscriptLike[]): CandidateContentMemory {
+  const latestAnswer = [...recentTranscripts].reverse().find((segment) => segment.speaker === "USER")?.text.trim();
+  const latestQuestion = [...recentTranscripts].reverse().find((segment) => segment.speaker === "AI")?.text.trim();
+  const recentUserText = recentTranscripts
+    .filter((segment) => segment.speaker === "USER")
+    .slice(-4)
+    .map((segment) => segment.text)
+    .join(" ");
+
+  return {
+    candidateTerms: extractCandidateTerms(recentUserText),
+    latestQuestion: latestQuestion ? truncateMemoryText(latestQuestion, 180) : undefined,
+    latestAnswer: latestAnswer ? truncateMemoryText(latestAnswer, 220) : undefined,
+    latestAnswerSummary: latestAnswer ? summarizeCandidateAnswer(latestAnswer) : undefined,
+  };
+}
+
+function summarizeCandidateAnswer(text: string) {
+  const sentence = text.split(/[.!?]\s+/).find(Boolean) ?? text;
+  return truncateMemoryText(sentence, 180);
+}
+
+function truncateMemoryText(text: string, maxLength: number) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1).trim()}...`;
 }
 
 function looksLikeFinalWrapUp(text: string) {
