@@ -46,6 +46,19 @@ describe("extractCandidateSignals", () => {
     expect(["moderate", "deep"]).toContain(snapshot.reasoningDepth);
   });
 
+  it("keeps heuristic algorithm evidence reasonable when a pattern is named without solution context", () => {
+    const snapshot = extractCandidateSignals({
+      currentStage: "APPROACH_DISCUSSION",
+      recentTranscripts: [{ speaker: "USER", text: "Hash map." }],
+      latestExecutionRun: null,
+    });
+
+    expect(snapshot.algorithmChoice).toBe("reasonable");
+    expect(snapshot.communication).toBe("mixed");
+    expect(snapshot.source).toBe("heuristic");
+    expect(snapshot.evidence.join(" ")).toMatch(/lacks enough context|compressed/i);
+  });
+
   it("marks readyToCode when the candidate already described the implementation loop and return condition", () => {
     const snapshot = extractCandidateSignals({
       currentStage: "APPROACH_DISCUSSION",

@@ -125,12 +125,39 @@ function trailingRepeatCount(turns: string[]) {
   }
   let repeats = 0;
   for (let i = turns.length - 1; i > 0; i -= 1) {
-    if (turns[i] !== turns[i - 1]) {
+    if (turnOverlapRatio(turns[i], turns[i - 1]) < 0.6) {
       break;
     }
     repeats += 1;
   }
   return repeats;
+}
+
+function turnOverlapRatio(left: string, right: string) {
+  const leftTokens = tokenSet(left);
+  const rightTokens = tokenSet(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+  const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function tokenSet(text: string) {
+  const stopWords = new Set(["the", "for", "here", "this", "that", "think", "would", "could", "can", "still", "basically"]);
+  return new Set(
+    text
+      .split(/\s+/)
+      .map((token) => canonicalToken(token.trim()))
+      .filter((token) => token.length > 2 && !stopWords.has(token)),
+  );
+}
+
+function canonicalToken(token: string) {
+  if (token === "using") {
+    return "use";
+  }
+  return token;
 }
 
 function normalizeTurnText(value: unknown) {
@@ -139,6 +166,7 @@ function normalizeTurnText(value: unknown) {
   }
   const normalized = value
     .toLowerCase()
+    .replace(/\bhash\s*map\b/g, "hashmap")
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -337,12 +337,18 @@ function resolveCommunicationState(recentUserTurns: TranscriptLike[], evidence: 
       : recentUserTurns.reduce((total, turn) => total + turn.text.split(/\s+/).filter(Boolean).length, 0) /
         recentUserTurns.length;
 
-  if (recentUserTurns.length >= 2 && averageWords >= 12) {
-    evidence.push("Recent user turns were substantive enough to communicate reasoning clearly.");
+  const recentText = recentUserTurns.map((turn) => turn.text).join(" ").toLowerCase();
+  const contentSignals =
+    /\b(because|therefore|so that|which means|tradeoff|invariant|example|complexity|edge case|hash map|heap|cache|queue|shard|replica)\b/.test(
+      recentText,
+    );
+
+  if (recentUserTurns.length >= 2 && averageWords >= 12 && contentSignals) {
+    evidence.push("Recent user turns were substantive and included concrete technical or reasoning content.");
     return "clear";
   }
 
-  if (recentUserTurns.length >= 1 && averageWords >= 6) {
+  if (recentUserTurns.length >= 1 && (averageWords >= 6 || contentSignals)) {
     evidence.push("Candidate communication was present but still somewhat compressed.");
     return "mixed";
   }
@@ -388,10 +394,19 @@ function resolveAlgorithmChoiceState(
     normalizedUserText,
   );
   const weakSignals = /\b(brute force|nested loop|try everything)\b/.test(normalizedUserText);
+  const solutionContext =
+    /\b(use|build|keep|store|scan|iterate|lookup|look up|compare|because|therefore|complexity|runtime|space|invariant|example|return)\b/.test(
+      normalizedUserText,
+    );
+
+  if (strongSignals && solutionContext) {
+    evidence.push("Candidate named a recognizable algorithmic pattern and tied it to solution mechanics.");
+    return currentStage === "APPROACH_DISCUSSION" || currentStage === "IMPLEMENTATION" ? "strong" : "reasonable";
+  }
 
   if (strongSignals) {
-    evidence.push("Candidate named a recognizable data structure or algorithmic pattern.");
-    return currentStage === "APPROACH_DISCUSSION" || currentStage === "IMPLEMENTATION" ? "strong" : "reasonable";
+    evidence.push("Candidate named a recognizable pattern, but the heuristic path lacks enough context to treat it as strong evidence.");
+    return "reasonable";
   }
 
   if (weakSignals) {
@@ -526,17 +541,21 @@ function resolveReasoningDepthState(
 ): CandidateReasoningDepthState {
   const explainsWhy = /\b(because|therefore|which means|so that|reason|invariant|tradeoff)\b/.test(normalizedUserText);
   const usesConcreteWalkthrough = /\b(example|step by step|walk through|for instance)\b/.test(normalizedUserText);
+  const hasConcreteAnchor =
+    /\b(hash map|heap|queue|stack|pointer|index|cache|database|qps|latency|edge case|o\([^)]+\)|target\s*-)\b/i.test(
+      normalizedUserText,
+    );
   const totalWords = recentUserTurns.reduce(
     (sum, turn) => sum + turn.text.split(/\s+/).filter(Boolean).length,
     0,
   );
 
-  if (explainsWhy && usesConcreteWalkthrough && totalWords >= 28) {
+  if (explainsWhy && usesConcreteWalkthrough && hasConcreteAnchor && totalWords >= 28) {
     evidence.push("Candidate tied the approach to reasons and walked through a concrete example.");
     return "deep";
   }
 
-  if (explainsWhy || totalWords >= 16) {
+  if ((explainsWhy && hasConcreteAnchor) || totalWords >= 16) {
     evidence.push("Candidate exposed some reasoning, but the chain of logic is still only partially explicit.");
     return "moderate";
   }

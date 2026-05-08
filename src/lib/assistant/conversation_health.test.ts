@@ -52,4 +52,18 @@ describe("assessConversationHealth", () => {
     expect(health.noProgressTurns).toBeGreaterThanOrEqual(2);
     expect(health.echoRate).toBeGreaterThan(0.3);
   });
+
+  it("counts near-repeated answers as no-progress even when wording changes", () => {
+    const health = assessConversationHealth({
+      signals: baseSignals,
+      recentEvents: [
+        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "I think I can use a hashmap for lookup here." } },
+        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "I would use the hash map lookup for this." } },
+        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "Still using a hash map lookup basically." } },
+      ],
+    });
+
+    expect(health.noProgressTurns).toBeGreaterThanOrEqual(2);
+    expect(["GUIDED", "RESCUE", "TERMINATE_OR_REPLAN"]).toContain(health.mode);
+  });
 });
