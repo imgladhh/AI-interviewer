@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { calculateUnifiedScore } from "@/lib/scoring/calculateUnifiedScore";
-import type { ScoringInput } from "@/lib/scoring/types";
+import type { ScoringInput, Signal } from "@/lib/scoring/types";
 
 function createInput(overrides?: Partial<ScoringInput>): ScoringInput {
   return {
@@ -134,7 +134,7 @@ describe("calculateUnifiedScore", () => {
   });
 
   it("applies stronger causal penalty when capacity is skipped at deep-dive than at requirements", () => {
-    const baseSignals = [
+    const baseSignals: Signal[] = [
       { key: "requirement_missing", missing: false as const },
       { key: "capacity_missing", missing: true as const },
       { key: "tradeoff_missed", missing: false as const },

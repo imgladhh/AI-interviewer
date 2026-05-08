@@ -124,8 +124,18 @@ describe("makeSystemDesignDecision level adaptation", () => {
           summary: "handwavey deep dive",
           handwave: {
             detected: true,
+            rawDepth: 0.3,
             depth: 0.3,
             expectedDepth: 0.9,
+            vagueLanguageDecay: 1,
+            components: {
+              numeric_density: 0,
+              constraint_binding: 0,
+              causal_chain: 0.3,
+              specificity: 0,
+            },
+            lowDetailStreak: 1,
+            forceDeeperAction: true,
             categories: ["tradeoff_evasion", "unquantified_scaling_claim"],
             evidenceRefs: ["depth gap"],
           },
