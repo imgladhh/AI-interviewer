@@ -1,6 +1,6 @@
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
-import { extractCandidateTerms } from "@/lib/assistant/candidate_terms";
+import { extractCandidateTerms, summarizeCandidateArgument } from "@/lib/assistant/candidate_terms";
 
 type SessionEventLike = {
   eventType: string;
@@ -497,8 +497,7 @@ function buildCandidateContentMemory(recentTranscripts: TranscriptLike[]): Candi
 }
 
 function summarizeCandidateAnswer(text: string) {
-  const sentence = text.split(/[.!?]\s+/).find(Boolean) ?? text;
-  return truncateMemoryText(sentence, 180);
+  return summarizeCandidateArgument(text, 180);
 }
 
 function truncateMemoryText(text: string, maxLength: number) {

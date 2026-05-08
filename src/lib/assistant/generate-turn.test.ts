@@ -72,6 +72,7 @@ describe("generateAssistantTurn", () => {
 
     expect(result.signals?.summary).toMatch(/complexity rigor is partial/i);
     expect(result.signals?.evidence.join(" ")).not.toMatch(/prompt framing still looks incomplete/i);
+    expect(result.criticVerdict).toBeDefined();
   });
 
   it("asks about debugging after an execution error", async () => {

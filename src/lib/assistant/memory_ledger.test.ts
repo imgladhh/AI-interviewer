@@ -116,4 +116,21 @@ describe("buildMemoryLedger", () => {
 
     expect(ledger.answeredTargets).toContain("summary");
   });
+
+  it("summarizes the candidate's causal argument instead of blindly taking the first sentence", () => {
+    const ledger = buildMemoryLedger({
+      currentStage: "APPROACH_DISCUSSION",
+      signals: baseSignals,
+      recentEvents: [],
+      recentTranscripts: [
+        { speaker: "AI", text: "Why does that data structure fit this problem?" },
+        {
+          speaker: "USER",
+          text: "I would use a hash map. Because complement lookup gives O(1) average access and the constraints allow the extra space.",
+        },
+      ],
+    });
+
+    expect(ledger.contentMemory.latestAnswerSummary).toMatch(/because complement lookup/i);
+  });
 });

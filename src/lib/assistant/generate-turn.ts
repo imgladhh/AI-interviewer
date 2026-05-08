@@ -40,7 +40,7 @@ import {
   type SystemDesignStage,
 } from "@/lib/assistant/stages";
 import { makeSystemDesignDecision, type SystemDesignDecision } from "@/lib/assistant/system_design_decision";
-import { extractCandidateTerms } from "@/lib/assistant/candidate_terms";
+import { extractCandidateTerms, summarizeCandidateArgument } from "@/lib/assistant/candidate_terms";
 import { estimateOpenAiTextCost, estimateTokens } from "@/lib/usage/cost";
 import { assessSessionBudget } from "@/lib/usage/budget";
 import { resolveAssistantLeadInDelayMs } from "@/lib/voice/turn-taking";
@@ -178,19 +178,21 @@ async function generateSystemDesignAssistantTurn(
     findLatestTurn(input.recentTranscripts, "AI") ?? undefined,
     buildFollowUpContext(input.recentTranscripts),
   );
+  const critic = applySystemDesignCriticPass(reply, input, signals, decision, currentStage);
   const suggestedStage = inferSuggestedSystemDesignStage({
     currentStage: currentStage,
     latestUserTurn: findLatestTurn(input.recentTranscripts, "USER"),
-    reply,
+    reply: critic.reply,
     events: input.recentEvents,
   });
 
   return {
-    reply: finalizeReply(reply),
+    reply: finalizeReply(critic.reply),
     suggestedStage,
     source: "fallback",
     signals,
     decision,
+    criticVerdict: critic.verdict,
     policyAction: decision.systemDesignActionType ?? decision.policyAction,
     policyReason: decision.reason,
   };
@@ -297,10 +299,11 @@ async function* streamSystemDesignAssistantTurn(
     findLatestTurn(input.recentTranscripts, "AI") ?? undefined,
     buildFollowUpContext(input.recentTranscripts),
   );
+  const critic = applySystemDesignCriticPass(reply, input, signals, decision, currentStage);
   const suggestedStage = inferSuggestedSystemDesignStage({
     currentStage: currentStage,
     latestUserTurn: findLatestTurn(input.recentTranscripts, "USER"),
-    reply,
+    reply: critic.reply,
     events: input.recentEvents,
   });
 
@@ -318,7 +321,7 @@ async function* streamSystemDesignAssistantTurn(
     },
   };
 
-  for (const chunk of chunkText(reply)) {
+  for (const chunk of chunkText(critic.reply)) {
     if (options?.signal?.aborted) {
       return;
     }
@@ -327,11 +330,12 @@ async function* streamSystemDesignAssistantTurn(
 
   yield {
     final: {
-      reply: finalizeReply(reply),
+      reply: finalizeReply(critic.reply),
       suggestedStage,
       source: "fallback",
       signals,
       decision,
+      criticVerdict: critic.verdict,
       policyAction: decision.systemDesignActionType ?? decision.policyAction,
       policyReason: decision.reason,
     },
@@ -2059,7 +2063,7 @@ function formatFollowUpContext(context: ReturnType<typeof buildFollowUpContext>)
 }
 
 function summarizeFollowUpAnswer(text: string) {
-  return truncate(text.split(/[.!?]\s+/).find(Boolean) ?? text, 180);
+  return summarizeCandidateArgument(text, 180);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -2327,6 +2331,40 @@ async function applyCriticPass(
   return {
     reply: finalReply,
     verdict: finalReview.approved ? finalReview : verdict,
+  };
+}
+
+function applySystemDesignCriticPass(
+  reply: string,
+  input: GenerateAssistantTurnInput,
+  signals: CandidateSignalSnapshot,
+  decision: CandidateDecision,
+  currentStage: SystemDesignStage,
+): { reply: string; verdict?: CriticVerdict } {
+  const hasCandidateAnswer = input.recentTranscripts.some((turn) => turn.speaker === "USER" && turn.text.trim());
+  if (!hasCandidateAnswer) {
+    return { reply };
+  }
+
+  const verdict = reviewInterviewerReply({
+    reply,
+    decision,
+    signals,
+    currentStage: mapSystemDesignStageToSignalStage(currentStage),
+    recentEvents: input.recentEvents,
+    latestExecutionRun: input.latestExecutionRun,
+  });
+  const candidateReply = verdict.approved ? reply : verdict.revisedReply ?? decision.question ?? reply;
+  const guarded = enforceSystemDesignNoCodeInvariant({
+    mode: "SYSTEM_DESIGN",
+    action: decision.action,
+    target: decision.target,
+    question: collapseReply(candidateReply),
+  });
+
+  return {
+    reply: guarded.question,
+    verdict,
   };
 }
 

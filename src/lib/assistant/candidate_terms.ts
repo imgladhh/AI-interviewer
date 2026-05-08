@@ -9,3 +9,41 @@ export function extractCandidateTerms(text: string) {
     8,
   );
 }
+
+export function summarizeCandidateArgument(text: string, maxLength = 180) {
+  const sentences = splitIntoSentences(text);
+  const reasoningSentence = sentences.find((sentence) =>
+    /\b(because|since|so that|which means|therefore|tradeoff|trade-off|rather than|instead of|compared to|versus|vs\.?)\b/i.test(
+      sentence,
+    ),
+  );
+  const bestSentence =
+    reasoningSentence ??
+    [...sentences].sort((left, right) => scoreSummarySentence(right) - scoreSummarySentence(left))[0] ??
+    text;
+  return truncateCandidateArgument(bestSentence, maxLength);
+}
+
+function splitIntoSentences(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  const matches = normalized.match(/[^.!?]+[.!?]?/g) ?? [normalized];
+  return matches.map((sentence) => sentence.trim()).filter(Boolean);
+}
+
+function scoreSummarySentence(sentence: string) {
+  const words = sentence.split(/\s+/).filter(Boolean).length;
+  const specificityBonus = /\b(hash map|cache|queue|shard|replica|qps|latency|availability|because|tradeoff|bottleneck|spof)\b/i.test(
+    sentence,
+  )
+    ? 8
+    : 0;
+  return words + specificityBonus;
+}
+
+function truncateCandidateArgument(text: string, maxLength: number) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1).trim()}...`;
+}
