@@ -5,12 +5,7 @@ import { assessFlowState, type FlowState } from "@/lib/assistant/flow_state";
 import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
 import { summarizeTranscriptTruth, type TranscriptTruthSummary } from "@/lib/session/commit-arbiter";
 import { buildSessionSnapshotState } from "@/lib/session/state";
-import {
-  readCandidateStateSnapshots,
-  readInterviewerDecisionSnapshots,
-  readIntentSnapshots,
-  readTrajectorySnapshots,
-} from "@/lib/session/snapshots";
+import { readSessionSnapshotBundle } from "@/lib/session/snapshots";
 import { describeInterviewStage, isCodingInterviewStage } from "@/lib/assistant/stages";
 import { getPersonaJobSnapshot, type PersonaJobSnapshot } from "@/lib/persona/queue";
 
@@ -216,10 +211,7 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
   const latestSession = profile.sessions[0] ?? null;
   const latestSessionSnapshotData = latestSession
     ? await Promise.all([
-        readCandidateStateSnapshots(latestSession.id),
-        readInterviewerDecisionSnapshots(latestSession.id),
-        readIntentSnapshots(latestSession.id),
-        readTrajectorySnapshots(latestSession.id),
+        readSessionSnapshotBundle(latestSession.id),
         prisma.executionRun.findMany({
           where: { sessionId: latestSession.id },
           orderBy: { createdAt: "asc" },
@@ -255,12 +247,12 @@ export async function getAdminProfileDetail(profileId: string): Promise<AdminPro
       latestSession && latestSessionSnapshotData
         ? summarizeSession({
             ...latestSession,
-            candidateStateSnapshots: latestSessionSnapshotData[0],
-            interviewerDecisionSnapshots: latestSessionSnapshotData[1],
-            intentSnapshots: latestSessionSnapshotData[2],
-            trajectorySnapshots: latestSessionSnapshotData[3],
-            executionRuns: latestSessionSnapshotData[4],
-            transcriptTruthEvents: latestSessionSnapshotData[5],
+            candidateStateSnapshots: latestSessionSnapshotData[0].candidateStates,
+            interviewerDecisionSnapshots: latestSessionSnapshotData[0].decisions,
+            intentSnapshots: latestSessionSnapshotData[0].intents,
+            trajectorySnapshots: latestSessionSnapshotData[0].trajectories,
+            executionRuns: latestSessionSnapshotData[1],
+            transcriptTruthEvents: latestSessionSnapshotData[2],
           })
         : null,
   };

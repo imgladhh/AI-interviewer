@@ -1,9 +1,6 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const readCandidateStateSnapshots = vi.fn();
-const readInterviewerDecisionSnapshots = vi.fn();
-const readIntentSnapshots = vi.fn();
-const readTrajectorySnapshots = vi.fn();
+const readSessionSnapshotBundle = vi.fn();
 
 const prisma = {
   interviewSession: {
@@ -31,10 +28,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/session/snapshots", () => ({
-  readCandidateStateSnapshots,
-  readInterviewerDecisionSnapshots,
-  readIntentSnapshots,
-  readTrajectorySnapshots,
+  readSessionSnapshotBundle,
 }));
 
 describe("session report route", () => {
@@ -47,10 +41,7 @@ describe("session report route", () => {
     prisma.evaluationDimensionScore.createMany.mockReset();
     prisma.feedbackReport.findUnique.mockReset();
     prisma.feedbackReport.upsert.mockReset();
-    readCandidateStateSnapshots.mockReset();
-    readInterviewerDecisionSnapshots.mockReset();
-    readIntentSnapshots.mockReset();
-    readTrajectorySnapshots.mockReset();
+    readSessionSnapshotBundle.mockReset();
   });
 
   it("generates and persists a v0 report", async () => {
@@ -78,10 +69,7 @@ describe("session report route", () => {
       feedbackReport: null,
     });
 
-    readCandidateStateSnapshots.mockResolvedValue([]);
-    readInterviewerDecisionSnapshots.mockResolvedValue([]);
-    readIntentSnapshots.mockResolvedValue([]);
-    readTrajectorySnapshots.mockResolvedValue([]);
+    readSessionSnapshotBundle.mockResolvedValue({ candidateStates: [], decisions: [], intents: [], trajectories: [], health: { status: "healthy", diagnostics: [] } });
     prisma.sessionEvent.create
       .mockResolvedValueOnce({ id: "evt-eval", eventType: "EVALUATION_STARTED", eventTime: new Date() })
       .mockResolvedValueOnce({ id: "evt-report", eventType: "REPORT_GENERATED", eventTime: new Date() });
@@ -148,10 +136,7 @@ describe("session report route", () => {
       feedbackReport: null,
     });
 
-    readCandidateStateSnapshots.mockResolvedValue([]);
-    readInterviewerDecisionSnapshots.mockResolvedValue([]);
-    readIntentSnapshots.mockResolvedValue([]);
-    readTrajectorySnapshots.mockResolvedValue([]);
+    readSessionSnapshotBundle.mockResolvedValue({ candidateStates: [], decisions: [], intents: [], trajectories: [], health: { status: "healthy", diagnostics: [] } });
     prisma.sessionEvent.create
       .mockResolvedValueOnce({ id: "evt-eval", eventType: "EVALUATION_STARTED", eventTime: new Date() })
       .mockResolvedValueOnce({ id: "evt-report", eventType: "REPORT_GENERATED", eventTime: new Date() });

@@ -2,6 +2,49 @@
 import { generateSessionReport } from "@/lib/evaluation/report";
 
 describe("generateSessionReport", () => {
+  it("keeps reward as non-causal interviewer-policy telemetry", () => {
+    const base = {
+      sessionId: "reward-telemetry-contract",
+      mode: "SYSTEM_DESIGN" as const,
+      questionTitle: "Design Event Bus",
+      transcripts: [{ speaker: "USER" as const, text: "I would estimate capacity, compare queues, and remove SPOFs." }],
+      executionRuns: [],
+    };
+    const evidenceEvents = [
+      {
+        eventType: "SIGNAL_SNAPSHOT_RECORDED",
+        payloadJson: {
+          signals: {
+            designSignals: {
+              signals: { requirement_missing: false, capacity_missing: false, tradeoff_missed: false, spof_missed: false, bottleneck_unexamined: false },
+              evidenceRefs: {},
+            },
+          },
+        },
+      },
+    ];
+    const reward = (total: number, noiseTags: string[] = []) => ({
+      eventType: "REWARD_RECORDED",
+      payloadJson: { reward: { total, noiseTags, components: { pivotImpact: 0 }, penalties: [] } },
+    });
+    const positive = generateSessionReport({ ...base, events: [...evidenceEvents, reward(0.9)] });
+    const negative = generateSessionReport({ ...base, events: [...evidenceEvents, reward(-0.9)] });
+    const noisy = generateSessionReport({ ...base, events: [...evidenceEvents, reward(0.9, ["INTERRUPTED_TURN"])] });
+    const empty = generateSessionReport({ ...base, events: evidenceEvents });
+    const dna = (report: typeof positive) => (report.reportJson.systemDesignDna as Record<string, unknown>);
+    const telemetry = (report: typeof positive) => (dna(report).interviewerPolicyTelemetry as Record<string, unknown>).reward as Record<string, unknown>;
+
+    expect(positive.dimensions).toEqual(negative.dimensions);
+    expect(dna(positive).verdict).toBe(dna(negative).verdict);
+    expect(telemetry(positive)).toMatchObject({ source: "session_event", causalRole: "interviewer_policy_only" });
+    expect(telemetry(positive).entries).toHaveLength(1);
+    expect(telemetry(noisy).entries).toEqual([]);
+    expect(telemetry(noisy).excludedByNoiseTags).toEqual(["INTERRUPTED_TURN"]);
+    expect(positive.dimensions).toEqual(noisy.dimensions);
+    expect(telemetry(empty).entries).toEqual([]);
+    expect(dna(positive).calibrationNotes).not.toContain("interviewer_policy_only");
+  });
+
   it("includes candidate state, interviewer decision, and stage replay evidence", () => {
     const report = generateSessionReport({
       sessionId: "session-1",

@@ -2,6 +2,10 @@
 
 This document defines the production baseline for system-design interviewer health.
 
+## Exit codes and operator action
+
+`npm run check:system-design-alerts` returns `0` for fresh non-critical quality, `1` for a quality regression to investigate or roll back, `2` for missing/invalid/unsupported/stale or incomplete telemetry to repair or regenerate, and `3` for a script or configuration error. CI writes the weekly snapshot before checking it.
+
 ## Scope
 
 - `calibration` (label agreement on calibration pack)

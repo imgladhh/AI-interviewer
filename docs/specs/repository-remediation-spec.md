@@ -268,3 +268,11 @@
 - #15：Redis、BullMQ Queue 和 QueueEvents 改为 memoized getter；普通模块导入不建立连接，health 和 worker 在实际使用时显式取得客户端。补充导入无 I/O 与 singleton 行为测试。
 - #3：独立升级 Next.js 15.5.14 → 15.5.25。`npm audit --omit=dev` 从 1 critical、9 high、7 moderate 变为 0 critical、9 high、8 moderate。Next.js 剩余项为经 PostCSS 的 moderate；npm 给出的修复为 Next.js 16.3.4（主版本迁移），按第一批非阻塞规则延期。
 - 验证：`npm test` 60 files / 388 tests 全部通过；`npx tsc --noEmit` 通过；`npm run build` 通过，且不再出现 Redis 导入时的连接错误。
+
+### 第二批：完成（2026-09-09）
+
+- #11：`src/lib/scoring/{types.ts,calculateUnifiedScore.ts}` 将 `ScoringEvidence` 与 `RewardTelemetry` 拆分；`src/lib/evaluation/report.ts` 仅在 report 层发布 `interviewerPolicyTelemetry.reward`，明确 `causalRole: "interviewer_policy_only"`。`report.test.ts` 覆盖正/负 reward 非因果、noise 过滤、空 telemetry 和不进入评分说明。
+- #8：`src/lib/operations/system-design-monitoring.ts` 实现 v1 envelope、availability/freshness/quality 契约；weekly writer 使用 fsync/close/rename 发布，workflow 先写后检；checker exit code 固定为 `0`（fresh non-critical）、`1`（fresh critical）、`2`（telemetry 不可用或不完整）、`3`（配置或程序错误）。新增 monitoring reader、checker exit-code、writer rename-failure 保留旧 latest 测试，并更新 operations 文档和 Admin 展示。
+- #9：`src/lib/session/snapshots.ts` 改为局部 transaction、显式 `SnapshotWriteResult` 与 health-aware bundle reader；assistant-turn/stream 对 degradation best-effort 写入安全事件，失败仅记录日志；report API、report 页面和 Admin 使用 bundle health。新增 snapshot 成功、缺表、瞬态失败后重试、bundle 读失败、完整/不足事件 rebuild 测试。
+- 验证：`npm test` 通过（新增 snapshot、monitoring、checker 与 writer tests）；`npx tsc --noEmit` 通过；`npm run build` 通过。
+- 已知延期：Next.js 16 主版本升级仍按第一批 #3 非阻塞策略延期；其余 production audit 高/中等级依赖问题不在第二批范围，且不改变第三批子 spec 前置条件。

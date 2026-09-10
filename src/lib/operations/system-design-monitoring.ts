@@ -1,224 +1,42 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-export type WeeklySnapshot = {
-  generatedAt?: string;
-  calibration?: {
-    total?: number;
-    matched?: number;
-    accuracy?: number;
-  };
-  regression?: {
-    health?: {
-      passRate?: number;
-    };
-    stability?: {
-      maxScoreVariance?: number;
-      maxRewardVariance?: number;
-      expectationFlipCount?: number;
-    };
-  };
-};
+export type MonitoringEnvelopeV1 = { schemaVersion: 1; generatedAt: string; calibration: { total: number; matched: number; accuracy: number }; regression: { health: { passRate: number }; stability: { maxScoreVariance: number; maxRewardVariance: number; expectationFlipCount: number } } };
+export type AlertThresholds = { calibrationWarnFloor: number; calibrationCritFloor: number; regressionPassRateWarnFloor: number; regressionPassRateCritFloor: number; driftWarnDelta: number; driftCritDelta: number; maxScoreVarianceWarn: number; maxScoreVarianceCrit: number; maxRewardVarianceWarn: number; maxRewardVarianceCrit: number; expectationFlipsWarn: number; expectationFlipsCrit: number };
+export type MonitoringAlert = { severity: "warning" | "critical"; message: string };
+export type MonitoringAvailability = "available" | "missing" | "invalid" | "unsupported_version";
+export type MonitoringFreshness = "fresh" | "stale" | "unknown";
+export type MonitoringQuality = "ok" | "warning" | "critical" | "not_evaluated";
+export type MonitoringMetrics = { calibrationAccuracy: number; regressionPassRate: number; calibrationDelta: number; maxScoreVariance: number; maxRewardVariance: number; expectationFlips: number };
+export type MonitoringReadResult = { availability: MonitoringAvailability; freshness: MonitoringFreshness; quality: MonitoringQuality; generatedAt: string | null; ageHours: number | null; source: { latestPath: string; datedPath: string | null }; metrics: MonitoringMetrics | null; thresholds: AlertThresholds; alerts: MonitoringAlert[]; diagnostics: string[] };
 
-export type AlertThresholds = {
-  calibrationWarnFloor: number;
-  calibrationCritFloor: number;
-  regressionPassRateWarnFloor: number;
-  regressionPassRateCritFloor: number;
-  driftWarnDelta: number;
-  driftCritDelta: number;
-  maxScoreVarianceWarn: number;
-  maxScoreVarianceCrit: number;
-  maxRewardVarianceWarn: number;
-  maxRewardVarianceCrit: number;
-  expectationFlipsWarn: number;
-  expectationFlipsCrit: number;
-};
+export const DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS: AlertThresholds = { calibrationWarnFloor: 0.72, calibrationCritFloor: 0.7, regressionPassRateWarnFloor: 1, regressionPassRateCritFloor: 0.98, driftWarnDelta: -0.03, driftCritDelta: -0.05, maxScoreVarianceWarn: 0, maxScoreVarianceCrit: 0.01, maxRewardVarianceWarn: 0, maxRewardVarianceCrit: 0.01, expectationFlipsWarn: 0, expectationFlipsCrit: 1 };
 
-export type MonitoringAlert = {
-  severity: "warning" | "critical";
-  message: string;
-};
-
-export type MonitoringSnapshot = {
-  generatedAt: string | null;
-  source: {
-    latestPath: string;
-    datedPath: string | null;
-  };
-  metrics: {
-    calibrationAccuracy: number;
-    regressionPassRate: number;
-    calibrationDelta: number;
-    maxScoreVariance: number;
-    maxRewardVariance: number;
-    expectationFlips: number;
-  };
-  thresholds: AlertThresholds;
-  warningCount: number;
-  criticalCount: number;
-  alerts: MonitoringAlert[];
-  status: "ok" | "warning" | "critical";
-};
-
-export const DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS: AlertThresholds = {
-  calibrationWarnFloor: 0.72,
-  calibrationCritFloor: 0.7,
-  regressionPassRateWarnFloor: 1,
-  regressionPassRateCritFloor: 0.98,
-  driftWarnDelta: -0.03,
-  driftCritDelta: -0.05,
-  maxScoreVarianceWarn: 0,
-  maxScoreVarianceCrit: 0.01,
-  maxRewardVarianceWarn: 0,
-  maxRewardVarianceCrit: 0.01,
-  expectationFlipsWarn: 0,
-  expectationFlipsCrit: 1,
-};
-
-export async function readSystemDesignMonitoringSnapshot(cwd = process.cwd()): Promise<MonitoringSnapshot | null> {
+export async function readSystemDesignMonitoringSnapshot(cwd = process.cwd(), now = new Date()): Promise<MonitoringReadResult> {
   const metricsDir = path.join(cwd, "docs", "metrics", "system-design-weekly");
   const latestPath = path.join(metricsDir, "latest.json");
-  const latest = await readJsonFile<WeeklySnapshot>(latestPath);
-
-  if (!latest) {
-    return null;
-  }
-
-  const dateKey = (latest.generatedAt ?? "").slice(0, 10);
-  const datedPath = path.join(metricsDir, `snapshot-${dateKey}.json`);
-  const datedSnapshot = await readJsonFile<{
-    snapshot?: WeeklySnapshot;
-    drift?: { calibrationAccuracyDelta?: number };
-  }>(datedPath);
-
-  const calibrationAccuracy = latest.calibration?.accuracy ?? 0;
-  const regressionPassRate = latest.regression?.health?.passRate ?? 0;
-  const maxScoreVariance = latest.regression?.stability?.maxScoreVariance ?? 0;
-  const maxRewardVariance = latest.regression?.stability?.maxRewardVariance ?? 0;
-  const expectationFlips = latest.regression?.stability?.expectationFlipCount ?? 0;
-  const calibrationDelta = datedSnapshot?.drift?.calibrationAccuracyDelta ?? 0;
-
-  const alerts: MonitoringAlert[] = [];
-
-  checkFloor({
-    label: "calibration accuracy",
-    value: calibrationAccuracy,
-    warnFloor: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.calibrationWarnFloor,
-    critFloor: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.calibrationCritFloor,
-    alerts,
-  });
-  checkFloor({
-    label: "regression pass rate",
-    value: regressionPassRate,
-    warnFloor: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.regressionPassRateWarnFloor,
-    critFloor: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.regressionPassRateCritFloor,
-    alerts,
-  });
-  checkCeiling({
-    label: "max score variance",
-    value: maxScoreVariance,
-    warnCeiling: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.maxScoreVarianceWarn,
-    critCeiling: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.maxScoreVarianceCrit,
-    alerts,
-  });
-  checkCeiling({
-    label: "max reward variance",
-    value: maxRewardVariance,
-    warnCeiling: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.maxRewardVarianceWarn,
-    critCeiling: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.maxRewardVarianceCrit,
-    alerts,
-  });
-  checkCeiling({
-    label: "expectation flips",
-    value: expectationFlips,
-    warnCeiling: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.expectationFlipsWarn,
-    critCeiling: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.expectationFlipsCrit,
-    alerts,
-  });
-  checkFloor({
-    label: "weekly calibration delta",
-    value: calibrationDelta,
-    warnFloor: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.driftWarnDelta,
-    critFloor: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS.driftCritDelta,
-    alerts,
-  });
-
-  const criticalCount = alerts.filter((item) => item.severity === "critical").length;
-  const warningCount = alerts.filter((item) => item.severity === "warning").length;
-
-  return {
-    generatedAt: latest.generatedAt ?? null,
-    source: {
-      latestPath,
-      datedPath: datedSnapshot ? datedPath : null,
-    },
-    metrics: {
-      calibrationAccuracy,
-      regressionPassRate,
-      calibrationDelta,
-      maxScoreVariance,
-      maxRewardVariance,
-      expectationFlips,
-    },
-    thresholds: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS,
-    warningCount,
-    criticalCount,
-    alerts,
-    status: criticalCount > 0 ? "critical" : warningCount > 0 ? "warning" : "ok",
-  };
+  const base = (value: Partial<MonitoringReadResult>): MonitoringReadResult => ({ availability: "missing", freshness: "unknown", quality: "not_evaluated", generatedAt: null, ageHours: null, source: { latestPath, datedPath: null }, metrics: null, thresholds: DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS, alerts: [], diagnostics: [], ...value });
+  const latest = await readEnvelope(latestPath);
+  if (latest.kind !== "valid") return base({ availability: latest.kind, diagnostics: [latest.diagnostic] });
+  const latestValue = latest.value as MonitoringEnvelopeV1;
+  const ageHours = (now.getTime() - new Date(latestValue.generatedAt).getTime()) / 3_600_000;
+  const maxAge = maxAgeHours();
+  const diagnostics = maxAge.diagnostic ? [maxAge.diagnostic] : [];
+  if (ageHours > maxAge.value || ageHours < -(5 / 60)) return base({ availability: "available", freshness: "stale", generatedAt: latestValue.generatedAt, ageHours, diagnostics });
+  const datedPath = path.join(metricsDir, `snapshot-${latestValue.generatedAt.slice(0, 10)}.json`);
+  const dated = await readDated(datedPath);
+  if (dated.kind !== "valid") return base({ availability: "available", freshness: "fresh", generatedAt: latestValue.generatedAt, ageHours, source: { latestPath, datedPath }, diagnostics: [...diagnostics, `dated snapshot ${dated.diagnostic}`] });
+  const metrics: MonitoringMetrics = { calibrationAccuracy: latestValue.calibration.accuracy, regressionPassRate: latestValue.regression.health.passRate, maxScoreVariance: latestValue.regression.stability.maxScoreVariance, maxRewardVariance: latestValue.regression.stability.maxRewardVariance, expectationFlips: latestValue.regression.stability.expectationFlipCount, calibrationDelta: dated.delta };
+  const alerts = evaluateAlerts(metrics);
+  return base({ availability: "available", freshness: "fresh", quality: alerts.some((item) => item.severity === "critical") ? "critical" : alerts.length ? "warning" : "ok", generatedAt: latestValue.generatedAt, ageHours, source: { latestPath, datedPath }, metrics, alerts, diagnostics });
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function checkFloor(input: {
-  label: string;
-  value: number;
-  warnFloor: number;
-  critFloor: number;
-  alerts: MonitoringAlert[];
-}) {
-  if (input.value < input.critFloor) {
-    input.alerts.push({
-      severity: "critical",
-      message: `${input.label}=${input.value.toFixed(4)} below critical floor ${input.critFloor.toFixed(4)}`,
-    });
-    return;
-  }
-  if (input.value < input.warnFloor) {
-    input.alerts.push({
-      severity: "warning",
-      message: `${input.label}=${input.value.toFixed(4)} below warning floor ${input.warnFloor.toFixed(4)}`,
-    });
-  }
-}
-
-function checkCeiling(input: {
-  label: string;
-  value: number;
-  warnCeiling: number;
-  critCeiling: number;
-  alerts: MonitoringAlert[];
-}) {
-  if (input.value > input.critCeiling) {
-    input.alerts.push({
-      severity: "critical",
-      message: `${input.label}=${input.value.toFixed(4)} above critical ceiling ${input.critCeiling.toFixed(4)}`,
-    });
-    return;
-  }
-  if (input.value > input.warnCeiling) {
-    input.alerts.push({
-      severity: "warning",
-      message: `${input.label}=${input.value.toFixed(4)} above warning ceiling ${input.warnCeiling.toFixed(4)}`,
-    });
-  }
-}
-
+function maxAgeHours() { const raw = process.env.SYSTEM_DESIGN_MONITORING_MAX_AGE_HOURS; if (!raw) return { value: 192, diagnostic: null }; const value = Number(raw); return Number.isFinite(value) && value > 0 ? { value, diagnostic: null } : { value: 192, diagnostic: `invalid SYSTEM_DESIGN_MONITORING_MAX_AGE_HOURS=${raw}; using 192` }; }
+async function readEnvelope(filePath: string): Promise<{ kind: MonitoringAvailability | "valid"; value?: MonitoringEnvelopeV1; diagnostic: string }> { let value: unknown; try { value = JSON.parse(await readFile(filePath, "utf8")); } catch (error) { return { kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "invalid", diagnostic: "latest snapshot is missing or cannot be parsed" }; } if (!record(value) || value.schemaVersion === undefined) return { kind: "invalid", diagnostic: "latest snapshot lacks schemaVersion" }; if (typeof value.schemaVersion !== "number" || value.schemaVersion !== 1) return { kind: "unsupported_version", diagnostic: `unsupported schemaVersion=${String(value.schemaVersion)}` }; return envelope(value) ? { kind: "valid", value, diagnostic: "" } : { kind: "invalid", diagnostic: "latest snapshot does not satisfy schema v1" }; }
+async function readDated(filePath: string): Promise<{ kind: MonitoringAvailability | "valid"; delta: number; diagnostic: string }> { try { const value: unknown = JSON.parse(await readFile(filePath, "utf8")); if (!record(value) || !envelope(value.snapshot) || !record(value.drift) || !finite(value.drift.calibrationAccuracyDelta)) return { kind: "invalid", delta: 0, diagnostic: "is not a complete dated v1 snapshot" }; return { kind: "valid", delta: value.drift.calibrationAccuracyDelta, diagnostic: "" }; } catch (error) { return { kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "invalid", delta: 0, diagnostic: "is missing or cannot be parsed" }; } }
+function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
+function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
+function envelope(value: unknown): value is MonitoringEnvelopeV1 { if (!record(value) || value.schemaVersion !== 1 || typeof value.generatedAt !== "string" || Number.isNaN(Date.parse(value.generatedAt)) || !record(value.calibration) || !record(value.regression) || !record(value.regression.health) || !record(value.regression.stability)) return false; return finite(value.calibration.total) && finite(value.calibration.matched) && finite(value.calibration.accuracy) && finite(value.regression.health.passRate) && finite(value.regression.stability.maxScoreVariance) && finite(value.regression.stability.maxRewardVariance) && finite(value.regression.stability.expectationFlipCount); }
+function evaluateAlerts(metrics: MonitoringMetrics) { const thresholds = DEFAULT_SYSTEM_DESIGN_ALERT_THRESHOLDS; const alerts: MonitoringAlert[] = []; floor("calibration accuracy", metrics.calibrationAccuracy, thresholds.calibrationWarnFloor, thresholds.calibrationCritFloor, alerts); floor("regression pass rate", metrics.regressionPassRate, thresholds.regressionPassRateWarnFloor, thresholds.regressionPassRateCritFloor, alerts); ceiling("max score variance", metrics.maxScoreVariance, thresholds.maxScoreVarianceWarn, thresholds.maxScoreVarianceCrit, alerts); ceiling("max reward variance", metrics.maxRewardVariance, thresholds.maxRewardVarianceWarn, thresholds.maxRewardVarianceCrit, alerts); ceiling("expectation flips", metrics.expectationFlips, thresholds.expectationFlipsWarn, thresholds.expectationFlipsCrit, alerts); floor("weekly calibration delta", metrics.calibrationDelta, thresholds.driftWarnDelta, thresholds.driftCritDelta, alerts); return alerts; }
+function floor(label: string, value: number, warn: number, critical: number, alerts: MonitoringAlert[]) { if (value < critical) alerts.push({ severity: "critical", message: `${label}=${value.toFixed(4)} below critical floor ${critical.toFixed(4)}` }); else if (value < warn) alerts.push({ severity: "warning", message: `${label}=${value.toFixed(4)} below warning floor ${warn.toFixed(4)}` }); }
+function ceiling(label: string, value: number, warn: number, critical: number, alerts: MonitoringAlert[]) { if (value > critical) alerts.push({ severity: "critical", message: `${label}=${value.toFixed(4)} above critical ceiling ${critical.toFixed(4)}` }); else if (value > warn) alerts.push({ severity: "warning", message: `${label}=${value.toFixed(4)} above warning ceiling ${warn.toFixed(4)}` }); }

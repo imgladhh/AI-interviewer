@@ -24,6 +24,7 @@ function makeSnapshot(overrides?: Partial<SystemDesignWeeklySnapshot>): SystemDe
       ],
     },
     ...overrides,
+    schemaVersion: 1,
   };
 }
 
@@ -69,4 +70,3 @@ describe("buildSystemDesignDriftReport", () => {
     expect(report.expectationFlips.some((item) => item.scenarioId === "rigid_coder")).toBe(true);
   });
 });
-

@@ -1,4 +1,4 @@
-import type { ScoringInput } from "@/lib/scoring/types";
+import type { ScoringEvidence } from "@/lib/scoring/types";
 
 export type PivotAdjustmentResult = {
   adjustment: number;
@@ -9,9 +9,9 @@ export type PivotAdjustmentResult = {
 };
 
 export function calculatePivotAdjustment(input: {
-  pivots: ScoringInput["pivots"];
-  decisionTrace: ScoringInput["decisionTrace"];
-  noiseTags: ScoringInput["noiseTags"];
+  pivots: ScoringEvidence["pivots"];
+  decisionTrace: ScoringEvidence["decisionTrace"];
+  noiseTags: ScoringEvidence["noiseTags"];
 }): PivotAdjustmentResult {
   if (input.noiseTags.length > 0 || input.pivots.length === 0) {
     return {
@@ -76,7 +76,7 @@ export function calculatePivotAdjustment(input: {
   };
 }
 
-function countNudges(decisions: ScoringInput["decisionTrace"]) {
+function countNudges(decisions: ScoringEvidence["decisionTrace"]) {
   return decisions.filter((decision) => {
     const action = (decision.action ?? "").toLowerCase();
     return action.includes("hint") || action.includes("guide");
@@ -84,8 +84,8 @@ function countNudges(decisions: ScoringInput["decisionTrace"]) {
 }
 
 function countHintsBeforeFirstInsight(
-  decisions: ScoringInput["decisionTrace"],
-  pivots: ScoringInput["pivots"],
+  decisions: ScoringEvidence["decisionTrace"],
+  pivots: ScoringEvidence["pivots"],
 ) {
   const firstTurnId = pivots.find((pivot) => pivot.impactScore >= 0.25)?.turnId ?? null;
   if (!firstTurnId) {
@@ -106,7 +106,7 @@ function countHintsBeforeFirstInsight(
 }
 
 function computeTurnsToInsight(
-  decisions: ScoringInput["decisionTrace"],
+  decisions: ScoringEvidence["decisionTrace"],
   pivotTurnId: string | null,
 ): number | null {
   if (!pivotTurnId || decisions.length === 0) {

@@ -9,7 +9,7 @@ import {
 import { buildHintingLedger, type HintLedger } from "@/lib/assistant/hinting_ledger";
 import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
 import { calculateUnifiedScore } from "@/lib/scoring/calculateUnifiedScore";
-import type { ScoringInput } from "@/lib/scoring/types";
+import type { RewardTelemetry, ScoringEvidence } from "@/lib/scoring/types";
 import type { Recommendation } from "@prisma/client";
 
 type TranscriptLike = {
@@ -390,6 +390,9 @@ type SystemDesignDna = {
     evidenceRefs: string[];
     turnIds: string[];
   }>;
+  interviewerPolicyTelemetry?: {
+    reward: RewardTelemetry;
+  };
   evidencePins: Array<{
     dimension: "requirement_clarity" | "capacity_instinct" | "tradeoff_depth" | "reliability_awareness" | "bottleneck_sensitivity";
     score: number;
@@ -2262,7 +2265,7 @@ function buildSystemDesignDna(input: {
     pivotSummary,
   });
 
-  const scoringInput: ScoringInput = {
+  const scoringEvidence: ScoringEvidence = {
     signals: [
       {
         key: "requirement_missing",
@@ -2305,9 +2308,12 @@ function buildSystemDesignDna(input: {
       }),
     },
     decisionTrace: extractDecisionTrace(input.events),
-    rewardTrace: extractRewardTrace(input.events),
   };
-  const unifiedScore = calculateUnifiedScore(scoringInput);
+  const interviewerPolicyTelemetry = buildInterviewerPolicyTelemetry({
+    events: input.events,
+    noiseTags: scoringEvidence.noiseTags,
+  });
+  const unifiedScore = calculateUnifiedScore(scoringEvidence);
   const levelRecommendation = levelCapResult.level;
 
   const strengths: string[] = [];
@@ -2401,7 +2407,7 @@ function buildSystemDesignDna(input: {
       }),
     },
   ];
-  const pivotTurnIds = scoringInput.pivots
+  const pivotTurnIds = scoringEvidence.pivots
     .map((item) => item.turnId)
     .filter((item): item is string => typeof item === "string" && item.length > 0);
   const strongestSignals = buildStrongestSystemDesignSignals(evidencePins);
@@ -2443,6 +2449,7 @@ function buildSystemDesignDna(input: {
     blocking_dimensions: blockingDimensions,
     pivot_effects: pivotEffects,
     evidencePins,
+    interviewerPolicyTelemetry,
   };
 }
 
@@ -2450,8 +2457,8 @@ function toMissingBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-function extractPivotInputsFromEvents(events: SessionEventLike[]): ScoringInput["pivots"] {
-  const pivots: ScoringInput["pivots"] = [];
+function extractPivotInputsFromEvents(events: SessionEventLike[]): ScoringEvidence["pivots"] {
+  const pivots: ScoringEvidence["pivots"] = [];
   for (const event of events) {
     if (event.eventType !== "REWARD_RECORDED") {
       continue;
@@ -2472,7 +2479,7 @@ function extractPivotInputsFromEvents(events: SessionEventLike[]): ScoringInput[
   return pivots;
 }
 
-function extractNoiseTagsFromEvents(events: SessionEventLike[]): ScoringInput["noiseTags"] {
+function extractNoiseTagsFromEvents(events: SessionEventLike[]): ScoringEvidence["noiseTags"] {
   const tags = new Set<"STT_CORRUPTION" | "PARTIAL_TRANSCRIPT" | "INTERRUPTED_TURN">();
   for (const event of events) {
     if (event.eventType !== "REWARD_RECORDED") {
@@ -2491,8 +2498,8 @@ function extractNoiseTagsFromEvents(events: SessionEventLike[]): ScoringInput["n
   return [...tags];
 }
 
-function extractDecisionTrace(events: SessionEventLike[]): ScoringInput["decisionTrace"] {
-  const trace: ScoringInput["decisionTrace"] = [];
+function extractDecisionTrace(events: SessionEventLike[]): ScoringEvidence["decisionTrace"] {
+  const trace: ScoringEvidence["decisionTrace"] = [];
   for (const event of events) {
     if (event.eventType !== "DECISION_RECORDED") {
       continue;
@@ -2512,8 +2519,8 @@ function extractDecisionTrace(events: SessionEventLike[]): ScoringInput["decisio
   return trace;
 }
 
-function extractRewardTrace(events: SessionEventLike[]): ScoringInput["rewardTrace"] {
-  const trace: ScoringInput["rewardTrace"] = [];
+function extractRewardTrace(events: SessionEventLike[]): RewardTelemetry["entries"] {
+  const trace: RewardTelemetry["entries"] = [];
   for (const event of events) {
     if (event.eventType !== "REWARD_RECORDED") {
       continue;
@@ -2532,6 +2539,31 @@ function extractRewardTrace(events: SessionEventLike[]): ScoringInput["rewardTra
     });
   }
   return trace;
+}
+
+function buildInterviewerPolicyTelemetry(input: {
+  events: SessionEventLike[];
+  noiseTags: ScoringEvidence["noiseTags"];
+}): { reward: RewardTelemetry } {
+  const noiseTagSet = new Set(input.noiseTags);
+  const trace = extractRewardTrace(input.events);
+  const excludedByNoiseTags = new Set<ScoringEvidence["noiseTags"][number]>();
+  const entries = trace.filter((reward) => {
+    const excluded = (reward.noiseTags ?? []).filter((tag) => noiseTagSet.has(tag));
+    for (const tag of excluded) {
+      excludedByNoiseTags.add(tag);
+    }
+    return excluded.length === 0;
+  });
+
+  return {
+    reward: {
+      source: "session_event",
+      causalRole: "interviewer_policy_only",
+      entries,
+      excludedByNoiseTags: [...excludedByNoiseTags],
+    },
+  };
 }
 
 function extractTranscriptSegmentId(payload: Record<string, unknown>) {

@@ -1,4 +1,4 @@
-import type { ScoringInput } from "@/lib/scoring/types";
+import type { ScoringEvidence } from "@/lib/scoring/types";
 
 type GapKey = "capacity" | "tradeoff" | "reliability" | "bottleneck";
 
@@ -20,7 +20,7 @@ const STAGE_MULTIPLIER: Array<{ pattern: RegExp; multiplier: number }> = [
 ];
 
 export function calculateGapPenalty(input: {
-  gapState: ScoringInput["gapState"];
+  gapState: ScoringEvidence["gapState"];
   stage?: string | null;
 }) {
   const stage = input.stage ?? "";

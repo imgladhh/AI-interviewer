@@ -4,12 +4,7 @@ import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
-import {
-  readCandidateStateSnapshots,
-  readInterviewerDecisionSnapshots,
-  readIntentSnapshots,
-  readTrajectorySnapshots,
-} from "@/lib/session/snapshots";
+import { readSessionSnapshotBundle } from "@/lib/session/snapshots";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -64,12 +59,7 @@ export async function POST(_: Request, { params }: RouteContext) {
     return fail("Interview session not found", 404);
   }
 
-  const [candidateStateSnapshots, interviewerDecisionSnapshots, intentSnapshots, trajectorySnapshots] = await Promise.all([
-    readCandidateStateSnapshots(id),
-    readInterviewerDecisionSnapshots(id),
-    readIntentSnapshots(id),
-    readTrajectorySnapshots(id),
-  ]);
+  const snapshots = await readSessionSnapshotBundle(id);
 
   await prisma.sessionEvent.create({
     data: {
@@ -101,28 +91,28 @@ export async function POST(_: Request, { params }: RouteContext) {
       runtimeMs: run.runtimeMs,
       createdAt: run.createdAt,
     })),
-    candidateStateSnapshots: candidateStateSnapshots.map((row) => ({
+    candidateStateSnapshots: snapshots.candidateStates.map((row) => ({
       id: row.id,
       stage: row.stage,
       source: row.source,
       snapshotJson: row.snapshotJson,
       createdAt: row.createdAt,
     })),
-    interviewerDecisionSnapshots: interviewerDecisionSnapshots.map((row) => ({
+    interviewerDecisionSnapshots: snapshots.decisions.map((row) => ({
       id: row.id,
       stage: row.stage,
       source: row.source,
       decisionJson: row.decisionJson,
       createdAt: row.createdAt,
     })),
-    intentSnapshots: intentSnapshots.map((row) => ({
+    intentSnapshots: snapshots.intents.map((row) => ({
       id: row.id,
       stage: row.stage,
       source: row.source,
       intentJson: row.intentJson,
       createdAt: row.createdAt,
     })),
-    trajectorySnapshots: trajectorySnapshots.map((row) => ({
+    trajectorySnapshots: snapshots.trajectories.map((row) => ({
       id: row.id,
       stage: row.stage,
       source: row.source,
@@ -130,6 +120,7 @@ export async function POST(_: Request, { params }: RouteContext) {
       createdAt: row.createdAt,
     })),
   });
+  generated.reportJson.snapshotProjectionHealth = snapshots.health;
 
   const evaluation = await prisma.evaluation.upsert({
     where: { sessionId: id },

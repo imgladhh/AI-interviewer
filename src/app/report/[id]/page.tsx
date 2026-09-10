@@ -5,12 +5,7 @@ import { buildMemoryLedger } from "@/lib/assistant/memory_ledger";
 import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
 import { getCommittedTranscriptSegments, summarizeTranscriptTruth } from "@/lib/session/commit-arbiter";
 import { buildSessionSnapshotState } from "@/lib/session/state";
-import {
-  readCandidateStateSnapshots,
-  readInterviewerDecisionSnapshots,
-  readIntentSnapshots,
-  readTrajectorySnapshots,
-} from "@/lib/session/snapshots";
+import { readSessionSnapshotBundle } from "@/lib/session/snapshots";
 import { isCodingInterviewStage } from "@/lib/assistant/stages";
 import { prisma } from "@/lib/db";
 
@@ -470,12 +465,7 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     notFound();
   }
 
-  const [candidateStateSnapshots, interviewerDecisionSnapshots, intentSnapshots, trajectorySnapshots] = await Promise.all([
-    readCandidateStateSnapshots(session.id),
-    readInterviewerDecisionSnapshots(session.id),
-    readIntentSnapshots(session.id),
-    readTrajectorySnapshots(session.id),
-  ]);
+  const snapshots = await readSessionSnapshotBundle(session.id);
 
   if (!session.feedbackReport) {
     return (
@@ -503,10 +493,10 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
     mode: session.mode,
     currentStage: typeof reportJson.currentStage === "string" ? reportJson.currentStage : null,
     events: session.events,
-    candidateStateSnapshots: candidateStateSnapshots,
-    interviewerDecisionSnapshots: interviewerDecisionSnapshots,
-    intentSnapshots,
-    trajectorySnapshots,
+    candidateStateSnapshots: snapshots.candidateStates,
+    interviewerDecisionSnapshots: snapshots.decisions,
+    intentSnapshots: snapshots.intents,
+    trajectorySnapshots: snapshots.trajectories,
     executionRuns: session.executionRuns,
   });
   if (!reportJson.candidateState && snapshotState.latestSignals) {

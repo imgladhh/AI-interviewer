@@ -42,15 +42,21 @@ export type SessionMetadata = {
   targetLevel?: string | null;
 };
 
-export interface ScoringInput {
+export interface ScoringEvidence {
   signals: Signal[];
   gapState: SystemDesignGapState;
   pivots: PivotMomentInput[];
   noiseTags: NoiseTag[];
   metadata: SessionMetadata;
   decisionTrace: DecisionResult[];
-  rewardTrace: RewardTrace[];
 }
+
+export type RewardTelemetry = {
+  source: "session_event";
+  causalRole: "interviewer_policy_only";
+  entries: RewardTrace[];
+  excludedByNoiseTags: NoiseTag[];
+};
 
 export interface EvaluationResult {
   rawLevel: UnifiedLevel;

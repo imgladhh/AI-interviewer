@@ -1,4 +1,4 @@
-import type { ScoringInput } from "@/lib/scoring/types";
+import type { ScoringEvidence } from "@/lib/scoring/types";
 
 export type ConfidenceResult = {
   value: number;
@@ -11,10 +11,10 @@ export type ConfidenceResult = {
 };
 
 export function calculateConfidence(input: {
-  signals: ScoringInput["signals"];
-  noiseTags: ScoringInput["noiseTags"];
-  gapState: ScoringInput["gapState"];
-  decisionTrace: ScoringInput["decisionTrace"];
+  signals: ScoringEvidence["signals"];
+  noiseTags: ScoringEvidence["noiseTags"];
+  gapState: ScoringEvidence["gapState"];
+  decisionTrace: ScoringEvidence["decisionTrace"];
   dimensionScores: {
     requirement_clarity: number;
     capacity_instinct: number;

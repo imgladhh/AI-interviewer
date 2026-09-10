@@ -24,11 +24,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check monitoring alerts
-        run: npm run check:system-design-alerts
-
       - name: Build weekly snapshot and drift report
         run: npm run eval:system-design:weekly
+
+      - name: Check monitoring alerts
+        run: npm run check:system-design-alerts
 
       - name: Upload weekly metrics artifact
         if: always()

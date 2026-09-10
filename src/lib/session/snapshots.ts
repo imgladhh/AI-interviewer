@@ -1,6 +1,5 @@
 ﻿import { prisma } from "@/lib/db";
 
-let snapshotPersistenceDisabled = false;
 let hasWarnedAboutMissingSnapshotTables = false;
 
 type SnapshotRow = {
@@ -45,6 +44,22 @@ type RawSnapshotClient = {
   $queryRawUnsafe?: <T>(...args: unknown[]) => Promise<T>;
 };
 
+export type SnapshotKind = "candidate_state" | "interviewer_decision" | "intent" | "trajectory";
+export type SnapshotFailureKind = "schema_missing" | "transient_database" | "serialization" | "unknown";
+export type SnapshotWriteResult = {
+  status: "persisted" | "skipped" | "degraded";
+  attemptedKinds: SnapshotKind[];
+  persistedKinds: SnapshotKind[];
+  failure?: { kind: SnapshotFailureKind; message: string };
+};
+export type SessionSnapshotBundle = {
+  candidateStates: CandidateStateSnapshotRow[];
+  decisions: InterviewerDecisionSnapshotRow[];
+  intents: IntentSnapshotRow[];
+  trajectories: TrajectorySnapshotRow[];
+  health: { status: "healthy" | "degraded"; failure?: SnapshotFailureKind; diagnostics: string[] };
+};
+
 function isMissingSnapshotTableError(error: unknown) {
   if (typeof error !== "object" || error === null) {
     return false;
@@ -62,24 +77,18 @@ function isMissingSnapshotTableError(error: unknown) {
   );
 }
 
-function handleSnapshotError(error: unknown) {
+function failureFor(error: unknown): SnapshotWriteResult["failure"] {
   if (isMissingSnapshotTableError(error)) {
-    snapshotPersistenceDisabled = true;
-
     if (!hasWarnedAboutMissingSnapshotTables && process.env.NODE_ENV !== "production") {
       hasWarnedAboutMissingSnapshotTables = true;
       console.warn(
-        "[session-snapshots] snapshot tables are missing in the current database, so snapshot persistence has been disabled. Apply the session_state_snapshots migration to enable it again.",
+        "[session-snapshots] snapshot tables are missing. Apply the session_state_snapshots migration; future writes will retry.",
       );
     }
-
-    return true;
+    return { kind: "schema_missing", message: "snapshot projection tables are unavailable" };
   }
-
-  if (process.env.NODE_ENV !== "production") {
-    console.warn("[session-snapshots] snapshot persistence skipped", error);
-  }
-  return false;
+  if (error instanceof SyntaxError) return { kind: "serialization", message: "snapshot payload cannot be serialized" };
+  return { kind: "transient_database", message: "snapshot projection write failed" };
 }
 
 export async function persistSessionSnapshots(input: {
@@ -90,82 +99,71 @@ export async function persistSessionSnapshots(input: {
   decision?: unknown;
   intent?: unknown;
   trajectory?: unknown;
-}) {
-  if (snapshotPersistenceDisabled) {
-    return;
-  }
-
+}): Promise<SnapshotWriteResult> {
   const rawClient = prisma as unknown as RawSnapshotClient;
   if (!rawClient.$executeRawUnsafe) {
-    return;
+    return { status: "skipped", attemptedKinds: [], persistedKinds: [] };
   }
-
-  const operations: Promise<unknown>[] = [];
+  const operations: Array<{ kind: SnapshotKind; run: (client: RawSnapshotClient) => Promise<unknown> }> = [];
 
   if (input.signals) {
-    operations.push(
-      rawClient.$executeRawUnsafe(
+    operations.push({ kind: "candidate_state", run: (client) => client.$executeRawUnsafe!(
         'INSERT INTO "CandidateStateSnapshot" ("sessionId", stage, source, "snapshotJson") VALUES ($1, $2, $3, $4::jsonb)',
         input.sessionId,
         input.stage ?? null,
         input.source ?? null,
         JSON.stringify(input.signals),
-      ),
-    );
+      ) });
   }
 
   if (input.decision) {
-    operations.push(
-      rawClient.$executeRawUnsafe(
+    operations.push({ kind: "interviewer_decision", run: (client) => client.$executeRawUnsafe!(
         'INSERT INTO "InterviewerDecisionSnapshot" ("sessionId", stage, source, "decisionJson") VALUES ($1, $2, $3, $4::jsonb)',
         input.sessionId,
         input.stage ?? null,
         input.source ?? null,
         JSON.stringify(input.decision),
-      ),
-    );
+      ) });
   }
 
   if (input.intent) {
-    operations.push(
-      rawClient.$executeRawUnsafe(
+    operations.push({ kind: "intent", run: (client) => client.$executeRawUnsafe!(
         'INSERT INTO "IntentSnapshot" ("sessionId", stage, source, "intentJson") VALUES ($1, $2, $3, $4::jsonb)',
         input.sessionId,
         input.stage ?? null,
         input.source ?? null,
         JSON.stringify(input.intent),
-      ),
-    );
+      ) });
   }
 
   if (input.trajectory) {
-    operations.push(
-      rawClient.$executeRawUnsafe(
+    operations.push({ kind: "trajectory", run: (client) => client.$executeRawUnsafe!(
         'INSERT INTO "TrajectorySnapshot" ("sessionId", stage, source, "trajectoryJson") VALUES ($1, $2, $3, $4::jsonb)',
         input.sessionId,
         input.stage ?? null,
         input.source ?? null,
         JSON.stringify(input.trajectory),
-      ),
-    );
+      ) });
   }
 
   if (operations.length === 0) {
-    return;
+    return { status: "skipped", attemptedKinds: [], persistedKinds: [] };
   }
 
   try {
-    await Promise.all(operations);
+    await prisma.$transaction(async (transaction) => {
+      const client = transaction as unknown as RawSnapshotClient;
+      for (const operation of operations) await operation.run(client);
+    });
+    return { status: "persisted", attemptedKinds: operations.map((item) => item.kind), persistedKinds: operations.map((item) => item.kind) };
   } catch (error) {
-    handleSnapshotError(error);
+    const failure = failureFor(error) as NonNullable<SnapshotWriteResult["failure"]>;
+    if (process.env.NODE_ENV !== "production" && failure.kind !== "schema_missing") console.warn("[session-snapshots] snapshot projection degraded", error);
+    return { status: "degraded", attemptedKinds: operations.map((item) => item.kind), persistedKinds: [], failure };
   }
 }
 
 export async function readCandidateStateSnapshots(sessionId: string): Promise<CandidateStateSnapshotRow[]> {
-  if (snapshotPersistenceDisabled) {
-    return [];
-  }
-
   const rawClient = prisma as unknown as RawSnapshotClient;
   if (!rawClient.$queryRawUnsafe) {
     return [];
@@ -178,18 +176,12 @@ export async function readCandidateStateSnapshots(sessionId: string): Promise<Ca
     );
     return rows;
   } catch (error) {
-    if (handleSnapshotError(error)) {
-      return [];
-    }
-    throw error;
+    console.warn("[session-snapshots] candidate projection read degraded", failureFor(error));
+    return [];
   }
 }
 
 export async function readInterviewerDecisionSnapshots(sessionId: string): Promise<InterviewerDecisionSnapshotRow[]> {
-  if (snapshotPersistenceDisabled) {
-    return [];
-  }
-
   const rawClient = prisma as unknown as RawSnapshotClient;
   if (!rawClient.$queryRawUnsafe) {
     return [];
@@ -202,18 +194,12 @@ export async function readInterviewerDecisionSnapshots(sessionId: string): Promi
     );
     return rows;
   } catch (error) {
-    if (handleSnapshotError(error)) {
-      return [];
-    }
-    throw error;
+    console.warn("[session-snapshots] decision projection read degraded", failureFor(error));
+    return [];
   }
 }
 
 export async function readIntentSnapshots(sessionId: string): Promise<IntentSnapshotRow[]> {
-  if (snapshotPersistenceDisabled) {
-    return [];
-  }
-
   const rawClient = prisma as unknown as RawSnapshotClient;
   if (!rawClient.$queryRawUnsafe) {
     return [];
@@ -226,18 +212,12 @@ export async function readIntentSnapshots(sessionId: string): Promise<IntentSnap
     );
     return rows;
   } catch (error) {
-    if (handleSnapshotError(error)) {
-      return [];
-    }
-    throw error;
+    console.warn("[session-snapshots] intent projection read degraded", failureFor(error));
+    return [];
   }
 }
 
 export async function readTrajectorySnapshots(sessionId: string): Promise<TrajectorySnapshotRow[]> {
-  if (snapshotPersistenceDisabled) {
-    return [];
-  }
-
   const rawClient = prisma as unknown as RawSnapshotClient;
   if (!rawClient.$queryRawUnsafe) {
     return [];
@@ -250,9 +230,63 @@ export async function readTrajectorySnapshots(sessionId: string): Promise<Trajec
     );
     return rows;
   } catch (error) {
-    if (handleSnapshotError(error)) {
-      return [];
-    }
-    throw error;
+    console.warn("[session-snapshots] trajectory projection read degraded", failureFor(error));
+    return [];
   }
+}
+
+export async function readSessionSnapshotBundle(sessionId: string): Promise<SessionSnapshotBundle> {
+  const rawClient = prisma as unknown as RawSnapshotClient;
+  if (!rawClient.$queryRawUnsafe) {
+    return emptyBundle("unknown", "snapshot query capability is unavailable");
+  }
+  try {
+    const [candidateStates, decisions, intents, trajectories] = await Promise.all([
+      rawClient.$queryRawUnsafe<CandidateStateSnapshotRow[]>('SELECT id, "sessionId", stage, source, "snapshotJson", "createdAt" FROM "CandidateStateSnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC', sessionId),
+      rawClient.$queryRawUnsafe<InterviewerDecisionSnapshotRow[]>('SELECT id, "sessionId", stage, source, "decisionJson", "createdAt" FROM "InterviewerDecisionSnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC', sessionId),
+      rawClient.$queryRawUnsafe<IntentSnapshotRow[]>('SELECT id, "sessionId", stage, source, "intentJson", "createdAt" FROM "IntentSnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC', sessionId),
+      rawClient.$queryRawUnsafe<TrajectorySnapshotRow[]>('SELECT id, "sessionId", stage, source, "trajectoryJson", "createdAt" FROM "TrajectorySnapshot" WHERE "sessionId" = $1 ORDER BY "createdAt" ASC', sessionId),
+    ]);
+    return { candidateStates, decisions, intents, trajectories, health: { status: "healthy", diagnostics: [] } };
+  } catch (error) {
+    const failure = failureFor(error) as NonNullable<SnapshotWriteResult["failure"]>;
+    console.warn("[session-snapshots] snapshot bundle read degraded", failure);
+    return emptyBundle(failure.kind, failure.message);
+  }
+}
+
+/** Internal recovery path: only persisted server events may supply projection payloads. */
+export async function rebuildSessionSnapshotBundleFromEvents(input: {
+  sessionId: string;
+  events: Array<{ eventType: string; payloadJson: unknown }>;
+}): Promise<SnapshotWriteResult> {
+  const latest = (eventType: string, key: string) => {
+    for (let index = input.events.length - 1; index >= 0; index -= 1) {
+      const event = input.events[index];
+      if (event.eventType !== eventType || typeof event.payloadJson !== "object" || event.payloadJson === null) continue;
+      const value = (event.payloadJson as Record<string, unknown>)[key];
+      if (value !== undefined && value !== null) return { value, payload: event.payloadJson as Record<string, unknown> };
+    }
+    return null;
+  };
+  const signals = latest("SIGNAL_SNAPSHOT_RECORDED", "signals");
+  const decision = latest("DECISION_RECORDED", "decision");
+  const intent = latest("INTENT_SNAPSHOT_RECORDED", "intent");
+  const trajectory = latest("TRAJECTORY_SNAPSHOT_RECORDED", "trajectory");
+  if (!signals || !decision || !intent || !trajectory) {
+    return { status: "skipped", attemptedKinds: [], persistedKinds: [], failure: { kind: "unknown", message: "insufficient authoritative events to rebuild all snapshot projections" } };
+  }
+  return persistSessionSnapshots({
+    sessionId: input.sessionId,
+    stage: typeof signals.payload.stage === "string" ? signals.payload.stage : null,
+    source: "event-rebuild",
+    signals: signals.value,
+    decision: decision.value,
+    intent: intent.value,
+    trajectory: trajectory.value,
+  });
+}
+
+function emptyBundle(failure: SnapshotFailureKind, diagnostic: string): SessionSnapshotBundle {
+  return { candidateStates: [], decisions: [], intents: [], trajectories: [], health: { status: "degraded", failure, diagnostics: [diagnostic] } };
 }

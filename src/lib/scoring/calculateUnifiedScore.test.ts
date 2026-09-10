@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { calculateUnifiedScore } from "@/lib/scoring/calculateUnifiedScore";
-import type { ScoringInput, Signal } from "@/lib/scoring/types";
+import type { ScoringEvidence, Signal } from "@/lib/scoring/types";
 
-function createInput(overrides?: Partial<ScoringInput>): ScoringInput {
+function createInput(overrides?: Partial<ScoringEvidence>): ScoringEvidence {
   return {
     signals: [
       { key: "requirement_missing", missing: false },
@@ -24,7 +24,6 @@ function createInput(overrides?: Partial<ScoringInput>): ScoringInput {
       targetLevel: "SENIOR",
     },
     decisionTrace: [],
-    rewardTrace: [],
     ...overrides,
   };
 }

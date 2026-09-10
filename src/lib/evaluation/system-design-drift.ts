@@ -1,4 +1,5 @@
 export type SystemDesignWeeklySnapshot = {
+  schemaVersion: 1;
   generatedAt: string;
   calibration: {
     total: number;

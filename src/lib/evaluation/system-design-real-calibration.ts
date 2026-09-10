@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { calculateUnifiedScore } from "@/lib/scoring/calculateUnifiedScore";
-import type { ScoringInput, UnifiedLevel, UnifiedVerdict } from "@/lib/scoring/types";
+import type { ScoringEvidence, UnifiedLevel, UnifiedVerdict } from "@/lib/scoring/types";
 
 export type RealCalibrationTargetLevel = "Mid-level" | "Senior" | "Staff";
 
@@ -12,7 +12,7 @@ export type RealCalibrationLabel = {
     level: RealCalibrationTargetLevel;
     verdict: UnifiedVerdict;
   };
-  scoringInput: ScoringInput;
+  scoringInput: ScoringEvidence;
   notes?: string;
 };
 
@@ -175,7 +175,7 @@ function stringOrThrow(value: unknown, message: string) {
   throw new Error(message);
 }
 
-function isScoringInput(value: unknown): value is ScoringInput {
+function isScoringInput(value: unknown): value is ScoringEvidence {
   const record = asRecord(value);
   return (
     Array.isArray(record.signals) &&
@@ -185,12 +185,10 @@ function isScoringInput(value: unknown): value is ScoringInput {
     Array.isArray(record.noiseTags) &&
     typeof record.metadata === "object" &&
     record.metadata !== null &&
-    Array.isArray(record.decisionTrace) &&
-    Array.isArray(record.rewardTrace)
+    Array.isArray(record.decisionTrace)
   );
 }
 
 function round2(value: number) {
   return Number(value.toFixed(2));
 }
-

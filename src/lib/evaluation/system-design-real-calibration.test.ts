@@ -38,7 +38,6 @@ const SAMPLE_RECORDS: RealCalibrationLabel[] = [
         targetLevel: "SENIOR",
       },
       decisionTrace: [{ turnId: "d1", action: "probe_tradeoff", rescueMode: "none" }],
-      rewardTrace: [{ turnId: "r1", total: 0.4, noiseTags: [] }],
     },
   },
   {
@@ -69,7 +68,6 @@ const SAMPLE_RECORDS: RealCalibrationLabel[] = [
         targetLevel: "SDE2",
       },
       decisionTrace: [{ turnId: "d2", action: "ask_capacity", rescueMode: "heavy_rescue" }],
-      rewardTrace: [{ turnId: "r2", total: -0.1, noiseTags: [] }],
     },
   },
 ];
@@ -106,4 +104,3 @@ describe("system design real calibration dataset", () => {
     expect(mapUnifiedLevelToTargetLevel("L6")).toBe("Staff");
   });
 });
-

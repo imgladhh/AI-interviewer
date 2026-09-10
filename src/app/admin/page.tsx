@@ -102,20 +102,20 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                   style={{
                     ...stagePillStyle,
                     borderColor:
-                      monitoring.status === "critical"
+                      monitoring.quality === "critical"
                         ? "rgba(191, 28, 28, 0.35)"
-                        : monitoring.status === "warning"
+                        : monitoring.quality === "warning"
                           ? "rgba(201, 138, 0, 0.35)"
                           : "rgba(19, 115, 51, 0.35)",
                     background:
-                      monitoring.status === "critical"
+                      monitoring.quality === "critical"
                         ? "rgba(191, 28, 28, 0.12)"
-                        : monitoring.status === "warning"
+                        : monitoring.quality === "warning"
                           ? "rgba(201, 138, 0, 0.12)"
                           : "rgba(19, 115, 51, 0.12)",
                   }}
                 >
-                  status: {monitoring.status}
+                  telemetry: {monitoring.availability}/{monitoring.freshness}; quality: {monitoring.quality}
                 </span>
               </div>
 
@@ -126,10 +126,10 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
                 }}
               >
-                <MetricCard label="Calibration Accuracy" value={monitoring.metrics.calibrationAccuracy.toFixed(2)} />
-                <MetricCard label="Regression Pass Rate" value={monitoring.metrics.regressionPassRate.toFixed(2)} />
-                <MetricCard label="Calibration Drift Δ" value={monitoring.metrics.calibrationDelta.toFixed(3)} />
-                <MetricCard label="Expectation Flips" value={String(monitoring.metrics.expectationFlips)} />
+                <MetricCard label="Calibration Accuracy" value={monitoring.metrics ? monitoring.metrics.calibrationAccuracy.toFixed(2) : "unavailable"} />
+                <MetricCard label="Regression Pass Rate" value={monitoring.metrics ? monitoring.metrics.regressionPassRate.toFixed(2) : "unavailable"} />
+                <MetricCard label="Calibration Drift Δ" value={monitoring.metrics ? monitoring.metrics.calibrationDelta.toFixed(3) : "unavailable"} />
+                <MetricCard label="Expectation Flips" value={monitoring.metrics ? String(monitoring.metrics.expectationFlips) : "unavailable"} />
               </div>
 
               {monitoring.alerts.length > 0 ? (

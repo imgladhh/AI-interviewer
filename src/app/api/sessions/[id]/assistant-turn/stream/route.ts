@@ -429,7 +429,7 @@ export async function POST(request: Request, { params }: RouteContext) {
           events.push(rewardEvent);
         }
 
-        await persistSessionSnapshots({
+        const snapshotResult = await persistSessionSnapshots({
           sessionId: id,
           stage: currentStage,
           source: finalTurn.source,
@@ -438,6 +438,20 @@ export async function POST(request: Request, { params }: RouteContext) {
           intent: finalTurn.intent,
           trajectory: finalTurn.trajectory,
         });
+        if (snapshotResult.status === "degraded") {
+          const sourceSessionEventId = events.at(-1)?.id;
+          // Route-local key; Batch 3 replaces this with the shared idempotency protocol.
+          if (sourceSessionEventId && !events.some((event) => event.eventType === SESSION_EVENT_TYPES.SNAPSHOT_PROJECTION_DEGRADED)) {
+            try {
+              const degradedEvent = await prisma.sessionEvent.create({
+                data: { sessionId: id, eventType: SESSION_EVENT_TYPES.SNAPSHOT_PROJECTION_DEGRADED, payloadJson: { sourceSessionEventId, kind: snapshotResult.failure?.kind ?? "unknown", attemptedKinds: snapshotResult.attemptedKinds } },
+              });
+              events.push(degradedEvent);
+            } catch (error) {
+              console.warn("[assistant-turn-stream] unable to record snapshot projection degradation", { sessionId: id, sourceSessionEventId, error: error instanceof Error ? error.name : "unknown" });
+            }
+          }
+        }
 
         const aiSpokeEvent = await prisma.sessionEvent.create({
           data: {

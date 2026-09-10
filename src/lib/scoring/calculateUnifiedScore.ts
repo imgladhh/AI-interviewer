@@ -11,7 +11,7 @@ import { calculatePivotAdjustment as calculatePivotEngine } from "@/lib/scoring/
 import type {
   DesignSignalKey,
   EvaluationResult,
-  ScoringInput,
+  ScoringEvidence,
   Signal,
   UnifiedLevel,
   UnifiedVerdict,
@@ -19,12 +19,11 @@ import type {
 
 type CleanContext = {
   signals: Signal[];
-  gapState: ScoringInput["gapState"];
-  pivots: ScoringInput["pivots"];
-  noiseTags: ScoringInput["noiseTags"];
-  metadata: ScoringInput["metadata"];
-  decisionTrace: ScoringInput["decisionTrace"];
-  rewardTrace: ScoringInput["rewardTrace"];
+  gapState: ScoringEvidence["gapState"];
+  pivots: ScoringEvidence["pivots"];
+  noiseTags: ScoringEvidence["noiseTags"];
+  metadata: ScoringEvidence["metadata"];
+  decisionTrace: ScoringEvidence["decisionTrace"];
 };
 
 const SIGNAL_TO_DIMENSION: Record<DesignSignalKey, keyof DimensionScores> = {
@@ -43,7 +42,7 @@ type DimensionScores = {
   bottleneck_sensitivity: number;
 };
 
-export function calculateUnifiedScore(input: ScoringInput): EvaluationResult {
+export function calculateUnifiedScore(input: ScoringEvidence): EvaluationResult {
   const clean = prepareCleanContext(input);
   const dimensionScores = aggregateDimensions(clean);
   const pivotResult = calculatePivotEngine({
@@ -115,18 +114,12 @@ export function calculateUnifiedScore(input: ScoringInput): EvaluationResult {
   };
 }
 
-export function prepareCleanContext(input: ScoringInput): CleanContext {
+export function prepareCleanContext(input: ScoringEvidence): CleanContext {
   const uniqueNoise = [...new Set(input.noiseTags)];
-  const noiseTagSet = new Set(uniqueNoise);
-  const filteredRewards = input.rewardTrace.filter((reward) => {
-    const tags = reward.noiseTags ?? [];
-    return !tags.some((tag) => noiseTagSet.has(tag));
-  });
 
   return {
     ...input,
     noiseTags: uniqueNoise,
-    rewardTrace: filteredRewards,
     signals: [...input.signals].sort((left, right) => left.key.localeCompare(right.key)),
     pivots: [...input.pivots].sort((left, right) => (left.turnId ?? "").localeCompare(right.turnId ?? "")),
     decisionTrace: [...input.decisionTrace],

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { access } from "node:fs/promises";
 import {
@@ -50,6 +50,7 @@ async function buildCurrentSnapshotAsync(): Promise<SystemDesignWeeklySnapshot> 
   const stability = evaluateSystemDesignRegressionStability();
 
   return {
+    schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     calibration: {
       total: calibration.total,
@@ -92,7 +93,7 @@ async function main() {
   await mkdir(OUTPUT_DIR, { recursive: true });
   const dateKey = current.generatedAt.slice(0, 10);
   const datedPath = path.join(OUTPUT_DIR, `snapshot-${dateKey}.json`);
-  await writeFile(
+  await writeAtomically(
     datedPath,
     JSON.stringify(
       {
@@ -102,9 +103,8 @@ async function main() {
       null,
       2,
     ),
-    "utf8",
   );
-  await writeFile(LATEST_PATH, JSON.stringify(current, null, 2), "utf8");
+  await writeAtomically(LATEST_PATH, JSON.stringify(current, null, 2));
 
   console.log(
     JSON.stringify(
@@ -119,10 +119,12 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.env.VITEST !== "true") {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
 
 async function hasFile(filePath: string) {
   try {
@@ -131,4 +133,20 @@ async function hasFile(filePath: string) {
   } catch {
     return false;
   }
+}
+
+export async function writeAtomically(
+  filePath: string,
+  contents: string,
+  renameFile: typeof rename = rename,
+) {
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const handle = await open(temporaryPath, "w");
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await renameFile(temporaryPath, filePath);
 }
