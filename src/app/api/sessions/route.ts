@@ -16,6 +16,7 @@ async function findQuestionForSession(input: CreateSessionInput) {
       where: {
         id: input.questionId,
         isActive: true,
+        type: input.mode,
       },
     });
   }
@@ -23,6 +24,7 @@ async function findQuestionForSession(input: CreateSessionInput) {
   const baseWhere = {
     type: input.mode,
     isActive: true,
+    ...(input.difficulty ? { difficulty: input.difficulty } : {}),
     ...(input.mode === "CODING" && input.targetLevel ? { levelTarget: input.targetLevel } : {}),
   };
 
@@ -105,10 +107,19 @@ export async function POST(request: Request) {
 
   const question = await findQuestionForSession(input);
 
+  if (!question) {
+    return fail("No active question matches the requested interview configuration.", 409, {
+      mode: input.mode,
+      targetLevel: input.targetLevel,
+      companyStyle: input.companyStyle,
+      difficulty: input.difficulty,
+    });
+  }
+
   const session = await prisma.interviewSession.create({
     data: {
       userId: user.id,
-      questionId: question?.id,
+      questionId: question.id,
       mode: input.mode,
       status: "READY",
       selectedLanguage: input.selectedLanguage,
@@ -142,7 +153,7 @@ export async function POST(request: Request) {
       payloadJson: {
         mode: input.mode,
         targetLevel: input.targetLevel,
-        questionId: question?.id ?? null,
+        questionId: question.id,
         interviewerProfileId: interviewerProfile?.id ?? null,
         personaApplied: personaReady,
         lowCostMode: input.lowCostMode,
@@ -150,18 +161,16 @@ export async function POST(request: Request) {
     },
   });
 
-  if (question?.id) {
-    await prisma.sessionEvent.create({
-      data: {
-        sessionId: session.id,
-        eventType: SESSION_EVENT_TYPES.QUESTION_ASSIGNED,
-        payloadJson: {
-          questionId: question.id,
-          title: question.title,
-        },
+  await prisma.sessionEvent.create({
+    data: {
+      sessionId: session.id,
+      eventType: SESSION_EVENT_TYPES.QUESTION_ASSIGNED,
+      payloadJson: {
+        questionId: question.id,
+        title: question.title,
       },
-    });
-  }
+    },
+  });
 
   await prisma.sessionEvent.create({
     data: {

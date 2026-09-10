@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { redis } from "@/lib/redis";
+import { getRedis } from "@/lib/redis";
 
 type HealthDependency = {
   status: "ok" | "error";
@@ -39,7 +39,7 @@ export async function getHealthSnapshot(): Promise<HealthSnapshot> {
   let cache: HealthDependency;
 
   try {
-    const pong = await redis.ping();
+    const pong = await getRedis().ping();
     cache = {
       status: pong === "PONG" ? "ok" : "error",
       latencyMs: Date.now() - redisStartedAt,

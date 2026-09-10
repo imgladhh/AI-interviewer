@@ -268,6 +268,21 @@ class URLShortener {
     print: { "C++": "cout << boolalpha << result << endl;" },
     comment: "Return true if any value appears more than once.",
   },
+  "Maximum Subarray": {
+    kind: "function",
+    names: { PYTHON: "max_subarray", JAVASCRIPT: "maxSubArray", JAVA: "maxSubArray", "C++": "maxSubArray" },
+    params: { PYTHON: "nums", JAVASCRIPT: "nums", JAVA: "int[] nums", "C++": "vector<int> nums" },
+    returns: { PYTHON: "", JAVASCRIPT: "", JAVA: "int ", "C++": "int " },
+    defaults: { PYTHON: "0", JAVASCRIPT: "0", JAVA: "0", "C++": "0" },
+    samples: {
+      PYTHON: ["nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4]"],
+      JAVASCRIPT: ["const nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4];"],
+      JAVA: ["int[] nums = new int[]{-2, 1, -3, 4, -1, 2, 1, -5, 4};"],
+      "C++": ["vector<int> nums{-2, 1, -3, 4, -1, 2, 1, -5, 4};"],
+    },
+    callArgs: { PYTHON: "nums", JAVASCRIPT: "nums", JAVA: "nums", "C++": "nums" },
+    comment: "Return the largest sum of a contiguous subarray.",
+  },
   "Binary Search": {
     kind: "function",
     names: { PYTHON: "binary_search", JAVASCRIPT: "search", JAVA: "search", "C++": "search" },

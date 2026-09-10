@@ -1988,6 +1988,13 @@ const SYSTEM_DESIGN_QUESTION_SEEDS: SystemDesignSeed[] = [
 const EXTRA_QUESTION_BANK: QuestionBankEntry[] = EXTRA_QUESTION_SEEDS.map(fromSeed);
 const SYSTEM_DESIGN_EXTRA_BANK: QuestionBankEntry[] = SYSTEM_DESIGN_QUESTION_SEEDS.map(fromSystemDesignSeed);
 
+export const CURATED_CODING_TITLES = Array.from(
+  new Set([
+    ...BASE_QUESTION_BANK.filter((entry) => entry.type === QuestionType.CODING).map((entry) => entry.title),
+    "Maximum Subarray",
+  ]),
+);
+
 const ALL_BASE_QUESTION_BANK: QuestionBankEntry[] = [
   ...BASE_QUESTION_BANK,
   ...SYSTEM_DESIGN_EXTRA_BANK,

@@ -1,5 +1,5 @@
 import { Job, Queue, QueueEvents } from "bullmq";
-import { redis } from "@/lib/redis";
+import { getRedis } from "@/lib/redis";
 
 export const PERSONA_QUEUE_NAME = "persona-ingestion";
 
@@ -12,43 +12,43 @@ const globalForPersonaQueue = globalThis as unknown as {
   personaQueueEvents?: QueueEvents;
 };
 
-export const personaQueue =
-  globalForPersonaQueue.personaQueue ??
-  new Queue<PersonaIngestionJobData>(PERSONA_QUEUE_NAME, {
-    connection: redis,
-    defaultJobOptions: {
-      removeOnComplete: 100,
-      removeOnFail: 100,
-      attempts: 3,
-      backoff: {
-        type: "exponential",
-        delay: 1000,
+export function getPersonaQueue() {
+  if (!globalForPersonaQueue.personaQueue) {
+    globalForPersonaQueue.personaQueue = new Queue<PersonaIngestionJobData>(PERSONA_QUEUE_NAME, {
+      connection: getRedis(),
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 100,
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 1000,
+        },
       },
-    },
-  });
+    });
+  }
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPersonaQueue.personaQueue = personaQueue;
+  return globalForPersonaQueue.personaQueue;
 }
 
-export const personaQueueEvents =
-  globalForPersonaQueue.personaQueueEvents ??
-  new QueueEvents(PERSONA_QUEUE_NAME, {
-    connection: redis,
-  });
+export function getPersonaQueueEvents() {
+  if (!globalForPersonaQueue.personaQueueEvents) {
+    globalForPersonaQueue.personaQueueEvents = new QueueEvents(PERSONA_QUEUE_NAME, {
+      connection: getRedis(),
+    });
+  }
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPersonaQueue.personaQueueEvents = personaQueueEvents;
+  return globalForPersonaQueue.personaQueueEvents;
 }
 
 export async function enqueuePersonaIngestion(data: PersonaIngestionJobData) {
-  return personaQueue.add("ingest-public-profile", data, {
+  return getPersonaQueue().add("ingest-public-profile", data, {
     jobId: data.interviewerProfileId,
   });
 }
 
 export async function removeExistingPersonaJob(profileId: string) {
-  const existingJob = await personaQueue.getJob(profileId);
+  const existingJob = await getPersonaQueue().getJob(profileId);
   if (!existingJob) {
     return;
   }
@@ -98,7 +98,7 @@ function normalizeJobState(state: string): PersonaJobSnapshot["state"] {
 }
 
 export async function getPersonaJobSnapshot(profileId: string): Promise<PersonaJobSnapshot | null> {
-  const job = await personaQueue.getJob(profileId);
+  const job = await getPersonaQueue().getJob(profileId);
   if (!job) {
     return null;
   }

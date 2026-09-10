@@ -1,9 +1,12 @@
 ﻿import { Worker } from "bullmq";
 import { prisma } from "@/lib/db";
 import { logPersonaJobEvent } from "@/lib/persona/job-events";
-import { redis } from "@/lib/redis";
+import { getRedis } from "@/lib/redis";
 import { runPersonaIngestion } from "@/lib/persona/ingest-public-profile";
-import { PERSONA_QUEUE_NAME, personaQueueEvents, type PersonaIngestionJobData } from "@/lib/persona/queue";
+import { getPersonaQueueEvents, PERSONA_QUEUE_NAME, type PersonaIngestionJobData } from "@/lib/persona/queue";
+
+const redis = getRedis();
+const personaQueueEvents = getPersonaQueueEvents();
 
 const worker = new Worker<PersonaIngestionJobData>(
   PERSONA_QUEUE_NAME,

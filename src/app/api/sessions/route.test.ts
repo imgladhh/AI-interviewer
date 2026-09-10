@@ -152,6 +152,7 @@ describe("POST /api/sessions", () => {
       where: {
         id: "question-explicit",
         isActive: true,
+        type: "CODING",
       },
     });
     expect(prisma.question.findMany).not.toHaveBeenCalled();
@@ -189,6 +190,7 @@ describe("POST /api/sessions", () => {
         targetLevel: "SDE2",
         selectedLanguage: "PYTHON",
         companyStyle: "AMAZON",
+        difficulty: "HARD",
         voiceEnabled: true,
         personaEnabled: false,
       }),
@@ -203,6 +205,7 @@ describe("POST /api/sessions", () => {
       where: {
         type: "CODING",
         isActive: true,
+        difficulty: "HARD",
         companyStyle: "AMAZON",
         levelTarget: "SDE2",
       },
@@ -212,6 +215,7 @@ describe("POST /api/sessions", () => {
       where: {
         type: "CODING",
         isActive: true,
+        difficulty: "HARD",
         companyStyle: "GENERIC",
         levelTarget: "SDE2",
       },
@@ -435,6 +439,99 @@ describe("POST /api/sessions", () => {
     });
   });
 
+  it("filters coding questions by an explicitly requested difficulty", async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: "user-1", email: "demo@example.com" });
+    prisma.question.findMany.mockResolvedValue([{ id: "question-hard", title: "Trapping Rain Water" }]);
+    prisma.interviewSession.create.mockResolvedValue({
+      id: "session-hard",
+      status: "READY",
+      personaStatus: null,
+      questionId: "question-hard",
+    });
+    prisma.sessionEvent.create.mockResolvedValue({ id: "event-hard" });
+
+    const { POST } = await import("@/app/api/sessions/route");
+    const response = await POST(
+      new Request("http://localhost/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "CODING",
+          targetLevel: "SDE2",
+          companyStyle: "GENERIC",
+          difficulty: "HARD",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(prisma.question.findMany).toHaveBeenCalledWith({
+      where: {
+        type: "CODING",
+        isActive: true,
+        difficulty: "HARD",
+        levelTarget: "SDE2",
+        companyStyle: "GENERIC",
+      },
+      orderBy: { createdAt: "asc" },
+    });
+  });
+
+  it("rejects an explicit question that is not active for the requested mode", async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: "user-1", email: "demo@example.com" });
+    prisma.question.findFirst.mockResolvedValue(null);
+
+    const { POST } = await import("@/app/api/sessions/route");
+    const response = await POST(
+      new Request("http://localhost/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "CODING",
+          targetLevel: "SDE2",
+          questionId: "system-design-question",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(prisma.question.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "system-design-question",
+        isActive: true,
+        type: "CODING",
+      },
+    });
+    expect(prisma.interviewSession.create).not.toHaveBeenCalled();
+    expect(prisma.sessionEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty question pool before creating session state", async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: "user-1", email: "demo@example.com" });
+    prisma.question.findMany.mockResolvedValue([]);
+
+    const { POST } = await import("@/app/api/sessions/route");
+    const response = await POST(
+      new Request("http://localhost/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "CODING",
+          targetLevel: "SDE2",
+          companyStyle: "GENERIC",
+          difficulty: "HARD",
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.message).toMatch(/No active question matches/i);
+    expect(prisma.interviewSession.create).not.toHaveBeenCalled();
+    expect(prisma.sessionInterviewerContext.create).not.toHaveBeenCalled();
+    expect(prisma.sessionEvent.create).not.toHaveBeenCalled();
+  });
+
   it("persists system design mode and queries a system design question pool", async () => {
     prisma.user.findFirst.mockResolvedValue({
       id: "user-1",
@@ -466,6 +563,7 @@ describe("POST /api/sessions", () => {
         targetLevel: "SDE2",
         selectedLanguage: "PYTHON",
         companyStyle: "GENERIC",
+        difficulty: "MEDIUM",
         voiceEnabled: true,
         personaEnabled: false,
       }),
@@ -480,6 +578,7 @@ describe("POST /api/sessions", () => {
       where: {
         type: "SYSTEM_DESIGN",
         isActive: true,
+        difficulty: "MEDIUM",
         companyStyle: "GENERIC",
       },
       orderBy: { createdAt: "asc" },
