@@ -1,4 +1,5 @@
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
+import { latestAdjudicatedSignals } from "@/lib/assistant/turn-assessment";
 
 type SessionEventLike = {
   eventType: string;
@@ -19,6 +20,7 @@ export type ConversationHealth = {
   echoRate: number;
   noProgressTurns: number;
   reasons: string[];
+  assessmentStatus: "available" | "unavailable";
 };
 
 export function assessConversationHealth(input: {
@@ -26,24 +28,19 @@ export function assessConversationHealth(input: {
   signals: CandidateSignalSnapshot;
 }): ConversationHealth {
   const recentEvents = input.recentEvents ?? [];
-  const recentCandidateTurns = extractRecentCandidateTurns(recentEvents, 6);
-  const uniqueTurnCount = new Set(recentCandidateTurns).size;
-  const novelty =
-    recentCandidateTurns.length === 0
-      ? 1
-      : clamp(Number((uniqueTurnCount / recentCandidateTurns.length).toFixed(2)), 0, 1);
-  const recentEchoEvents = recentEvents
-    .slice(-8)
-    .filter((event) => event.eventType === "CANDIDATE_ECHO_DETECTED").length;
+  const assessments = latestAdjudicatedSignals(recentEvents).slice(-6);
+  const recentSignals = assessments.map((item) => item.signals);
+  const recentEchoEvents = recentSignals.filter((signals) => signals.echoLikely).length;
+  const denominator = recentSignals.length + 1;
+  const novelty = clamp(Number((1 - recentSignals.filter((signals) => signals.progress === "stuck").length / Math.max(1, denominator)).toFixed(2)), 0, 1);
   const echoRate = clamp(
-    Number((recentEchoEvents / Math.max(1, recentCandidateTurns.length)).toFixed(2)),
+    Number(((recentEchoEvents + (input.signals.echoLikely ? 1 : 0)) / Math.max(1, denominator)).toFixed(2)),
     0,
     1,
   );
   const noProgressTurns = Math.max(
-    trailingRepeatCount(recentCandidateTurns),
+    assessments.length > 0 ? trailingNoProgressCount([...recentSignals, input.signals]) : (input.signals.echoLikely ? 1 : 0),
     recentEchoEvents,
-    input.signals.echoLikely ? 1 : 0,
   );
   const score = clamp(
     Number((1 - echoRate * 0.45 - (1 - novelty) * 0.35 - Math.min(noProgressTurns / 4, 1) * 0.2).toFixed(2)),
@@ -64,6 +61,7 @@ export function assessConversationHealth(input: {
     echoRate,
     noProgressTurns,
     reasons,
+    assessmentStatus: assessments.length > 0 ? "available" : "unavailable",
   };
 }
 
@@ -111,70 +109,13 @@ function buildReasons(input: {
   return reasons;
 }
 
-function extractRecentCandidateTurns(events: SessionEventLike[], limit: number) {
-  const turns = events
-    .filter((event) => event.eventType === "CANDIDATE_SPOKE")
-    .map((event) => normalizeTurnText(asRecord(event.payloadJson).text))
-    .filter((value): value is string => Boolean(value));
-  return turns.slice(-limit);
-}
-
-function trailingRepeatCount(turns: string[]) {
-  if (turns.length <= 1) {
-    return 0;
-  }
+function trailingNoProgressCount(signals: CandidateSignalSnapshot[]) {
   let repeats = 0;
-  for (let i = turns.length - 1; i > 0; i -= 1) {
-    if (turnOverlapRatio(turns[i], turns[i - 1]) < 0.6) {
-      break;
-    }
+  for (let i = signals.length - 1; i >= 0; i -= 1) {
+    if (signals[i].progress !== "stuck" && !signals[i].echoLikely) break;
     repeats += 1;
   }
   return repeats;
-}
-
-function turnOverlapRatio(left: string, right: string) {
-  const leftTokens = tokenSet(left);
-  const rightTokens = tokenSet(right);
-  if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return 0;
-  }
-  const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  return overlap / Math.min(leftTokens.size, rightTokens.size);
-}
-
-function tokenSet(text: string) {
-  const stopWords = new Set(["the", "for", "here", "this", "that", "think", "would", "could", "can", "still", "basically"]);
-  return new Set(
-    text
-      .split(/\s+/)
-      .map((token) => canonicalToken(token.trim()))
-      .filter((token) => token.length > 2 && !stopWords.has(token)),
-  );
-}
-
-function canonicalToken(token: string) {
-  if (token === "using") {
-    return "use";
-  }
-  return token;
-}
-
-function normalizeTurnText(value: unknown) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value
-    .toLowerCase()
-    .replace(/\bhash\s*map\b/g, "hashmap")
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 function clamp(value: number, min: number, max: number) {

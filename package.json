@@ -21,7 +21,10 @@
     "eval:system-design:real": "tsx src/scripts/eval-system-design-real-calibration.ts",
     "eval:system-design:weekly": "tsx src/scripts/eval-system-design-weekly.ts",
     "check:system-design-gates": "tsx src/scripts/check-system-design-gates.ts",
-    "check:system-design-alerts": "tsx src/scripts/check-system-design-alerts.ts"
+    "check:system-design-alerts": "tsx src/scripts/check-system-design-alerts.ts",
+    "preflight:third-batch-sequences": "tsx src/scripts/preflight-third-batch-sequences.ts",
+    "verify:third-batch-unique-constraints": "tsx src/scripts/verify-third-batch-unique-constraints.ts",
+    "verify:third-batch-assessments": "tsx src/scripts/verify-third-batch-assessments.ts"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.0",

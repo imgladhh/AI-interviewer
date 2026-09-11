@@ -1,6 +1,7 @@
 import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 import type { CodingInterviewStage } from "@/lib/assistant/stages";
 import { extractCandidateTerms, summarizeCandidateArgument } from "@/lib/assistant/candidate_terms";
+import { latestAdjudicatedSignals } from "@/lib/assistant/turn-assessment";
 
 type SessionEventLike = {
   eventType: string;
@@ -28,6 +29,7 @@ export type CandidateContentMemory = {
 };
 
 export type MemoryLedger = {
+  assessmentStatus: "available" | "unavailable";
   recentlyProbedTargets: string[];
   recentlyProbedIssues: string[];
   answeredTargets: string[];
@@ -66,11 +68,7 @@ export function buildMemoryLedger(input: {
     .slice(-5)
     .map(readDecisionPayload)
     .filter((decision) => decision.target || decision.specificIssue);
-  const priorSignals = recentEvents
-    .filter((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED")
-    .slice(-4)
-    .map(readSignalPayload)
-    .filter((snapshot): snapshot is Partial<CandidateSignalSnapshot> => snapshot !== null);
+  const priorSignals = latestAdjudicatedSignals(recentEvents).slice(-4).map((assessment) => assessment.signals);
   const recentStructuredIssues = priorSignals.flatMap((snapshot) =>
     Array.isArray(snapshot.structuredEvidence) ? snapshot.structuredEvidence : [],
   );
@@ -156,6 +154,7 @@ export function buildMemoryLedger(input: {
   const topicSaturation = buildTopicSaturation(recentDecisions, answeredTargets);
 
   return {
+    assessmentStatus: priorSignals.length > 0 ? "available" : "unavailable",
     recentlyProbedTargets,
     recentlyProbedIssues,
     answeredTargets,
@@ -202,16 +201,6 @@ function readDecisionPayload(event: SessionEventLike) {
     action: typeof decision.action === "string" ? decision.action : "",
     specificIssue: typeof decision.specificIssue === "string" ? decision.specificIssue : "",
   };
-}
-
-function readSignalPayload(event: SessionEventLike) {
-  const payload =
-    typeof event.payloadJson === "object" && event.payloadJson !== null
-      ? (event.payloadJson as Record<string, unknown>)
-      : {};
-  return typeof payload.signals === "object" && payload.signals !== null
-    ? (payload.signals as Partial<CandidateSignalSnapshot>)
-    : null;
 }
 
 function inferMissingEvidence(

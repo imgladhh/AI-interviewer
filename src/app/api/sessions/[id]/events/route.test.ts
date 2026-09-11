@@ -50,7 +50,7 @@ describe("session event routes", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           eventType: "HINT_REQUESTED",
-          payloadJson: { source: "test" },
+          payloadJson: { source: "room-controls" },
         }),
       }),
       {
@@ -65,8 +65,23 @@ describe("session event routes", () => {
       data: {
         sessionId: "session-1",
         eventType: "HINT_REQUESTED",
-        payloadJson: { source: "test" },
+        payloadJson: { source: "room-controls" },
       },
     });
+  });
+
+  it("rejects client attempts to forge server-owned assessment events without writes", async () => {
+    const { POST } = await import("@/app/api/sessions/[id]/events/route");
+    const response = await POST(new Request("http://localhost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eventType: "REWARD_RECORDED", payloadJson: { reward: { total: 99 } } }) }), { params: Promise.resolve({ id: "session-1" }) });
+    expect(response.status).toBe(403);
+    expect(prisma.interviewSession.findUnique).not.toHaveBeenCalled();
+    expect(prisma.sessionEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects client stage transitions; server route tests own lifecycle emission", async () => {
+    const { POST } = await import("@/app/api/sessions/[id]/events/route");
+    const response = await POST(new Request("http://localhost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eventType: "STAGE_ADVANCED", payloadJson: { stage: "IMPLEMENTATION" } }) }), { params: Promise.resolve({ id: "session-1" }) });
+    expect(response.status).toBe(403);
+    expect(prisma.sessionEvent.create).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ import { executeCode } from "@/lib/sandbox/execute";
 import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { createExecutionRunSchema } from "@/schemas/session-runtime";
+import { withUniqueSequenceRetry } from "@/lib/db/unique-sequence";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -77,78 +78,10 @@ export async function POST(request: Request, { params }: RouteContext) {
     return fail("Interview session not found", 404);
   }
 
-  const lastSnapshot = await prisma.codeSnapshot.findFirst({
-    where: { sessionId: id },
-    orderBy: { snapshotIndex: "desc" },
-    select: { snapshotIndex: true },
-  });
-
-  const snapshot = await prisma.codeSnapshot.create({
-    data: {
-      sessionId: id,
-      language: parsed.data.language,
-      content: parsed.data.code,
-      snapshotIndex: (lastSnapshot?.snapshotIndex ?? -1) + 1,
-      source: parsed.data.source,
-    },
-  });
-
-  await prisma.sessionEvent.create({
-    data: {
-      sessionId: id,
-      eventType: SESSION_EVENT_TYPES.CODE_SNAPSHOT_SAVED,
-      payloadJson: {
-        codeSnapshotId: snapshot.id,
-        language: parsed.data.language,
-        source: parsed.data.source,
-      },
-    },
-  });
-
-  await prisma.sessionEvent.create({
-    data: {
-      sessionId: id,
-      eventType: SESSION_EVENT_TYPES.CODE_RUN_REQUESTED,
-      payloadJson: {
-        codeSnapshotId: snapshot.id,
-        language: parsed.data.language,
-      },
-    },
-  });
-
   const result = await executeCode({
     language: parsed.data.language,
     code: parsed.data.code,
     stdin: parsed.data.stdin,
-  });
-
-  const executionRun = await prisma.executionRun.create({
-    data: {
-      sessionId: id,
-      codeSnapshotId: snapshot.id,
-      stdin: parsed.data.stdin,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      status: result.status,
-      runtimeMs: result.runtimeMs,
-      memoryKb: result.memoryKb,
-    },
-    include: {
-      codeSnapshot: true,
-    },
-  });
-
-  await prisma.sessionEvent.create({
-    data: {
-      sessionId: id,
-      eventType: SESSION_EVENT_TYPES.CODE_RUN_COMPLETED,
-      payloadJson: {
-        codeSnapshotId: snapshot.id,
-        executionRunId: executionRun.id,
-        status: result.status,
-        runtimeMs: result.runtimeMs,
-      } satisfies Prisma.InputJsonObject,
-    },
   });
 
   const committedTranscripts = getCommittedTranscriptSegments(session.transcripts, session.events);
@@ -167,23 +100,26 @@ export async function POST(request: Request, { params }: RouteContext) {
         ? "DEBUGGING"
         : null;
 
-  if (nextStage && nextStage !== currentStage) {
-    await prisma.sessionEvent.create({
-      data: {
-        sessionId: id,
-        eventType: SESSION_EVENT_TYPES.STAGE_ADVANCED,
-        payloadJson: {
-          previousStage: currentStage,
-          stage: nextStage,
-          source: "code-run-policy",
-          reason:
-            result.status === "PASSED"
-              ? "A passing run completed implementation/debugging, so the interview should move into testing and complexity."
-              : "A failing run should move the interview into debugging.",
-        } satisfies Prisma.InputJsonObject,
-      },
-    });
-  }
+  const { executionRun, snapshot } = await withUniqueSequenceRetry(() => prisma.$transaction(async (tx) => {
+    const lastSnapshot = await tx.codeSnapshot.findFirst({ where: { sessionId: id }, orderBy: { snapshotIndex: "desc" }, select: { snapshotIndex: true } });
+    const snapshot = await tx.codeSnapshot.create({ data: { sessionId: id, language: parsed.data.language, content: parsed.data.code,
+      snapshotIndex: (lastSnapshot?.snapshotIndex ?? -1) + 1, source: parsed.data.source } });
+    await tx.sessionEvent.create({ data: { sessionId: id, eventType: SESSION_EVENT_TYPES.CODE_SNAPSHOT_SAVED,
+      payloadJson: { codeSnapshotId: snapshot.id, language: parsed.data.language, source: parsed.data.source } } });
+    await tx.sessionEvent.create({ data: { sessionId: id, eventType: SESSION_EVENT_TYPES.CODE_RUN_REQUESTED,
+      payloadJson: { codeSnapshotId: snapshot.id, language: parsed.data.language } } });
+    const executionRun = await tx.executionRun.create({ data: { sessionId: id, codeSnapshotId: snapshot.id, stdin: parsed.data.stdin,
+      stdout: result.stdout, stderr: result.stderr, status: result.status, runtimeMs: result.runtimeMs, memoryKb: result.memoryKb },
+      include: { codeSnapshot: true } });
+    await tx.sessionEvent.create({ data: { sessionId: id, eventType: SESSION_EVENT_TYPES.CODE_RUN_COMPLETED,
+      payloadJson: { codeSnapshotId: snapshot.id, executionRunId: executionRun.id, status: result.status, runtimeMs: result.runtimeMs } satisfies Prisma.InputJsonObject } });
+    if (nextStage && nextStage !== currentStage) {
+      await tx.sessionEvent.create({ data: { sessionId: id, eventType: SESSION_EVENT_TYPES.STAGE_ADVANCED,
+        payloadJson: { previousStage: currentStage, stage: nextStage, source: "code-run-policy",
+          reason: result.status === "PASSED" ? "A passing run completed implementation/debugging, so the interview should move into testing and complexity." : "A failing run should move the interview into debugging." } satisfies Prisma.InputJsonObject } });
+    }
+    return { executionRun, snapshot };
+  }));
 
   return ok({ executionRun, snapshot }, { status: 201 });
 }

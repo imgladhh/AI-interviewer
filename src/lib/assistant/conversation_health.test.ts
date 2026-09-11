@@ -22,12 +22,17 @@ const baseSignals: CandidateSignalSnapshot = {
 };
 
 describe("assessConversationHealth", () => {
+  const assessment = (id: string, signals: CandidateSignalSnapshot, version = 1) => ({
+    eventType: "TURN_ASSESSMENT_RECORDED",
+    payloadJson: { candidateTurnId: id, assessmentVersion: version, adjudicated: signals },
+  });
+
   it("stays normal when candidate turns keep adding novelty", () => {
     const health = assessConversationHealth({
       signals: baseSignals,
       recentEvents: [
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "I would use BFS." } },
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "I can precompute wildcard patterns." } },
+        assessment("u1", baseSignals),
+        assessment("u2", baseSignals),
       ],
     });
 
@@ -36,15 +41,11 @@ describe("assessConversationHealth", () => {
   });
 
   it("escalates to rescue when echo and no-progress signals are concentrated", () => {
-    const repeated = "please summarize your approach and complexity";
     const health = assessConversationHealth({
       signals: { ...baseSignals, echoLikely: true },
       recentEvents: [
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: repeated } },
-        { eventType: "CANDIDATE_ECHO_DETECTED", payloadJson: {} },
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: repeated } },
-        { eventType: "CANDIDATE_ECHO_DETECTED", payloadJson: {} },
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: repeated } },
+        assessment("u1", { ...baseSignals, progress: "stuck", echoLikely: true }),
+        assessment("u2", { ...baseSignals, progress: "stuck", echoLikely: true }),
       ],
     });
 
@@ -53,17 +54,23 @@ describe("assessConversationHealth", () => {
     expect(health.echoRate).toBeGreaterThan(0.3);
   });
 
-  it("counts near-repeated answers as no-progress even when wording changes", () => {
+  it("uses only adjudicated progress and ignores duplicate assessment versions", () => {
     const health = assessConversationHealth({
-      signals: baseSignals,
+      signals: { ...baseSignals, progress: "stuck" },
       recentEvents: [
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "I think I can use a hashmap for lookup here." } },
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "I would use the hash map lookup for this." } },
-        { eventType: "CANDIDATE_SPOKE", payloadJson: { text: "Still using a hash map lookup basically." } },
+        assessment("u1", { ...baseSignals, progress: "stuck" }),
+        assessment("u1", { ...baseSignals, progress: "stuck" }, 2),
+        assessment("u2", { ...baseSignals, progress: "stuck" }),
       ],
     });
 
     expect(health.noProgressTurns).toBeGreaterThanOrEqual(2);
     expect(["GUIDED", "RESCUE", "TERMINATE_OR_REPLAN"]).toContain(health.mode);
+  });
+
+  it("marks historical sessions without assessments unavailable without throwing", () => {
+    const health = assessConversationHealth({ signals: baseSignals, recentEvents: [{ eventType: "SIGNAL_SNAPSHOT_RECORDED", payloadJson: { signals: { echoLikely: true } } }] });
+    expect(health.assessmentStatus).toBe("unavailable");
+    expect(health.mode).toBe("NORMAL");
   });
 });

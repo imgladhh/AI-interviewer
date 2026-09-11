@@ -194,6 +194,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
   const [pendingConfirmationText, setPendingConfirmationText] = useState<string | null>(null);
   const voiceAdapterRef = useRef<InterviewVoiceAdapter | null>(null);
   const assistantStreamAbortRef = useRef<AbortController | null>(null);
+  const pendingAssistantTurnIdRef = useRef<string | null>(null);
   const silenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalTranscriptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interruptionCooldownUntilRef = useRef<number>(0);
@@ -1067,7 +1068,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
     }
   }
 
-  async function requestAssistantTurn() {
+  async function requestAssistantTurn(existingTurnId?: string) {
     await interruptAiTurn();
     setIsAssistantThinking(true);
     setAssistantDraft("");
@@ -1078,11 +1079,21 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       const abortController = new AbortController();
       assistantStreamAbortRef.current = abortController;
 
+      const turnId = existingTurnId ?? pendingAssistantTurnIdRef.current ?? crypto.randomUUID();
+      pendingAssistantTurnIdRef.current = turnId;
       const response = await fetch(`/api/sessions/${props.sessionId}/assistant-turn/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turnId }),
         signal: abortController.signal,
       });
+
+      if (response.status === 202) {
+        const payload = await response.json().catch(() => null);
+        const retryAfterMs = Math.max(100, Math.min(5_000, Number(payload?.data?.retryAfterMs) || 750));
+        await new Promise((resolve) => window.setTimeout(resolve, retryAfterMs));
+        return requestAssistantTurn(turnId);
+      }
 
       if (!response.ok || !response.body) {
         const payload = await response.json().catch(() => null);
@@ -1149,6 +1160,7 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
           }
 
           if (parsed.event === "done") {
+            pendingAssistantTurnIdRef.current = null;
             const payload = parsed.data as {
               transcript?: TranscriptSegment;
               events?: SessionEvent[];
@@ -1299,7 +1311,6 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
       setRoomNotice("Candidate turn auto-submitted after a short pause.");
       await postEvent(SESSION_EVENT_TYPES.CANDIDATE_TURN_AUTOSUBMITTED, {
         source: options.source ?? "silence_timeout",
-        textPreview: normalized.slice(0, 120),
       });
     }
     await postTranscript("USER", normalizedText, {
@@ -2016,7 +2027,6 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
                     disabled={isPending}
                     onClick={() =>
                       runAction(async () => {
-                        await postEvent(SESSION_EVENT_TYPES.QUESTION_SHOWN, { surfacedInRoom: true });
                         await speakAiPrompt(`Let's begin. Walk me through your approach for ${props.questionTitle}.`);
                       })
                     }
@@ -2067,23 +2077,6 @@ export function InterviewRoomClient(props: InterviewRoomClientProps) {
               <Link href={`/report/${props.sessionId}`} style={linkButtonStyle}>
                 View Full Report
               </Link>
-              {isDebugMode ? (
-                <button
-                  style={actionButtonStyle}
-                  disabled={isPending}
-                  onClick={() =>
-                    runAction(async () =>
-                      postEvent(SESSION_EVENT_TYPES.STAGE_ADVANCED, {
-                        previousStage: currentStage,
-                        stage: "APPROACH_DISCUSSION",
-                        source: "room-controls",
-                      }),
-                    )
-                  }
-                >
-                  Advance Stage
-                </button>
-              ) : null}
               {actionError ? <span style={{ color: "var(--danger)" }}>{actionError}</span> : null}
             </div>
             </aside>

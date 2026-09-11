@@ -247,9 +247,9 @@ describe("extractCandidateSignals", () => {
       ],
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          eventType: "TURN_ASSESSMENT_RECORDED",
           payloadJson: {
-            signals: {
+            candidateTurnId: "u-prior-1", assessmentVersion: 1, adjudicated: {
               progress: "progressing",
               codeQuality: "partial",
               edgeCaseAwareness: "missing",
@@ -279,9 +279,9 @@ describe("extractCandidateSignals", () => {
       ],
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          eventType: "TURN_ASSESSMENT_RECORDED",
           payloadJson: {
-            signals: {
+            candidateTurnId: "u-prior-1", assessmentVersion: 1, adjudicated: {
               understanding: "clear",
               progress: "done",
               reasoningDepth: "deep",
@@ -453,9 +453,9 @@ describe("extractCandidateSignals", () => {
       ],
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          eventType: "TURN_ASSESSMENT_RECORDED",
           payloadJson: {
-            signals: {
+            candidateTurnId: "u-prior-1", assessmentVersion: 1, adjudicated: {
               designSignals: {
                 handwave: {
                   detected: true,

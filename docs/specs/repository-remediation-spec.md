@@ -276,3 +276,15 @@
 - #9：`src/lib/session/snapshots.ts` 改为局部 transaction、显式 `SnapshotWriteResult` 与 health-aware bundle reader；assistant-turn/stream 对 degradation best-effort 写入安全事件，失败仅记录日志；report API、report 页面和 Admin 使用 bundle health。新增 snapshot 成功、缺表、瞬态失败后重试、bundle 读失败、完整/不足事件 rebuild 测试。
 - 验证：`npm test` 通过（新增 snapshot、monitoring、checker 与 writer tests）；`npx tsc --noEmit` 通过；`npm run build` 通过。
 - 已知延期：Next.js 16 主版本升级仍按第一批 #3 非阻塞策略延期；其余 production audit 高/中等级依赖问题不在第二批范围，且不改变第三批子 spec 前置条件。
+
+### 第三批：完成（2026-09-10）
+
+- #5：公共 event route 收紧为 8 类逐事件严格 schema 的非因果 UI telemetry；公共 transcript route 仅接受 `USER`；`QUESTION_SHOWN`/`STAGE_ADVANCED` 迁为 server-owned，并覆盖原客户端阶段跃迁时机及伪造权威事实零写入测试。
+- #6：客户端为 assistant command 生成并在 202/reconnect 中复用 UUID `turnId`；新增 `SessionTurnCommit` 及 `(sessionId, turnId)` 唯一键，固定 claimed → provider（事务外）→ 短事务 commit 的顺序。non-stream、stream 与 budget guardrail 均在一次短事务内提交 AI transcript、server events、session 状态和持久化结果；abort 标记失败，同 key 可恢复，完成请求直接 replay 持久化结果。
+- #6 序列约束：新增 `(sessionId, segmentIndex)`、`(sessionId, snapshotIndex)` 唯一索引；USER transcript、AI transcript、code snapshot 均在事务内读取最新 index，并仅对 P2002 做有界（最多八次）短事务重试。transcript correction 继续分配新 index。
+- migration：应用 `20260910000000_turn_commit_and_unique_sequences` 前保存只读 preflight 输出，结果 transcript/snapshot 重复项均为空；migration 已在本地 PostgreSQL `localhost:5433` 应用。真实数据库验证确认两项重复索引均被 P2002 拒绝，临时验证数据已级联清理。
+- #6 自动测试：覆盖 claim 并发冲突、in-progress 202、completed replay、FAILED 同 key 恢复、provider-before-transaction、commit 故障不完成、stream abort 零权威 transcript、唯一冲突重试；全量 unit 为 66 files / 411 tests，类型检查与 production build 均通过。
+- #10：新增 append-only `TurnAssessment`，以最后一条 committed final USER transcript id 作为 `candidateTurnId`，保存 heuristic/provider/adjudicated/evidence 四类数据及受限 excerpt hash；同一 candidate turn 通过递增 `assessmentVersion` 重算，消费者按最高版本去重。`TURN_ASSESSMENT_RECORDED` 是 ledger/health 的唯一历史 signal 输入，旧 `SIGNAL_SNAPSHOT_RECORDED` 与 `CANDIDATE_ECHO_DETECTED` 不再参与二次计分；无 assessment 的历史 session 显式标为 `unavailable` 且保持保守运行。
+- #10 migration/验证：应用 `20260910010000_turn_assessments`，真实 PostgreSQL 验证重复 `(sessionId, candidateTurnId, assessmentVersion)` 被 P2002 拒绝、v1 保持不变且默认读取 v2。自动测试覆盖 provider 冲突、invalid/missing fallback、append-only supersession、重复 event 去重、replay 稳定、echo 单次计数及缺 assessment 降级。
+- 已知延期：Next.js 16 主版本迁移仍按第一批规则延期。
+- #6 已知限制：正常异常与 stream abort 均会把 commit 标记为 `FAILED`，且 FAILED 的同 key 恢复使用条件更新保证只有一个请求获胜；但进程在 claim 后被硬终止可能遗留 stale `IN_PROGRESS`。本地项目暂不引入 lease/heartbeat 回收，公开部署前必须增加带超时和 fencing token 的安全 reclaim，避免永久 202 或旧 worker 迟到提交。

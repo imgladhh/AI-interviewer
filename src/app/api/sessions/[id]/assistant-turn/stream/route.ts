@@ -11,6 +11,11 @@ import { guardSystemDesignStageTransition } from "@/lib/assistant/pass_condition
 import { assessSessionBudget, buildBudgetExceededReply } from "@/lib/usage/budget";
 import { resolveLowCostMode } from "@/lib/usage/cost";
 import { enforceMutationGuard } from "@/lib/security/request-guard";
+import { assistantTurnCommandSchema } from "@/schemas/session-runtime";
+import { claimAssistantTurn, completeAssistantTurn, failAssistantTurn } from "@/lib/session/turn-commit";
+import { withUniqueSequenceRetry } from "@/lib/db/unique-sequence";
+import { appendTurnAssessment, getSignalAssessmentTrace } from "@/lib/assistant/turn-assessment";
+import type { CandidateSignalSnapshot } from "@/lib/assistant/signal_extractor";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -22,6 +27,8 @@ export async function POST(request: Request, { params }: RouteContext) {
     return guarded;
   }
   const { id } = await params;
+  const command = assistantTurnCommandSchema.safeParse(await request.json().catch(() => null));
+  if (!command.success) return fail("Invalid assistant turn command", 400, { issues: command.error.flatten() });
 
   const session = await prisma.interviewSession.findUnique({
     where: { id },
@@ -44,6 +51,13 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   if (!session) {
     return fail("Interview session not found", 404);
+  }
+  const claim = await claimAssistantTurn(id, command.data.turnId);
+  if (claim.status === "in_progress") return Response.json({ ok: true, data: { status: "in_progress", turnId: command.data.turnId, retryAfterMs: claim.retryAfterMs } }, { status: 202 });
+  if (claim.status === "completed") {
+    return new Response(`event: done\ndata: ${JSON.stringify(claim.result)}\n\n`, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform" },
+    });
   }
 
   const committedTranscripts = getCommittedTranscriptSegments(session.transcripts, session.events);
@@ -105,6 +119,8 @@ export async function POST(request: Request, { params }: RouteContext) {
             existingTranscriptCount: session.transcripts.length,
             budget: initialBudget,
             lowCostMode,
+            turnId: command.data.turnId,
+            resultMeta: { mode: session.mode, source: "system", currentStage, suggestedStage: null, budgetExceeded: true, budget: initialBudget },
           });
 
           controller.enqueue(
@@ -167,6 +183,7 @@ export async function POST(request: Request, { params }: RouteContext) {
 
         for await (const chunk of streamAssistantTurn(input, { signal: request.signal })) {
           if (request.signal.aborted) {
+            await failAssistantTurn(id, command.data.turnId).catch(() => undefined);
             controller.close();
             return;
           }
@@ -185,6 +202,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (!finalTurn || request.signal.aborted) {
+          await failAssistantTurn(id, command.data.turnId).catch(() => undefined);
           controller.close();
           return;
         }
@@ -208,6 +226,8 @@ export async function POST(request: Request, { params }: RouteContext) {
             existingTranscriptCount: session.transcripts.length,
             budget: projectedBudget,
             lowCostMode,
+            turnId: command.data.turnId,
+            resultMeta: { mode: session.mode, source: finalTurn.source, currentStage, suggestedStage: null, budgetExceeded: true, budget: projectedBudget },
           });
 
           controller.enqueue(
@@ -230,10 +250,10 @@ export async function POST(request: Request, { params }: RouteContext) {
           return;
         }
 
-        const lastSegment = session.transcripts.at(-1);
-        const segmentIndex = lastSegment ? lastSegment.segmentIndex + 1 : 0;
-
-        const transcript = await prisma.transcriptSegment.create({
+        const committed = await withUniqueSequenceRetry(() => prisma.$transaction(async (tx) => {
+        const lastSegment = await tx.transcriptSegment.findFirst({ where: { sessionId: id }, orderBy: { segmentIndex: "desc" }, select: { segmentIndex: true } });
+        const segmentIndex = (lastSegment?.segmentIndex ?? -1) + 1;
+        const transcript = await tx.transcriptSegment.create({
           data: {
             sessionId: id,
             speaker: "AI",
@@ -252,8 +272,15 @@ export async function POST(request: Request, { params }: RouteContext) {
         let decisionEventId: string | null = null;
         let rewardResult: ReturnType<typeof evaluateTurnReward> | null = null;
 
+        const candidateTurn = [...committedTranscripts].reverse().find((segment) => segment.speaker === "USER" && segment.isFinal !== false);
+        if (finalTurn.signals && candidateTurn?.id) {
+          const signals = finalTurn.signals as CandidateSignalSnapshot;
+          const { event } = await appendTurnAssessment(tx, { sessionId: id, candidateTurn: { id: candidateTurn.id, text: candidateTurn.text }, trace: getSignalAssessmentTrace(signals) });
+          events.push(event);
+        }
+
         if (finalTurn.signals) {
-          const signalEvent = await prisma.sessionEvent.create({
+          const signalEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.SIGNAL_SNAPSHOT_RECORDED,
@@ -271,7 +298,7 @@ export async function POST(request: Request, { params }: RouteContext) {
               ? (finalTurn.signals as Record<string, unknown>)
               : {};
           if (signalPayload.echoLikely === true) {
-            const echoEvent = await prisma.sessionEvent.create({
+            const echoEvent = await tx.sessionEvent.create({
               data: {
                 sessionId: id,
                 eventType: SESSION_EVENT_TYPES.CANDIDATE_ECHO_DETECTED,
@@ -289,7 +316,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.decision) {
-          const decisionEvent = await prisma.sessionEvent.create({
+          const decisionEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.DECISION_RECORDED,
@@ -308,7 +335,7 @@ export async function POST(request: Request, { params }: RouteContext) {
               ? (finalTurn.decision as Record<string, unknown>)
               : {};
           if (typeof decisionPayload.echoRecoveryMode === "string") {
-            const echoRecoveryEvent = await prisma.sessionEvent.create({
+            const echoRecoveryEvent = await tx.sessionEvent.create({
               data: {
                 sessionId: id,
                 eventType: SESSION_EVENT_TYPES.ECHO_RECOVERY_PROMPTED,
@@ -326,7 +353,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.intent) {
-          const intentEvent = await prisma.sessionEvent.create({
+          const intentEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.INTENT_SNAPSHOT_RECORDED,
@@ -341,7 +368,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.trajectory) {
-          const trajectoryEvent = await prisma.sessionEvent.create({
+          const trajectoryEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.TRAJECTORY_SNAPSHOT_RECORDED,
@@ -356,7 +383,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.candidateDna) {
-          const dnaEvent = await prisma.sessionEvent.create({
+          const dnaEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.CANDIDATE_DNA_RECORDED,
@@ -371,7 +398,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.shadowPolicy) {
-          const shadowPolicyEvent = await prisma.sessionEvent.create({
+          const shadowPolicyEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.SHADOW_POLICY_EVALUATED,
@@ -386,7 +413,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.criticVerdict) {
-          const criticEvent = await prisma.sessionEvent.create({
+          const criticEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.CRITIC_VERDICT_RECORDED,
@@ -411,7 +438,7 @@ export async function POST(request: Request, { params }: RouteContext) {
             })),
             originTurnId: transcript.id,
           });
-          const rewardEvent = await prisma.sessionEvent.create({
+          const rewardEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.REWARD_RECORDED,
@@ -429,31 +456,7 @@ export async function POST(request: Request, { params }: RouteContext) {
           events.push(rewardEvent);
         }
 
-        const snapshotResult = await persistSessionSnapshots({
-          sessionId: id,
-          stage: currentStage,
-          source: finalTurn.source,
-          signals: finalTurn.signals,
-          decision: finalTurn.decision,
-          intent: finalTurn.intent,
-          trajectory: finalTurn.trajectory,
-        });
-        if (snapshotResult.status === "degraded") {
-          const sourceSessionEventId = events.at(-1)?.id;
-          // Route-local key; Batch 3 replaces this with the shared idempotency protocol.
-          if (sourceSessionEventId && !events.some((event) => event.eventType === SESSION_EVENT_TYPES.SNAPSHOT_PROJECTION_DEGRADED)) {
-            try {
-              const degradedEvent = await prisma.sessionEvent.create({
-                data: { sessionId: id, eventType: SESSION_EVENT_TYPES.SNAPSHOT_PROJECTION_DEGRADED, payloadJson: { sourceSessionEventId, kind: snapshotResult.failure?.kind ?? "unknown", attemptedKinds: snapshotResult.attemptedKinds } },
-              });
-              events.push(degradedEvent);
-            } catch (error) {
-              console.warn("[assistant-turn-stream] unable to record snapshot projection degradation", { sessionId: id, sourceSessionEventId, error: error instanceof Error ? error.name : "unknown" });
-            }
-          }
-        }
-
-        const aiSpokeEvent = await prisma.sessionEvent.create({
+        const aiSpokeEvent = await tx.sessionEvent.create({
           data: {
             sessionId: id,
             eventType: SESSION_EVENT_TYPES.AI_SPOKE,
@@ -478,7 +481,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         events.push(aiSpokeEvent);
 
         if (finalTurn.usage) {
-          const usageEvent = await prisma.sessionEvent.create({
+          const usageEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.LLM_USAGE_RECORDED,
@@ -506,7 +509,7 @@ export async function POST(request: Request, { params }: RouteContext) {
             : finalTurn.suggestedStage ?? null;
 
         if (suggestedStage && suggestedStage !== currentStage) {
-          const stageEvent = await prisma.sessionEvent.create({
+          const stageEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.STAGE_ADVANCED,
@@ -522,7 +525,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
 
         if (finalTurn.hintServed) {
-          const hintServedEvent = await prisma.sessionEvent.create({
+          const hintServedEvent = await tx.sessionEvent.create({
             data: {
               sessionId: id,
               eventType: SESSION_EVENT_TYPES.HINT_SERVED,
@@ -546,6 +549,32 @@ export async function POST(request: Request, { params }: RouteContext) {
           events.push(hintServedEvent);
         }
 
+        const responseData = {
+          transcript,
+          events,
+          meta: {
+            mode: session.mode,
+            source: finalTurn.source,
+            currentStage,
+            suggestedStage,
+          },
+        };
+        await completeAssistantTurn(tx, { sessionId: id, turnId: command.data.turnId, responseTranscriptId: transcript.id, result: responseData as never });
+        return { transcript, events, responseData, suggestedStage, rewardResult };
+        }));
+
+        const { transcript, events, suggestedStage, rewardResult } = committed;
+        const snapshotResult = await persistSessionSnapshots({ sessionId: id, stage: currentStage, source: finalTurn.source,
+          signals: finalTurn.signals, decision: finalTurn.decision, intent: finalTurn.intent, trajectory: finalTurn.trajectory });
+        if (snapshotResult.status === "degraded") {
+          const sourceSessionEventId = events.at(-1)?.id;
+          if (sourceSessionEventId) try {
+            await prisma.sessionEvent.create({ data: { sessionId: id, eventType: SESSION_EVENT_TYPES.SNAPSHOT_PROJECTION_DEGRADED,
+              payloadJson: { sourceSessionEventId, kind: snapshotResult.failure?.kind ?? "unknown", attemptedKinds: snapshotResult.attemptedKinds } } });
+          } catch (error) {
+            console.warn("[assistant-turn-stream] unable to record snapshot projection degradation", { sessionId: id, sourceSessionEventId, error: error instanceof Error ? error.name : "unknown" });
+          }
+        }
         controller.enqueue(
           encoder.encode(
             `event: done\ndata: ${JSON.stringify({
@@ -580,6 +609,7 @@ export async function POST(request: Request, { params }: RouteContext) {
         );
         controller.close();
       } catch (error) {
+        await failAssistantTurn(id, command.data.turnId).catch(() => undefined);
         controller.enqueue(
           encoder.encode(
             `event: error\ndata: ${JSON.stringify({

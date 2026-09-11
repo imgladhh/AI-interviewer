@@ -1,18 +1,25 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateAssistantTurn = vi.fn();
+const claimAssistantTurn = vi.fn();
+const completeAssistantTurn = vi.fn();
+const failAssistantTurn = vi.fn();
+const assistantRequest = () => new Request("http://localhost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turnId: "11111111-1111-4111-8111-111111111111" }) });
 
 const prisma = {
+  $transaction: vi.fn(),
   interviewSession: {
     findUnique: vi.fn(),
     update: vi.fn(),
   },
   transcriptSegment: {
+    findFirst: vi.fn(),
     create: vi.fn(),
   },
   sessionEvent: {
     create: vi.fn(),
   },
+  turnAssessment: { findFirst: vi.fn(), create: vi.fn() },
 };
 
 vi.mock("@/lib/db", () => ({
@@ -22,17 +29,53 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/assistant/generate-turn", () => ({
   generateAssistantTurn,
 }));
+vi.mock("@/lib/session/turn-commit", () => ({ claimAssistantTurn, completeAssistantTurn, failAssistantTurn }));
 
 describe("assistant turn route", () => {
   beforeEach(() => {
+    prisma.$transaction.mockReset().mockImplementation(async (callback: (client: typeof prisma) => unknown) => callback(prisma));
     prisma.interviewSession.findUnique.mockReset();
     prisma.interviewSession.update.mockReset();
     prisma.transcriptSegment.create.mockReset();
+    prisma.transcriptSegment.findFirst.mockReset().mockResolvedValue(null);
     prisma.sessionEvent.create.mockReset();
+    prisma.turnAssessment.findFirst.mockReset().mockResolvedValue(null);
+    prisma.turnAssessment.create.mockReset().mockResolvedValue({ id: "assessment-1", assessmentVersion: 1 });
     generateAssistantTurn.mockReset();
+    claimAssistantTurn.mockReset().mockResolvedValue({ status: "claimed" });
+    completeAssistantTurn.mockReset().mockResolvedValue(undefined);
+    failAssistantTurn.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("returns 202 without invoking the provider when the same turn is in progress", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1", mode: "CODING", transcripts: [], executionRuns: [], events: [] });
+    claimAssistantTurn.mockResolvedValue({ status: "in_progress", retryAfterMs: 750 });
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
+    const response = await POST(assistantRequest(), { params: Promise.resolve({ id: "session-1" }) });
+    expect(response.status).toBe(202);
+    expect(generateAssistantTurn).not.toHaveBeenCalled();
+    expect(prisma.transcriptSegment.create).not.toHaveBeenCalled();
+  });
+
+  it("calls the provider before the short commit transaction and marks a failed commit", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1", mode: "CODING", status: "IN_PROGRESS", endedAt: null,
+      targetLevel: "SDE2", selectedLanguage: "PYTHON", question: { title: "Two Sum", prompt: "Solve it" }, interviewerContext: null,
+      interviewerProfile: null, transcripts: [], executionRuns: [], events: [] });
+    generateAssistantTurn.mockResolvedValue({ reply: "answer", source: "fallback", suggestedStage: null });
+    prisma.transcriptSegment.create.mockResolvedValue({ id: "ai-1", segmentIndex: 0, speaker: "AI", text: "answer", isFinal: true });
+    prisma.$transaction.mockImplementationOnce(async (callback: (client: typeof prisma) => unknown) => callback({
+      ...prisma,
+      sessionEvent: { create: vi.fn().mockRejectedValue(new Error("event write failed")) },
+    } as typeof prisma));
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
+    await expect(POST(assistantRequest(), { params: Promise.resolve({ id: "session-1" }) })).rejects.toThrow("event write failed");
+    expect(generateAssistantTurn.mock.invocationCallOrder[0]).toBeLessThan(prisma.$transaction.mock.invocationCallOrder[0]);
+    expect(failAssistantTurn).toHaveBeenCalledWith("session-1", "11111111-1111-4111-8111-111111111111");
+    expect(completeAssistantTurn).not.toHaveBeenCalled();
   });
 
   it("creates an AI transcript and stage event", async () => {
+    prisma.transcriptSegment.findFirst.mockResolvedValue({ segmentIndex: 1 });
     prisma.interviewSession.findUnique.mockResolvedValue({
       id: "session-1",
       mode: "CODING",
@@ -71,7 +114,7 @@ describe("assistant turn route", () => {
       .mockResolvedValueOnce({ id: "evt-2", eventType: "STAGE_ADVANCED" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
     const payload = await response.json();
@@ -159,7 +202,7 @@ describe("assistant turn route", () => {
     prisma.interviewSession.update.mockResolvedValue({ id: "session-1" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
     const payload = await response.json();
@@ -219,7 +262,7 @@ describe("assistant turn route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-1" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -254,6 +297,7 @@ describe("assistant turn route", () => {
       reply: "Code it.",
       suggestedStage: "IMPLEMENTATION",
       source: "fallback",
+      signals: { progress: "progressing" },
       candidateDna: {
         vector: { reasoning: 0.8, implementation: 0.7, coachability: 0.6, independence: 0.7 },
         dominantTraits: ["independent"],
@@ -279,7 +323,7 @@ describe("assistant turn route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-1", eventType: "GENERIC" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -308,6 +352,9 @@ describe("assistant turn route", () => {
         }),
       }),
     );
+    expect(prisma.turnAssessment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ candidateTurnId: "u1", assessmentVersion: 1 }),
+    }));
   });
 
   it("records turn reward with trace metadata when a decision exists", async () => {
@@ -346,7 +393,7 @@ describe("assistant turn route", () => {
       .mockResolvedValue({ id: "evt-generic", eventType: "GENERIC" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -407,7 +454,7 @@ describe("assistant turn route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-echo", eventType: "GENERIC" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -458,7 +505,7 @@ describe("assistant turn route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-sd-1", eventType: "AI_SPOKE" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-sd-1" }),
     });
     const payload = await response.json();

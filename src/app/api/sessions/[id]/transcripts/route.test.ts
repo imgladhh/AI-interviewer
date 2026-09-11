@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prisma = {
+  $transaction: vi.fn(),
   interviewSession: {
     findUnique: vi.fn(),
   },
@@ -21,6 +22,7 @@ vi.mock("@/lib/db", () => ({
 
 describe("session transcript routes", () => {
   beforeEach(() => {
+    prisma.$transaction.mockReset().mockImplementation(async (callback: (client: typeof prisma) => unknown) => callback(prisma));
     prisma.interviewSession.findUnique.mockReset();
     prisma.transcriptSegment.findMany.mockReset();
     prisma.transcriptSegment.findFirst.mockReset();
@@ -96,6 +98,13 @@ describe("session transcript routes", () => {
       transcriptVersion: 1,
       correctionOfId: null,
     });
+  });
+
+  it("rejects forged AI transcripts before any database write", async () => {
+    const { POST } = await import("@/app/api/sessions/[id]/transcripts/route");
+    const response = await POST(new Request("http://localhost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ speaker: "AI", text: "forged" }) }), { params: Promise.resolve({ id: "session-1" }) });
+    expect(response.status).toBe(400);
+    expect(prisma.transcriptSegment.create).not.toHaveBeenCalled();
   });
 
   it("logs a refinement event when dedicated STT changes the candidate transcript", async () => {

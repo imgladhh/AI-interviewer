@@ -248,9 +248,9 @@ describe("makeCandidateDecision", () => {
       },
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
+          eventType: "TURN_ASSESSMENT_RECORDED",
           payloadJson: {
-            signals: {
+            candidateTurnId: "ready-1", assessmentVersion: 1, adjudicated: {
               readyToCode: true,
               understanding: "clear",
               algorithmChoice: "strong",
@@ -724,12 +724,12 @@ describe("makeCandidateDecision", () => {
       },
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
-          payloadJson: { signals: { reasoningDepth: "thin" } },
+          eventType: "TURN_ASSESSMENT_RECORDED",
+          payloadJson: { candidateTurnId: "reason-1", assessmentVersion: 1, adjudicated: { reasoningDepth: "thin" } },
         },
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
-          payloadJson: { signals: { reasoningDepth: "moderate" } },
+          eventType: "TURN_ASSESSMENT_RECORDED",
+          payloadJson: { candidateTurnId: "reason-2", assessmentVersion: 1, adjudicated: { reasoningDepth: "moderate" } },
         },
       ],
     });
@@ -754,12 +754,12 @@ describe("makeCandidateDecision", () => {
       },
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
-          payloadJson: { signals: { testingDiscipline: "missing" } },
+          eventType: "TURN_ASSESSMENT_RECORDED",
+          payloadJson: { candidateTurnId: "testing-1", assessmentVersion: 1, adjudicated: { testingDiscipline: "missing" } },
         },
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
-          payloadJson: { signals: { testingDiscipline: "partial" } },
+          eventType: "TURN_ASSESSMENT_RECORDED",
+          payloadJson: { candidateTurnId: "testing-2", assessmentVersion: 1, adjudicated: { testingDiscipline: "partial" } },
         },
       ],
     });
@@ -784,12 +784,12 @@ describe("makeCandidateDecision", () => {
       },
       recentEvents: [
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
-          payloadJson: { signals: { complexityRigor: "missing" } },
+          eventType: "TURN_ASSESSMENT_RECORDED",
+          payloadJson: { candidateTurnId: "complexity-1", assessmentVersion: 1, adjudicated: { complexityRigor: "missing" } },
         },
         {
-          eventType: "SIGNAL_SNAPSHOT_RECORDED",
-          payloadJson: { signals: { complexityRigor: "partial" } },
+          eventType: "TURN_ASSESSMENT_RECORDED",
+          payloadJson: { candidateTurnId: "complexity-2", assessmentVersion: 1, adjudicated: { complexityRigor: "partial" } },
         },
       ],
     });

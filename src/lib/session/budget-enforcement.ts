@@ -1,6 +1,9 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import type { SessionBudgetStatus } from "@/lib/usage/budget";
+import { withUniqueSequenceRetry } from "@/lib/db/unique-sequence";
+import { completeAssistantTurn } from "@/lib/session/turn-commit";
 
 export async function enforceSessionBudgetLimit(input: {
   sessionId: string;
@@ -16,12 +19,16 @@ export async function enforceSessionBudgetLimit(input: {
   existingTranscriptCount: number;
   budget: SessionBudgetStatus;
   lowCostMode?: boolean;
+  turnId: string;
+  resultMeta: Prisma.InputJsonValue;
 }) {
-  const transcript = await prisma.transcriptSegment.create({
+  return withUniqueSequenceRetry(() => prisma.$transaction(async (tx) => {
+  const lastSegment = await tx.transcriptSegment.findFirst({ where: { sessionId: input.sessionId }, orderBy: { segmentIndex: "desc" }, select: { segmentIndex: true } });
+  const transcript = await tx.transcriptSegment.create({
     data: {
       sessionId: input.sessionId,
       speaker: "AI",
-      segmentIndex: input.existingTranscriptCount,
+      segmentIndex: (lastSegment?.segmentIndex ?? -1) + 1,
       text: input.reply,
       isFinal: true,
     },
@@ -29,7 +36,7 @@ export async function enforceSessionBudgetLimit(input: {
 
   const events = [];
 
-  const aiSpokeEvent = await prisma.sessionEvent.create({
+  const aiSpokeEvent = await tx.sessionEvent.create({
     data: {
       sessionId: input.sessionId,
       eventType: SESSION_EVENT_TYPES.AI_SPOKE,
@@ -44,7 +51,7 @@ export async function enforceSessionBudgetLimit(input: {
   events.push(aiSpokeEvent);
 
   if (input.usage) {
-    const usageEvent = await prisma.sessionEvent.create({
+    const usageEvent = await tx.sessionEvent.create({
       data: {
         sessionId: input.sessionId,
         eventType: SESSION_EVENT_TYPES.LLM_USAGE_RECORDED,
@@ -61,7 +68,7 @@ export async function enforceSessionBudgetLimit(input: {
     events.push(usageEvent);
   }
 
-  const budgetEvent = await prisma.sessionEvent.create({
+  const budgetEvent = await tx.sessionEvent.create({
     data: {
       sessionId: input.sessionId,
       eventType: SESSION_EVENT_TYPES.SESSION_BUDGET_EXCEEDED,
@@ -74,7 +81,7 @@ export async function enforceSessionBudgetLimit(input: {
   });
   events.push(budgetEvent);
 
-  const endedEvent = await prisma.sessionEvent.create({
+  const endedEvent = await tx.sessionEvent.create({
     data: {
       sessionId: input.sessionId,
       eventType: SESSION_EVENT_TYPES.INTERVIEW_ENDED,
@@ -86,7 +93,7 @@ export async function enforceSessionBudgetLimit(input: {
   });
   events.push(endedEvent);
 
-  await prisma.interviewSession.update({
+  await tx.interviewSession.update({
     where: { id: input.sessionId },
     data: {
       status: "COMPLETED",
@@ -94,5 +101,8 @@ export async function enforceSessionBudgetLimit(input: {
     },
   });
 
-  return { transcript, events };
+  const result = { transcript, events, meta: input.resultMeta };
+  await completeAssistantTurn(tx, { sessionId: input.sessionId, turnId: input.turnId, responseTranscriptId: transcript.id, result: result as never });
+  return result;
+  }));
 }

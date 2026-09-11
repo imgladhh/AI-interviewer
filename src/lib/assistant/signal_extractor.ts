@@ -6,6 +6,7 @@ import {
   type SystemDesignGapState,
 } from "@/lib/assistant/system_design_gap";
 import type { CodingInterviewStage, SystemDesignStage } from "@/lib/assistant/stages";
+import { adjudicateCandidateSignals, latestAdjudicatedSignals, registerSignalAssessment } from "@/lib/assistant/turn-assessment";
 
 type TranscriptLike = {
   speaker: "USER" | "AI" | "SYSTEM";
@@ -250,14 +251,16 @@ export async function extractCandidateSignalsSmart(input: {
           ? await observeWithGemini(input, heuristic)
           : await observeWithOpenAI(input, heuristic);
       if (observed) {
-        return observed;
+        const trace = adjudicateCandidateSignals({ heuristic, provider: observed });
+        return registerSignalAssessment(trace.adjudicated, trace);
       }
     } catch (error) {
       logObserverProviderFailure(provider, error);
     }
   }
 
-  return heuristic;
+  const trace = adjudicateCandidateSignals({ heuristic, provider: null });
+  return registerSignalAssessment(trace.adjudicated, trace);
 }
 
 function resolveUnderstandingState(
@@ -724,20 +727,7 @@ function dedupeEvidence(evidence: string[]) {
 }
 
 function collectPriorSignalSnapshots(events: SessionEventLike[]) {
-  return events
-    .filter((event) => event.eventType === "SIGNAL_SNAPSHOT_RECORDED")
-    .slice(-3)
-    .map((event) => {
-      const payload =
-        typeof event.payloadJson === "object" && event.payloadJson !== null
-          ? (event.payloadJson as Record<string, unknown>)
-          : {};
-      const signals =
-        typeof payload.signals === "object" && payload.signals !== null
-          ? (payload.signals as Partial<CandidateSignalSnapshot>)
-          : {};
-      return signals;
-    });
+  return latestAdjudicatedSignals(events).slice(-3).map((assessment) => assessment.signals);
 }
 
 function buildTrendSummary(
@@ -1188,11 +1178,11 @@ function computePreviousLowDetailStreak(recentEvents: SessionEventLike[]) {
   let streak = 0;
   for (let index = recentEvents.length - 1; index >= 0; index -= 1) {
     const event = recentEvents[index];
-    if (!event || event.eventType !== "SIGNAL_SNAPSHOT_RECORDED") {
+    if (!event || event.eventType !== "TURN_ASSESSMENT_RECORDED") {
       continue;
     }
     const payload = asRecord(event.payloadJson);
-    const signals = asRecord(payload.signals);
+    const signals = asRecord(payload.adjudicated);
     const designSignals = asRecord(signals.designSignals);
     const handwave = asRecord(designSignals.handwave);
     if (handwave.detected === true) {

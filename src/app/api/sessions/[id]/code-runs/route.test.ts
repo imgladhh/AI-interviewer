@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const executeCode = vi.fn();
 
 const prisma = {
+  $transaction: vi.fn(),
   interviewSession: {
     findUnique: vi.fn(),
   },
@@ -29,6 +30,7 @@ vi.mock("@/lib/sandbox/execute", () => ({
 
 describe("session code run routes", () => {
   beforeEach(() => {
+    prisma.$transaction.mockReset().mockImplementation(async (callback: (client: typeof prisma) => unknown) => callback(prisma));
     prisma.interviewSession.findUnique.mockReset();
     prisma.codeSnapshot.findFirst.mockReset();
     prisma.codeSnapshot.create.mockReset();

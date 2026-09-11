@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { fail, ok } from "@/lib/http";
 import { enforceMutationGuard } from "@/lib/security/request-guard";
-import { createSessionEventSchema } from "@/schemas/session-runtime";
+import { clientSessionEventSchema } from "@/schemas/session-runtime";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -36,10 +36,12 @@ export async function POST(request: Request, { params }: RouteContext) {
   }
   const { id } = await params;
   const body = await request.json().catch(() => null);
-  const parsed = createSessionEventSchema.safeParse(body);
+  const parsed = clientSessionEventSchema.safeParse(body);
 
   if (!parsed.success) {
-    return fail("Invalid request body", 400, {
+    const eventType = body && typeof body === "object" ? (body as { eventType?: unknown }).eventType : null;
+    const allowed = ["INTERVIEW_ROOM_OPENED", "LISTENING_STARTED", "LISTENING_STOPPED", "HINT_REQUESTED", "EDITOR_ACTIVITY_RECORDED", "WHITEBOARD_SIGNAL_RECORDED", "CANDIDATE_TURN_AUTOSUBMITTED", "AI_INTERRUPTED_BY_CANDIDATE"];
+    return fail(typeof eventType === "string" && allowed.includes(eventType) ? "Invalid telemetry payload" : "Client cannot write this event type", typeof eventType === "string" && allowed.includes(eventType) ? 400 : 403, {
       issues: parsed.error.flatten(),
     });
   }

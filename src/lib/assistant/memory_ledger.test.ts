@@ -133,4 +133,21 @@ describe("buildMemoryLedger", () => {
 
     expect(ledger.contentMemory.latestAnswerSummary).toMatch(/because complement lookup/i);
   });
+
+  it("derives historical signal state only from latest adjudicated assessments", () => {
+    const thin = { ...baseSignals, reasoningDepth: "thin" as const };
+    const ledger = buildMemoryLedger({ currentStage: "APPROACH_DISCUSSION", signals: baseSignals, recentEvents: [
+      { eventType: "SIGNAL_SNAPSHOT_RECORDED", payloadJson: { signals: thin } },
+      { eventType: "TURN_ASSESSMENT_RECORDED", payloadJson: { candidateTurnId: "u1", assessmentVersion: 1, adjudicated: thin } },
+      { eventType: "TURN_ASSESSMENT_RECORDED", payloadJson: { candidateTurnId: "u2", assessmentVersion: 1, adjudicated: thin } },
+    ] });
+    expect(ledger.persistentWeakness).toBe("reasoning");
+    expect(ledger.assessmentStatus).toBe("available");
+  });
+
+  it("degrades historical sessions without assessments to unavailable", () => {
+    const ledger = buildMemoryLedger({ currentStage: "APPROACH_DISCUSSION", signals: baseSignals,
+      recentEvents: [{ eventType: "SIGNAL_SNAPSHOT_RECORDED", payloadJson: { signals: { reasoningDepth: "thin" } } }] });
+    expect(ledger.assessmentStatus).toBe("unavailable");
+  });
 });

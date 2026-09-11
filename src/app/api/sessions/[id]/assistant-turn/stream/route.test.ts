@@ -1,18 +1,25 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const streamAssistantTurn = vi.fn();
+const claimAssistantTurn = vi.fn();
+const completeAssistantTurn = vi.fn();
+const failAssistantTurn = vi.fn();
+const assistantRequest = () => new Request("http://localhost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turnId: "11111111-1111-4111-8111-111111111111" }) });
 
 const prisma = {
+  $transaction: vi.fn(),
   interviewSession: {
     findUnique: vi.fn(),
     update: vi.fn(),
   },
   transcriptSegment: {
+    findFirst: vi.fn(),
     create: vi.fn(),
   },
   sessionEvent: {
     create: vi.fn(),
   },
+  turnAssessment: { findFirst: vi.fn(), create: vi.fn() },
 };
 
 vi.mock("@/lib/db", () => ({
@@ -22,14 +29,22 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/assistant/generate-turn", () => ({
   streamAssistantTurn,
 }));
+vi.mock("@/lib/session/turn-commit", () => ({ claimAssistantTurn, completeAssistantTurn, failAssistantTurn }));
 
 describe("assistant turn stream route", () => {
   beforeEach(() => {
+    prisma.$transaction.mockReset().mockImplementation(async (callback: (client: typeof prisma) => unknown) => callback(prisma));
     prisma.interviewSession.findUnique.mockReset();
     prisma.interviewSession.update.mockReset();
     prisma.transcriptSegment.create.mockReset();
+    prisma.transcriptSegment.findFirst.mockReset().mockResolvedValue(null);
     prisma.sessionEvent.create.mockReset();
+    prisma.turnAssessment.findFirst.mockReset().mockResolvedValue(null);
+    prisma.turnAssessment.create.mockReset().mockResolvedValue({ id: "assessment-1", assessmentVersion: 1 });
     streamAssistantTurn.mockReset();
+    claimAssistantTurn.mockReset().mockResolvedValue({ status: "claimed" });
+    completeAssistantTurn.mockReset().mockResolvedValue(undefined);
+    failAssistantTurn.mockReset().mockResolvedValue(undefined);
   });
 
   it("streams delta and done events", async () => {
@@ -67,7 +82,7 @@ describe("assistant turn stream route", () => {
       .mockResolvedValueOnce({ id: "evt-2", eventType: "STAGE_ADVANCED" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -79,6 +94,41 @@ describe("assistant turn stream route", () => {
     expect(text).toContain("event: delta");
     expect(text).toContain("event: done");
     expect(text).toContain("\"mode\":\"CODING\"");
+  });
+
+  it("returns the stable 202 protocol without invoking the provider", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1", mode: "CODING", transcripts: [], executionRuns: [], events: [] });
+    claimAssistantTurn.mockResolvedValue({ status: "in_progress", retryAfterMs: 750 });
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
+    const response = await POST(assistantRequest(), { params: Promise.resolve({ id: "session-1" }) });
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ data: { status: "in_progress", retryAfterMs: 750 } });
+    expect(streamAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it("replays a completed stream result as a done event without invoking the provider", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1", mode: "CODING", transcripts: [], executionRuns: [], events: [] });
+    claimAssistantTurn.mockResolvedValue({ status: "completed", result: { transcript: { id: "ai-1" }, events: [] } });
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
+    const response = await POST(assistantRequest(), { params: Promise.resolve({ id: "session-1" }) });
+    expect(await response.text()).toContain("event: done");
+    expect(streamAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it("marks an aborted stream failed without writing an authoritative transcript", async () => {
+    prisma.interviewSession.findUnique.mockResolvedValue({ id: "session-1", mode: "CODING", status: "IN_PROGRESS", endedAt: null,
+      targetLevel: "SDE2", selectedLanguage: "PYTHON", question: { title: "Two Sum", prompt: "Solve it" }, interviewerContext: null,
+      interviewerProfile: null, transcripts: [], executionRuns: [], events: [] });
+    streamAssistantTurn.mockImplementation(async function* () { yield { textDelta: "draft" }; });
+    const abort = new AbortController();
+    abort.abort();
+    const request = new Request("http://localhost", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnId: "11111111-1111-4111-8111-111111111111" }), signal: abort.signal });
+    const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
+    const response = await POST(request, { params: Promise.resolve({ id: "session-1" }) });
+    await response.text();
+    expect(failAssistantTurn).toHaveBeenCalled();
+    expect(prisma.transcriptSegment.create).not.toHaveBeenCalled();
   });
 
   it("does not create a duplicate stage event when the assistant stays in the same stage", async () => {
@@ -122,7 +172,7 @@ describe("assistant turn stream route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-1", eventType: "AI_SPOKE" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -184,7 +234,7 @@ describe("assistant turn stream route", () => {
     prisma.interviewSession.update.mockResolvedValue({ id: "session-1" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -206,7 +256,7 @@ describe("assistant turn stream route", () => {
       question: { title: "Two Sum", prompt: "Return indices." },
       interviewerContext: null,
       interviewerProfile: null,
-      transcripts: [],
+      transcripts: [{ id: "u1", segmentIndex: 0, speaker: "USER", text: "Use a hash map.", isFinal: true }],
       executionRuns: [],
       events: [],
     });
@@ -216,6 +266,7 @@ describe("assistant turn stream route", () => {
           reply: "Code it.",
           suggestedStage: "IMPLEMENTATION",
           source: "fallback",
+          signals: { progress: "progressing" },
           candidateDna: {
             vector: { reasoning: 0.84, implementation: 0.72, coachability: 0.68, independence: 0.75 },
             dominantTraits: ["reasoning-heavy", "independent"],
@@ -243,7 +294,7 @@ describe("assistant turn stream route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-1", eventType: "GENERIC" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
@@ -263,6 +314,9 @@ describe("assistant turn stream route", () => {
         }),
       }),
     );
+    expect(prisma.turnAssessment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ candidateTurnId: "u1", assessmentVersion: 1 }),
+    }));
   });
 
   it("guards system design stage transitions in streaming route with api contract gate", async () => {
@@ -296,7 +350,7 @@ describe("assistant turn stream route", () => {
     prisma.sessionEvent.create.mockResolvedValue({ id: "evt-sd-1", eventType: "GENERIC" });
 
     const { POST } = await import("@/app/api/sessions/[id]/assistant-turn/stream/route");
-    const response = await POST(new Request("http://localhost", { method: "POST" }), {
+    const response = await POST(assistantRequest(), {
       params: Promise.resolve({ id: "session-sd-1" }),
     });
 

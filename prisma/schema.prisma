@@ -303,6 +303,8 @@ model InterviewSession {
   interviewerDecisionSnapshots InterviewerDecisionSnapshot[]
   intentSnapshots       IntentSnapshot[]
   trajectorySnapshots   TrajectorySnapshot[]
+  turnCommits           SessionTurnCommit[]
+  turnAssessments       TurnAssessment[]
 
   @@index([userId, createdAt])
   @@index([status])
@@ -388,6 +390,40 @@ model SessionEvent {
   @@index([sessionId, eventTime])
 }
 
+model SessionTurnCommit {
+  id                   String           @id @default(cuid())
+  sessionId            String
+  turnId               String
+  status               String
+  responseTranscriptId String?
+  resultJson           Json?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  session              InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, turnId])
+  @@index([sessionId, status])
+}
+
+model TurnAssessment {
+  id                String           @id @default(cuid())
+  sessionId         String
+  candidateTurnId   String
+  assessmentVersion Int
+  status            String
+  heuristicJson     Json
+  providerJson      Json?
+  adjudicatedJson   Json
+  evidenceJson      Json
+  createdAt         DateTime         @default(now())
+
+  session           InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, candidateTurnId, assessmentVersion])
+  @@index([sessionId, candidateTurnId, createdAt])
+}
+
 model TranscriptSegment {
   id           String           @id @default(cuid())
   sessionId    String
@@ -402,7 +438,7 @@ model TranscriptSegment {
 
   session      InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
-  @@index([sessionId, segmentIndex])
+  @@unique([sessionId, segmentIndex])
 }
 
 model CodeSnapshot {
@@ -417,7 +453,7 @@ model CodeSnapshot {
   session       InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   executionRuns ExecutionRun[]
 
-  @@index([sessionId, snapshotIndex])
+  @@unique([sessionId, snapshotIndex])
 }
 
 model ExecutionRun {

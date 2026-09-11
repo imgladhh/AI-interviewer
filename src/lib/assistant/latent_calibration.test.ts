@@ -22,6 +22,7 @@ const baseSignals: CandidateSignalSnapshot = {
 };
 
 const baseLedger: MemoryLedger = {
+  assessmentStatus: "available",
   answeredTargets: ["complexity", "tradeoff"],
   collectedEvidence: ["complexity_tradeoff", "test_cases"],
   unresolvedIssues: [],
