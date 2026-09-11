@@ -39,6 +39,7 @@ import {
   type CodingInterviewStage,
   type SystemDesignStage,
 } from "@/lib/assistant/stages";
+import { boundedText, providerSignal, requestLimits } from "@/lib/security/limits";
 import { makeSystemDesignDecision, type SystemDesignDecision } from "@/lib/assistant/system_design_decision";
 import { extractCandidateTerms, summarizeCandidateArgument } from "@/lib/assistant/candidate_terms";
 import { estimateOpenAiTextCost, estimateTokens } from "@/lib/usage/cost";
@@ -571,6 +572,7 @@ async function generateWithOpenAI(
         },
       ],
     }),
+    signal: providerSignal(),
   });
 
   if (!response.ok) {
@@ -655,7 +657,7 @@ async function* streamWithOpenAI(
         },
       ],
     }),
-    signal: options?.signal,
+    signal: providerSignal(options?.signal),
   }).catch(() => null);
 
   if (!response?.ok || !response.body) {
@@ -772,6 +774,7 @@ async function generateWithGemini(
           maxOutputTokens: input.lowCostMode ? 180 : 320,
         },
       }),
+      signal: providerSignal(),
     },
   );
 
@@ -865,7 +868,7 @@ async function* streamWithGemini(
           maxOutputTokens: input.lowCostMode ? 180 : 320,
         },
       }),
-      signal: options?.signal,
+      signal: providerSignal(options?.signal),
     },
   ).catch(() => null);
 
@@ -1554,7 +1557,7 @@ function buildFallbackHintReply(
 }
 
 function finalizeReply(reply: string) {
-  const normalized = reply.replace(/\s+/g, " ").trim();
+  const normalized = boundedText(reply.replace(/\s+/g, " ").trim(), requestLimits.providerOutputChars);
   if (!normalized) {
     return normalized;
   }
@@ -1834,6 +1837,7 @@ async function rewriteWithOpenAi(
         },
       ],
     }),
+    signal: providerSignal(),
   }).catch(() => null);
 
   if (!response?.ok) {
@@ -1902,6 +1906,7 @@ async function rewriteWithGemini(
           maxOutputTokens: 120,
         },
       }),
+      signal: providerSignal(),
     },
   ).catch(() => null);
 

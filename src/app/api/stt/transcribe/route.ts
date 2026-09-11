@@ -8,6 +8,7 @@ import {
   getDedicatedSttConfig,
   transcribeWithDedicatedStt,
 } from "@/lib/voice/stt-provider";
+import { requestLimits } from "@/lib/security/limits";
 
 export async function POST(request: Request) {
   const formData = await request.formData().catch(() => null);
@@ -18,6 +19,10 @@ export async function POST(request: Request) {
   const audio = formData.get("audio");
   if (!(audio instanceof Blob)) {
     return fail("Audio blob is required", 400);
+  }
+
+  if (audio.size > requestLimits.audioBytes) {
+    return fail("Audio exceeds the configured size limit", 413, { code: "STT_AUDIO_TOO_LARGE", maxBytes: requestLimits.audioBytes });
   }
 
   const sessionId = typeof formData.get("sessionId") === "string" ? String(formData.get("sessionId")) : null;

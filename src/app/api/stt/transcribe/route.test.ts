@@ -43,6 +43,19 @@ describe("dedicated STT route", () => {
     expect(payload.code).toBe("STT_NOT_CONFIGURED");
   });
 
+  it("rejects oversized audio before provider and database work", async () => {
+    process.env.MAX_STT_AUDIO_BYTES = "3";
+    const provider = vi.fn();
+    vi.stubGlobal("fetch", provider);
+    const { POST } = await import("@/app/api/stt/transcribe/route");
+    const formData = new FormData();
+    formData.append("audio", new Blob(["four"]), "sample.webm");
+    const response = await POST(new Request("http://localhost/api/stt/transcribe", { method: "POST", body: formData }));
+    expect(response.status).toBe(413);
+    expect(provider).not.toHaveBeenCalled();
+    expect(prisma.sessionEvent.create).not.toHaveBeenCalled();
+  });
+
   it("returns a transcript when OpenAI STT succeeds", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.OPENAI_STT_MODEL = "gpt-4o-mini-transcribe";

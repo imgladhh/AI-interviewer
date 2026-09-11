@@ -1,5 +1,7 @@
 ﻿import { z } from "zod";
 
+import { requestLimits } from "@/lib/security/limits";
+
 export const clientSessionEventSchema = z.discriminatedUnion("eventType", [
   z.object({ eventType: z.literal("INTERVIEW_ROOM_OPENED"), payloadJson: z.object({ room: z.string().trim().min(1).max(64) }).optional() }),
   z.object({ eventType: z.literal("LISTENING_STARTED"), payloadJson: z.object({ mode: z.literal("continuous"), transcriptionMode: z.enum(["provider", "browser"]) }) }),
@@ -13,21 +15,21 @@ export const clientSessionEventSchema = z.discriminatedUnion("eventType", [
 
 export const createTranscriptSegmentSchema = z.object({
   speaker: z.literal("USER"),
-  text: z.string().trim().min(1),
+  text: z.string().trim().min(1).max(requestLimits.transcriptChars),
   startedAtMs: z.number().int().nonnegative().optional(),
   endedAtMs: z.number().int().nonnegative().optional(),
   isFinal: z.boolean().default(true),
-  audioUrl: z.string().trim().url().optional(),
+  audioUrl: z.string().trim().url().max(4096).optional(),
   transcriptSource: z.enum(["manual", "browser", "openai-stt", "assemblyai-stt", "assistant"]).optional(),
   transcriptProvider: z.string().trim().min(1).max(64).optional(),
-  sourceText: z.string().trim().min(1).optional(),
+  sourceText: z.string().trim().min(1).max(requestLimits.transcriptChars).optional(),
   correctionOfId: z.string().trim().min(1).optional(),
 });
 
 export const createExecutionRunSchema = z.object({
   language: z.string().trim().min(1).max(32),
-  code: z.string().min(1),
-  stdin: z.string().optional(),
+  code: z.string().min(1).max(requestLimits.codeChars),
+  stdin: z.string().max(requestLimits.stdinChars).optional(),
   source: z.string().trim().min(1).max(32).default("RUN"),
 });
 

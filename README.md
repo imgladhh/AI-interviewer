@@ -6,7 +6,7 @@ The project is built as a full-stack `Next.js + TypeScript` application with `Po
 
 ## What It Does
 
-- Runs coding interviews with a Monaco editor, local code execution, transcript history, and stage-aware interviewer turns.
+- Runs coding interviews with a Monaco editor, opt-in sandboxed code execution, transcript history, and stage-aware interviewer turns.
 - Runs system design interviews with target-level selection, stage rails, whiteboard workspace, and level-specific interviewer pressure.
 - Generates reports with recommendation, score breakdowns, evidence pins, transcript drill-down, and system-design radar assessment.
 - Provides an admin dashboard for session state, persona queue state, decision snapshots, monitoring baseline, and regression health.
@@ -72,6 +72,9 @@ Common checks:
 ```powershell
 npm run build
 npm run test
+npx tsc --noEmit
+npm run test:smoke
+npm audit --omit=dev --audit-level=critical
 npm run test:e2e
 npm run eval:system-design
 npm run eval:system-design:weekly
@@ -85,6 +88,7 @@ Notes:
 - `npm run test` uses `scripts/run-vitest-safe.mjs` to work around occasional Windows `spawn EPERM` issues from the local `esbuild` process.
 - `npm run build` requires local Postgres/Redis for routes that prerender or read live data.
 - System design gates enforce calibration accuracy, regression pass rate, replay variance, and expectation flip thresholds.
+- `.github/workflows/repository-quality.yml` runs install, Prisma generation/migrations/seed, the complete unit suite, TypeScript, production build, a critical-severity production dependency audit, and a dependency-backed core browser smoke test.
 
 ## Running Locally
 
@@ -114,6 +118,8 @@ npm run db:seed
 npm run dev
 ```
 
+The development script binds to `127.0.0.1` by default. Keep it local; do not add a public bind, port mapping, tunnel, or reverse proxy without completing the sixth-batch hardening work.
+
 5. Optional persona worker:
 
 ```powershell
@@ -141,12 +147,24 @@ Important variables:
 - `ASSEMBLYAI_API_KEY`
 - `ADMIN_DASHBOARD_TOKEN`
 - `API_RATE_LIMIT_ENABLED`
+- `ENABLE_CODE_RUNS` (default `false`)
+- `ENABLE_HOST_CODE_EXECUTION` (default `false`; also requires `ENABLE_CODE_RUNS=true`)
+- `ENABLE_PERSONA_INGESTION` (default `false`)
+- `MAX_CODE_CHARS`, `MAX_STDIN_CHARS`, `MAX_TRANSCRIPT_CHARS`, `MAX_STT_AUDIO_BYTES`
+- `MAX_PROVIDER_OUTPUT_CHARS`, `MAX_PERSONA_RESPONSE_BYTES`, `MAX_PROCESS_OUTPUT_CHARS`
+- `MAX_CODE_TIMEOUT_MS`, `PROVIDER_TIMEOUT_MS`
+
+## Security Boundary
+
+Dangerous capabilities are fail-closed. Code runs and persona URL ingestion are disabled unless explicitly enabled. Code execution always attempts the network-disabled, resource-limited Docker runner first; it never falls back to a host process unless both code-run flags are enabled. Host children receive a minimal environment allowlist rather than application secrets.
+
+These switches and deterministic size/timeout caps reduce accidental exposure; they are not a production sandbox, authentication layer, distributed quota system, or complete SSRF defense. The project is safe to defer full hardening only when the development server binds to localhost, is not port-mapped or reverse-proxied to the public internet, and no untrusted code or URLs are submitted. Do not expose this repository directly as a public demo. Public deployment requires the sixth-batch isolation, SSRF, authentication, distributed-rate-limit, and audit work.
 
 ## Known Limitations
 
 - Some signal extraction still uses heuristic pattern matching when provider-backed extraction is unavailable.
 - Browser speech recognition depends on Web Speech API support and varies by browser.
-- Local code execution is still process-based unless Docker sandboxing is enabled.
+- Code execution and persona ingestion are disabled by default. Docker is required unless the explicit host fallback flag is also enabled.
 - Real transcript calibration support exists, but production-quality calibration still depends on collecting enough labeled sessions.
 - The current auth model is still demo-user oriented; production deployment should add real user/session auth before public launch.
 

@@ -20,6 +20,8 @@ export type DedicatedSttFailureClass =
   | "timeout"
   | "other";
 
+import { boundedText, providerSignal, requestLimits } from "@/lib/security/limits";
+
 export class DedicatedSttError extends Error {
   status: number | null;
   errorType: string | null;
@@ -169,6 +171,7 @@ async function transcribeWithOpenAi(audio: Blob): Promise<DedicatedSttSuccess> {
         Authorization: `Bearer ${apiKey}`,
       },
       body: formData,
+      signal: providerSignal(),
     });
   } catch (error) {
     throw new DedicatedSttError({
@@ -204,7 +207,7 @@ async function transcribeWithOpenAi(audio: Blob): Promise<DedicatedSttSuccess> {
   }
 
   return {
-    text,
+    text: boundedText(text, requestLimits.transcriptChars),
     provider: "openai-stt",
     model,
   };
@@ -230,6 +233,7 @@ async function transcribeWithAssemblyAi(audio: Blob): Promise<DedicatedSttSucces
         authorization: apiKey,
       },
       body: audio,
+      signal: providerSignal(),
     });
   } catch (error) {
     throw new DedicatedSttError({
@@ -277,6 +281,7 @@ async function transcribeWithAssemblyAi(audio: Blob): Promise<DedicatedSttSucces
         speech_models: speechModels,
         language_detection: true,
       }),
+      signal: providerSignal(),
     });
   } catch (error) {
     throw new DedicatedSttError({
@@ -321,6 +326,7 @@ async function transcribeWithAssemblyAi(audio: Blob): Promise<DedicatedSttSucces
         headers: {
           authorization: apiKey,
         },
+        signal: providerSignal(),
       });
     } catch (error) {
       throw new DedicatedSttError({
@@ -362,7 +368,7 @@ async function transcribeWithAssemblyAi(audio: Blob): Promise<DedicatedSttSucces
       }
 
       return {
-        text,
+        text: boundedText(text, requestLimits.transcriptChars),
         provider: "assemblyai-stt",
         model: speechModels.join(", "),
       };

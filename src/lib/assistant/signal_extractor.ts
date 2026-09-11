@@ -7,6 +7,7 @@ import {
 } from "@/lib/assistant/system_design_gap";
 import type { CodingInterviewStage, SystemDesignStage } from "@/lib/assistant/stages";
 import { adjudicateCandidateSignals, latestAdjudicatedSignals, registerSignalAssessment } from "@/lib/assistant/turn-assessment";
+import { providerSignal } from "@/lib/security/limits";
 
 type TranscriptLike = {
   speaker: "USER" | "AI" | "SYSTEM";
@@ -834,6 +835,7 @@ async function observeWithGemini(
           },
         ],
       }),
+      signal: providerSignal(),
     },
   );
 
@@ -890,6 +892,7 @@ async function observeWithOpenAI(
         },
       ],
     }),
+    signal: providerSignal(),
   });
 
   if (!response.ok) {

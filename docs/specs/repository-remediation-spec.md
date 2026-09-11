@@ -288,3 +288,17 @@
 - #10 migration/验证：应用 `20260910010000_turn_assessments`，真实 PostgreSQL 验证重复 `(sessionId, candidateTurnId, assessmentVersion)` 被 P2002 拒绝、v1 保持不变且默认读取 v2。自动测试覆盖 provider 冲突、invalid/missing fallback、append-only supersession、重复 event 去重、replay 稳定、echo 单次计数及缺 assessment 降级。
 - 已知延期：Next.js 16 主版本迁移仍按第一批规则延期。
 - #6 已知限制：正常异常与 stream abort 均会把 commit 标记为 `FAILED`，且 FAILED 的同 key 恢复使用条件更新保证只有一个请求获胜；但进程在 claim 后被硬终止可能遗留 stale `IN_PROGRESS`。本地项目暂不引入 lease/heartbeat 回收，公开部署前必须增加带超时和 fencing token 的安全 reclaim，避免永久 202 或旧 worker 迟到提交。
+
+### 第四批：完成（2026-09-10）
+
+- #1：新增 `ENABLE_CODE_RUNS` 与 `ENABLE_HOST_CODE_EXECUTION` 双层开关，默认均关闭；code-run route 在解析 body、访问数据库或启动进程前 fail closed，执行器本身也二次校验。显式开启 code run 后始终优先使用 Docker（禁网、CPU/内存限制），Docker 不可用时仅在 host 开关同时开启后才允许本机 fallback；host child 只继承运行所需的环境白名单，不携带数据库、Redis 或 provider secrets。
+- #2：新增 `ENABLE_PERSONA_INGESTION`，preview/create route 在解析、数据库、队列前 fail closed，worker 和实际 ingestion 函数也在 Redis/抓取前拒绝运行。Persona 响应同时增加超时和最大 body 限制；完整 redirect/DNS/IP SSRF 防御仍按第六批延期。
+- 配置/文档：`.env.example` 明确三个开关均为 `false`，并与 docker-compose 的 Postgres host port `5433` 对齐；README 明确 local-only 成立条件、三个开关不是生产安全边界，且第六批前禁止公开 demo。
+- 自动测试：覆盖 code-run 默认关闭零 DB/进程副作用、Docker 失败不降级到 host、host 环境不泄漏应用 secrets、Persona preview/create/ingestion 默认关闭且零数据库/队列/网络副作用。
+
+### 第五批：完成（2026-09-10）
+
+- #7：为 code、stdin、transcript/source text、audio、Persona response、provider/process output 建立确定性上限；为代码执行与 LLM/STT/Persona provider 建立硬超时。STT 超限在 provider/数据库前返回 413；assistant session budget 继续使用第三批已验证的 pre/post-provider guardrail。进程输出截断并标记，provider/语音结果在持久化前有界。
+- #14：新增 `repository-quality` workflow，使用健康检查后的 Postgres/Redis service，依次执行 `npm ci`、Prisma generate/migrate/seed、全量 unit、TypeScript、production build、production dependency audit 与核心 Playwright smoke；默认危险功能在 CI 中保持关闭。新增自清理 smoke runner，验证真实 `/api/health` 依赖状态及 `/setup` 浏览器渲染，不依赖外部 provider 或 Persona URL。
+- 验证：`npm test` 70 files / 430 tests 通过；测试 stderr 仅来自显式故障注入用例（snapshot degraded、provider fallback、STT quota），均有对应断言且不是未解释的运行错误。`npx tsc --noEmit` 通过；`npm run build` 通过；`npm run test:smoke` 1 test 通过并正常清理；`npm audit --omit=dev --audit-level=critical` 通过（0 critical，9 high，8 moderate）。
+- 已知延期：Next.js 16 主版本迁移及当前 9 high / 8 moderate production advisories继续按 #3 的非阻塞策略延期；完整 SSRF、只允许经过验证的隔离 runner、认证和分布式 quota 仍属于第六批，不改变第四、第五批完成结论。
