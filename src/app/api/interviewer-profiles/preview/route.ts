@@ -2,8 +2,12 @@ import { detectSourceType } from "@/lib/persona/detect-source-type";
 import { fail, ok } from "@/lib/http";
 import { normalizeUrl } from "@/lib/persona/normalize-url";
 import { interviewerProfileUrlSchema } from "@/schemas/interviewer-profile";
+import { isPersonaIngestionEnabled } from "@/lib/security/feature-flags";
 
 export async function POST(request: Request) {
+  if (!isPersonaIngestionEnabled()) {
+    return fail("Persona ingestion is disabled", 503, { code: "PERSONA_INGESTION_DISABLED" });
+  }
   const body = await request.json().catch(() => null);
   const parsed = interviewerProfileUrlSchema.safeParse(body);
 

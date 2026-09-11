@@ -19,6 +19,9 @@ type DerivedPersonaProfile = {
   normalizedContent: string;
 };
 
+import { isPersonaIngestionEnabled } from "@/lib/security/feature-flags";
+import { providerSignal, readBoundedResponseText, requestLimits } from "@/lib/security/limits";
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -152,16 +155,20 @@ async function fetchPublicProfileHtml(url: string) {
       "User-Agent": "Mozilla/5.0 (compatible; AI-Interviewer/1.0)",
       Accept: "text/html,application/xhtml+xml",
     },
+    signal: providerSignal(),
   });
 
   if (!response.ok) {
     throw new Error(`Public profile fetch failed with status ${response.status}`);
   }
 
-  return response.text();
+  return readBoundedResponseText(response, requestLimits.personaResponseBytes);
 }
 
 export async function runPersonaIngestion(interviewerProfileId: string, attemptNumber: number) {
+  if (!isPersonaIngestionEnabled()) {
+    throw new Error("Persona ingestion is disabled.");
+  }
   const profile = await prisma.interviewerProfile.findUnique({
     where: { id: interviewerProfileId },
   });

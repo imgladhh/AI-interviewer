@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { POST } from "@/app/api/interviewer-profiles/preview/route";
 
 describe("POST /api/interviewer-profiles/preview", () => {
+  beforeEach(() => { process.env.ENABLE_PERSONA_INGESTION = "true"; });
+
+  it("fails closed before parsing when persona ingestion is disabled", async () => {
+    delete process.env.ENABLE_PERSONA_INGESTION;
+    const response = await POST(new Request("http://localhost/api/interviewer-profiles/preview", { method: "POST", body: "not-json" }));
+    expect(response.status).toBe(503);
+    expect((await response.json()).code).toBe("PERSONA_INGESTION_DISABLED");
+  });
   it("returns a supported GitHub profile preview", async () => {
     const request = new Request("http://localhost/api/interviewer-profiles/preview", {
       method: "POST",

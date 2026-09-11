@@ -4,6 +4,11 @@ import { logPersonaJobEvent } from "@/lib/persona/job-events";
 import { getRedis } from "@/lib/redis";
 import { runPersonaIngestion } from "@/lib/persona/ingest-public-profile";
 import { getPersonaQueueEvents, PERSONA_QUEUE_NAME, type PersonaIngestionJobData } from "@/lib/persona/queue";
+import { isPersonaIngestionEnabled } from "@/lib/security/feature-flags";
+
+if (!isPersonaIngestionEnabled()) {
+  throw new Error("Persona worker refused to start because ENABLE_PERSONA_INGESTION is disabled.");
+}
 
 const redis = getRedis();
 const personaQueueEvents = getPersonaQueueEvents();

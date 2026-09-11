@@ -30,6 +30,7 @@ vi.mock("@/lib/sandbox/execute", () => ({
 
 describe("session code run routes", () => {
   beforeEach(() => {
+    process.env.ENABLE_CODE_RUNS = "true";
     prisma.$transaction.mockReset().mockImplementation(async (callback: (client: typeof prisma) => unknown) => callback(prisma));
     prisma.interviewSession.findUnique.mockReset();
     prisma.codeSnapshot.findFirst.mockReset();
@@ -38,6 +39,16 @@ describe("session code run routes", () => {
     prisma.executionRun.create.mockReset();
     prisma.sessionEvent.create.mockReset();
     executeCode.mockReset();
+  });
+
+  it("fails closed before parsing or database access when execution is disabled", async () => {
+    delete process.env.ENABLE_CODE_RUNS;
+    const { POST } = await import("@/app/api/sessions/[id]/code-runs/route");
+    const response = await POST(new Request("http://localhost", { method: "POST", body: "not-json" }), { params: Promise.resolve({ id: "session-1" }) });
+    expect(response.status).toBe(503);
+    expect((await response.json()).code).toBe("CODE_RUNS_DISABLED");
+    expect(prisma.interviewSession.findUnique).not.toHaveBeenCalled();
+    expect(executeCode).not.toHaveBeenCalled();
   });
 
   it("lists recent code runs for a session", async () => {

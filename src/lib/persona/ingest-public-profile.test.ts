@@ -1,8 +1,15 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ prisma: {} }));
-import { derivePersonaProfileFromPublicContent } from "@/lib/persona/ingest-public-profile";
+import { derivePersonaProfileFromPublicContent, runPersonaIngestion } from "@/lib/persona/ingest-public-profile";
 
 describe("derivePersonaProfileFromPublicContent", () => {
+  it("fails closed before database or network work when ingestion is disabled", async () => {
+    delete process.env.ENABLE_PERSONA_INGESTION;
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(runPersonaIngestion("profile-1", 1)).rejects.toThrow("disabled");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
   it("extracts persona signals from public HTML content", () => {
     const profile = derivePersonaProfileFromPublicContent({
       url: "https://example.com/jane-doe",

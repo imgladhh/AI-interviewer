@@ -6,8 +6,12 @@ import { logPersonaJobEvent } from "@/lib/persona/job-events";
 import { enqueuePersonaIngestion, removeExistingPersonaJob } from "@/lib/persona/queue";
 import { normalizeUrl } from "@/lib/persona/normalize-url";
 import { interviewerProfileUrlSchema } from "@/schemas/interviewer-profile";
+import { isPersonaIngestionEnabled } from "@/lib/security/feature-flags";
 
 export async function POST(request: Request) {
+  if (!isPersonaIngestionEnabled()) {
+    return fail("Persona ingestion is disabled", 503, { code: "PERSONA_INGESTION_DISABLED" });
+  }
   const body = await request.json().catch(() => null);
   const parsed = interviewerProfileUrlSchema.safeParse(body);
 

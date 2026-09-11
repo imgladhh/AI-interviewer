@@ -7,6 +7,7 @@ import { getCommittedTranscriptSegments } from "@/lib/session/commit-arbiter";
 import { SESSION_EVENT_TYPES } from "@/lib/session/event-types";
 import { createExecutionRunSchema } from "@/schemas/session-runtime";
 import { withUniqueSequenceRetry } from "@/lib/db/unique-sequence";
+import { isCodeRunEnabled } from "@/lib/security/feature-flags";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -48,6 +49,9 @@ export async function GET(_: Request, { params }: RouteContext) {
 }
 
 export async function POST(request: Request, { params }: RouteContext) {
+  if (!isCodeRunEnabled()) {
+    return fail("Code execution is disabled", 503, { code: "CODE_RUNS_DISABLED" });
+  }
   const { id } = await params;
   const body = await request.json().catch(() => null);
   const parsed = createExecutionRunSchema.safeParse(body);

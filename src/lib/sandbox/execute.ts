@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecutionStatus } from "@prisma/client";
 import { normalizeLanguage } from "@/lib/interview/editor";
+import { isCodeRunEnabled, isHostCodeExecutionEnabled } from "@/lib/security/feature-flags";
+import { boundedText, requestLimits } from "@/lib/security/limits";
 
 type ExecuteCodeInput = {
   language: string;
@@ -40,6 +42,10 @@ export async function executeCode({
   stdin,
   timeoutMs = 5000,
 }: ExecuteCodeInput): Promise<ExecuteCodeResult> {
+  if (!isCodeRunEnabled()) {
+    return { status: "ERROR", stdout: "", stderr: "Code execution is disabled.", runtimeMs: 0, memoryKb: null };
+  }
+  timeoutMs = Math.min(timeoutMs, requestLimits.codeTimeoutMs);
   const spec = buildCommandSpec(language);
   if (!spec) {
     return {
@@ -58,18 +64,12 @@ export async function executeCode({
   const startedAt = Date.now();
 
   try {
-    if (shouldUseDockerSandbox()) {
-      const dockerResult = await executeCodeWithDocker({
-        language,
-        sandboxDir,
-        stdin,
-        timeoutMs,
-        startedAt,
-      });
-
-      if (dockerResult.status !== "ERROR" || !/docker/i.test(dockerResult.stderr)) {
-        return dockerResult;
-      }
+    const dockerResult = await executeCodeWithDocker({ language, sandboxDir, stdin, timeoutMs, startedAt });
+    if (dockerResult.status !== "ERROR" || !/docker/i.test(dockerResult.stderr)) {
+      return dockerResult;
+    }
+    if (!isHostCodeExecutionEnabled()) {
+      return { ...dockerResult, stderr: `${dockerResult.stderr}\nHost fallback is disabled.`.trim() };
     }
 
     if (spec.compile) {
@@ -138,10 +138,6 @@ function buildCommandSpec(language: string): CommandSpec | null {
     default:
       return null;
   }
-}
-
-function shouldUseDockerSandbox() {
-  return process.env.CODE_SANDBOX_DRIVER?.trim().toLowerCase() === "docker";
 }
 
 async function executeCodeWithDocker(input: {
@@ -222,10 +218,7 @@ async function runProcess(input: {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: "pipe",
-      env: {
-        ...process.env,
-        ...input.env,
-      },
+      env: buildSafeChildEnvironment(input.env),
       detached: process.platform !== "win32",
       windowsHide: true,
     });
@@ -241,11 +234,11 @@ async function runProcess(input: {
     }, input.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
+      stdout = boundedText(stdout + chunk.toString(), requestLimits.processOutputChars);
     });
 
     child.stderr.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
+      stderr = boundedText(stderr + chunk.toString(), requestLimits.processOutputChars);
     });
 
     child.on("error", (error) => {
@@ -291,6 +284,18 @@ async function runProcess(input: {
     }
     child.stdin.end();
   });
+}
+
+export function buildSafeChildEnvironment(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const names = ["PATH", "Path", "SystemRoot", "WINDIR", "TEMP", "TMP", "PATHEXT"];
+  const safe: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
+  for (const name of names) {
+    if (process.env[name] !== undefined) safe[name] = process.env[name];
+  }
+  for (const [name, value] of Object.entries(extra ?? {})) {
+    if (value !== undefined) safe[name] = value;
+  }
+  return safe;
 }
 
 async function terminateProcessTree(pid?: number) {
