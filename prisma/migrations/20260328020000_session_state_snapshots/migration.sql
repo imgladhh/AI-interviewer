@@ -1,4 +1,4 @@
-﻿-- CreateTable
+-- CreateTable
 CREATE TABLE "CandidateStateSnapshot" (
     "id" TEXT NOT NULL,
     "sessionId" TEXT NOT NULL,
