@@ -44,7 +44,7 @@ describe("session report route", () => {
     readSessionSnapshotBundle.mockReset();
   });
 
-  it("generates and persists a v0 report", async () => {
+  it("generates and persists a v1 report", async () => {
     prisma.interviewSession.findUnique.mockResolvedValue({
       id: "session-1",
       question: {
@@ -78,7 +78,7 @@ describe("session report route", () => {
     prisma.evaluationDimensionScore.createMany.mockResolvedValue({ count: 5 });
     prisma.feedbackReport.upsert.mockResolvedValue({
       id: "report-1",
-      reportVersion: "v0",
+      reportVersion: "v1",
       reportJson: { overallScore: 80 },
     });
     prisma.interviewSession.update.mockResolvedValue({ id: "session-1" });
@@ -95,6 +95,7 @@ describe("session report route", () => {
     expect(prisma.feedbackReport.upsert).toHaveBeenCalled();
     expect(prisma.feedbackReport.upsert).toHaveBeenCalledWith(expect.objectContaining({
       update: expect.objectContaining({
+        reportVersion: "v1",
         reportJson: expect.objectContaining({
           transcriptSummary: expect.objectContaining({
             userTurns: 2,
@@ -145,7 +146,7 @@ describe("session report route", () => {
     prisma.evaluationDimensionScore.createMany.mockResolvedValue({ count: 5 });
     prisma.feedbackReport.upsert.mockResolvedValue({
       id: "report-1",
-      reportVersion: "v0",
+      reportVersion: "v1",
       reportJson: { overallScore: 80 },
     });
     prisma.interviewSession.update.mockResolvedValue({ id: "session-1" });

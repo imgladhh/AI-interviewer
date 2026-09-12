@@ -302,3 +302,10 @@
 - #14：新增 `repository-quality` workflow，使用健康检查后的 Postgres/Redis service，依次执行 `npm ci`、Prisma generate/migrate/seed、全量 unit、TypeScript、production build、production dependency audit 与核心 Playwright smoke；默认危险功能在 CI 中保持关闭。新增自清理 smoke runner，验证真实 `/api/health` 依赖状态及 `/setup` 浏览器渲染，不依赖外部 provider 或 Persona URL。
 - 验证：`npm test` 70 files / 430 tests 通过；测试 stderr 仅来自显式故障注入用例（snapshot degraded、provider fallback、STT quota），均有对应断言且不是未解释的运行错误。`npx tsc --noEmit` 通过；`npm run build` 通过；`npm run test:smoke` 1 test 通过并正常清理；`npm audit --omit=dev --audit-level=critical` 通过（0 critical，9 high，8 moderate）。
 - 已知延期：Next.js 16 主版本迁移及当前 9 high / 8 moderate production advisories继续按 #3 的非阻塞策略延期；完整 SSRF、只允许经过验证的隔离 runner、认证和分布式 quota 仍属于第六批，不改变第四、第五批完成结论。
+
+### 统一评分裁决 Phase A：完成（2026-09-11）
+
+- 修复 system-design report 的双等级权威：新增纯 `ScoreAdjudication`，候选人 `levelRecommendation` 只由 unified `cappedLevel` 映射，verdict/confidence/caps 使用同一结果。
+- legacy `applySystemDesignLevelCap` 降为明确非因果的 Admin-only shadow，不再改变候选人结论或 calibration notes；report UI/API 使用 adjudication，历史 v0 字段仅兼容 fallback，新报告版本为 v1。
+- Phase B evidence sufficiency policy 仍为 provisional shadow 设计，未实现也未启用拒判；必须先完成 evidence-link 与 coverage review gate。
+- 验证：71 files / 433 tests、TypeScript、production build、`git diff --check` 全部通过。

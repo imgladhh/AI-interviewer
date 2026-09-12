@@ -8,8 +8,8 @@ import {
 } from "@/lib/assistant/stages";
 import { buildHintingLedger, type HintLedger } from "@/lib/assistant/hinting_ledger";
 import { summarizeSessionCritic, type SessionCriticSummary } from "@/lib/assistant/session_critic";
-import { calculateUnifiedScore } from "@/lib/scoring/calculateUnifiedScore";
-import type { RewardTelemetry, ScoringEvidence } from "@/lib/scoring/types";
+import { adjudicateScore } from "@/lib/scoring/adjudicate-score";
+import type { ReportLevel, RewardTelemetry, ScoreAdjudication, ScoringEvidence } from "@/lib/scoring/types";
 import type { Recommendation } from "@prisma/client";
 
 type TranscriptLike = {
@@ -366,6 +366,14 @@ type SystemDesignDna = {
   verdict?: "NO_HIRE" | "BORDERLINE" | "HIRE" | "STRONG_HIRE";
   confidence?: number;
   appliedCaps?: string[];
+  adjudication: ScoreAdjudication;
+  adminOnlyLegacyShadow: {
+    audience: "admin_only";
+    causalRole: "none";
+    level: ReportLevel;
+    differsFromAuthoritativeLevel: boolean;
+    notes: string[];
+  };
   calibrationNotes?: string[];
   whyNotHigher?: string[];
   strengths: string[];
@@ -2255,7 +2263,7 @@ function buildSystemDesignDna(input: {
   const pivotSummary = summarizeSystemDesignPivot(input.events);
   const baseLevelRecommendation: SystemDesignDna["levelRecommendation"] =
     avgScore >= 4.2 ? "Staff" : avgScore >= 3.4 ? "Senior" : "Mid-level";
-  const levelCapResult = applySystemDesignLevelCap({
+  const legacyLevelCapResult = applySystemDesignLevelCap({
     baseLevel: baseLevelRecommendation,
     requirementScore,
     tradeoffScore,
@@ -2313,8 +2321,9 @@ function buildSystemDesignDna(input: {
     events: input.events,
     noiseTags: scoringEvidence.noiseTags,
   });
-  const unifiedScore = calculateUnifiedScore(scoringEvidence);
-  const levelRecommendation = levelCapResult.level;
+  const adjudication = adjudicateScore(scoringEvidence);
+  const unifiedScore = adjudication.result;
+  const levelRecommendation = adjudication.reportLevel;
 
   const strengths: string[] = [];
   const weaknesses: string[] = [];
@@ -2441,7 +2450,15 @@ function buildSystemDesignDna(input: {
     verdict: unifiedScore.verdict,
     confidence: Number(unifiedScore.confidence.toFixed(2)),
     appliedCaps: unifiedScore.appliedCaps,
-    calibrationNotes: [...levelCapResult.notes, ...unifiedScore.explanation],
+    adjudication,
+    adminOnlyLegacyShadow: {
+      audience: "admin_only",
+      causalRole: "none",
+      level: legacyLevelCapResult.level,
+      differsFromAuthoritativeLevel: legacyLevelCapResult.level !== levelRecommendation,
+      notes: legacyLevelCapResult.notes,
+    },
+    calibrationNotes: unifiedScore.explanation,
     whyNotHigher,
     strengths: strengths.slice(0, 3),
     weaknesses: weaknesses.slice(0, 3),

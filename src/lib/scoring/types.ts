@@ -5,6 +5,12 @@ export type UnifiedLevel = "L3" | "L4" | "L5" | "L6";
 
 export type UnifiedVerdict = "NO_HIRE" | "BORDERLINE" | "HIRE" | "STRONG_HIRE";
 
+export type ReportLevel = "Mid-level" | "Senior" | "Staff";
+
+export type AdjudicationStatus = "FINAL" | "INSUFFICIENT_EVIDENCE" | "DEGRADED_INPUT";
+
+export type DecisionabilityMode = "shadow" | "enforced";
+
 export type DesignSignalKey =
   | "requirement_missing"
   | "capacity_missing"
@@ -88,3 +94,19 @@ export interface EvaluationResult {
     openGapCount: number;
   };
 }
+
+export type ScoreAdjudication = {
+  schemaVersion: 1;
+  scoringVersion: "unified-v1";
+  decisionabilityMode: DecisionabilityMode;
+  status: AdjudicationStatus;
+  reportLevel: ReportLevel;
+  rawLevel: UnifiedLevel;
+  cappedLevel: UnifiedLevel;
+  scoredVerdict: UnifiedVerdict;
+  candidateFacingVerdict: UnifiedVerdict | null;
+  confidence: number;
+  appliedCaps: string[];
+  blockingReasons: string[];
+  result: EvaluationResult;
+};

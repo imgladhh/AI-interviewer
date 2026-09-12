@@ -157,6 +157,17 @@ type SystemDesignDna = {
   verdict?: string;
   confidence?: number;
   appliedCaps?: string[];
+  adjudication?: {
+    schemaVersion?: number;
+    scoringVersion?: string;
+    decisionabilityMode?: string;
+    status?: string;
+    reportLevel?: string;
+    rawLevel?: string;
+    cappedLevel?: string;
+    scoredVerdict?: string;
+    candidateFacingVerdict?: string | null;
+  };
   calibrationNotes?: string[];
   whyNotHigher?: string[];
   strengths?: string[];
@@ -806,10 +817,10 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
               <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
                 <SystemDesignRadar dimensions={systemDesignDimensionRows} maxScore={5} />
                 <div style={{ display: "grid", gap: 10 }}>
-                  <MetricRow label="Level Recommendation" value={systemDesignDna.levelRecommendation ?? "Mid-level"} />
+                  <MetricRow label="Level Recommendation" value={systemDesignDna.adjudication ? systemDesignDna.adjudication.reportLevel ?? "n/a" : systemDesignDna.levelRecommendation ?? "Mid-level"} />
                   <MetricRow label="Raw Level" value={systemDesignDna.rawLevel ?? "n/a"} />
-                  <MetricRow label="Capped Level" value={systemDesignDna.cappedLevel ?? "n/a"} />
-                  <MetricRow label="Verdict" value={systemDesignDna.verdict ?? "n/a"} />
+                  <MetricRow label="Capped Level" value={systemDesignDna.adjudication?.cappedLevel ?? systemDesignDna.cappedLevel ?? "n/a"} />
+                  <MetricRow label="Verdict" value={systemDesignDna.adjudication ? systemDesignDna.adjudication.candidateFacingVerdict ?? "n/a" : systemDesignDna.verdict ?? "n/a"} />
                   <MetricRow
                     label="Confidence"
                     value={typeof systemDesignDna.confidence === "number" ? `${Math.round(systemDesignDna.confidence * 100)}%` : "n/a"}
@@ -2282,6 +2293,23 @@ function normalizeSystemDesignDna(value: unknown): SystemDesignDna | null {
           turnIds: asStringArray(item.turnIds),
         }))
     : [];
+  const adjudicationRecord = asRecord(record.adjudication);
+  const adjudication = Object.keys(adjudicationRecord).length > 0
+    ? {
+        schemaVersion: numericValue(adjudicationRecord.schemaVersion) ?? undefined,
+        scoringVersion: stringValue(adjudicationRecord.scoringVersion) ?? undefined,
+        decisionabilityMode: stringValue(adjudicationRecord.decisionabilityMode) ?? undefined,
+        status: stringValue(adjudicationRecord.status) ?? undefined,
+        reportLevel: stringValue(adjudicationRecord.reportLevel) ?? undefined,
+        rawLevel: stringValue(adjudicationRecord.rawLevel) ?? undefined,
+        cappedLevel: stringValue(adjudicationRecord.cappedLevel) ?? undefined,
+        scoredVerdict: stringValue(adjudicationRecord.scoredVerdict) ?? undefined,
+        candidateFacingVerdict:
+          "candidateFacingVerdict" in adjudicationRecord
+            ? stringValue(adjudicationRecord.candidateFacingVerdict)
+            : undefined,
+      }
+    : undefined;
 
   return {
     requirement_clarity: requirement,
@@ -2289,12 +2317,15 @@ function normalizeSystemDesignDna(value: unknown): SystemDesignDna | null {
     tradeoff_depth: tradeoff,
     reliability_awareness: reliability,
     bottleneck_sensitivity: bottleneck,
-    levelRecommendation: stringValue(record.levelRecommendation) ?? undefined,
-    rawLevel: stringValue(record.rawLevel) ?? undefined,
-    cappedLevel: stringValue(record.cappedLevel) ?? undefined,
-    verdict: stringValue(record.verdict) ?? undefined,
+    levelRecommendation: adjudication?.reportLevel ?? stringValue(record.levelRecommendation) ?? undefined,
+    rawLevel: adjudication?.rawLevel ?? stringValue(record.rawLevel) ?? undefined,
+    cappedLevel: adjudication?.cappedLevel ?? stringValue(record.cappedLevel) ?? undefined,
+    verdict: adjudication
+      ? adjudication.candidateFacingVerdict ?? undefined
+      : stringValue(record.verdict) ?? undefined,
     confidence: numericValue(record.confidence) ?? undefined,
     appliedCaps: asStringArray(record.appliedCaps),
+    adjudication,
     calibrationNotes: asStringArray(record.calibrationNotes),
     whyNotHigher: asStringArray(record.whyNotHigher),
     strengths: asStringArray(record.strengths),

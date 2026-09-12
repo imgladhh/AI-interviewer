@@ -1029,10 +1029,14 @@ it("applies cross-stage consistency cap when scale claims are strong but deep-di
   const reportJson = report.reportJson as Record<string, unknown>;
   const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
   const levelRecommendation = systemDesignDna.levelRecommendation as string;
-  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+  const legacyShadow = (systemDesignDna.adminOnlyLegacyShadow as Record<string, unknown>) ?? {};
 
-  expect(levelRecommendation).toBe("Mid-level");
-  expect(calibrationNotes.some((note) => /cross-stage consistency/i.test(note))).toBe(true);
+  expect(levelRecommendation).toBe("Senior");
+  expect(levelRecommendation).toBe(
+    ((systemDesignDna.adjudication as Record<string, unknown>)?.reportLevel as string),
+  );
+  expect(legacyShadow.level).toBe("Mid-level");
+  expect(legacyShadow.differsFromAuthoritativeLevel).toBe(true);
 });
 
 it("applies pivot boost within guardrails when hint-to-insight conversion is sustained", () => {
@@ -1135,10 +1139,10 @@ it("applies pivot boost within guardrails when hint-to-insight conversion is sus
   const reportJson = report.reportJson as Record<string, unknown>;
   const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
   const levelRecommendation = systemDesignDna.levelRecommendation as string;
-  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+  const legacyShadow = (systemDesignDna.adminOnlyLegacyShadow as Record<string, unknown>) ?? {};
 
   expect(levelRecommendation).toBe("Senior");
-  expect(calibrationNotes.some((note) => /pivot boost applied/i.test(note))).toBe(true);
+  expect((legacyShadow.notes as string[]).some((note) => /pivot boost applied/i.test(note))).toBe(true);
 });
 
 it("upgrades Senior to Staff when pivot conversion is exceptional and core dimensions remain strong", () => {
@@ -1199,10 +1203,12 @@ it("upgrades Senior to Staff when pivot conversion is exceptional and core dimen
   const reportJson = report.reportJson as Record<string, unknown>;
   const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
   const levelRecommendation = systemDesignDna.levelRecommendation as string;
-  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+  const legacyShadow = (systemDesignDna.adminOnlyLegacyShadow as Record<string, unknown>) ?? {};
 
-  expect(levelRecommendation).toBe("Staff");
-  expect(calibrationNotes.some((note) => /exceptional sustained insight conversion/i.test(note))).toBe(true);
+  expect(levelRecommendation).toBe("Senior");
+  expect(legacyShadow.level).toBe("Staff");
+  expect((legacyShadow.notes as string[]).some((note) => /exceptional sustained insight conversion/i.test(note))).toBe(true);
+  expect(legacyShadow.differsFromAuthoritativeLevel).toBe(true);
 });
 
 it("keeps Staff pivot boost blocked when core dimensions are still weak", () => {
@@ -1263,10 +1269,10 @@ it("keeps Staff pivot boost blocked when core dimensions are still weak", () => 
   const reportJson = report.reportJson as Record<string, unknown>;
   const systemDesignDna = (reportJson.systemDesignDna as Record<string, unknown>) ?? {};
   const levelRecommendation = systemDesignDna.levelRecommendation as string;
-  const calibrationNotes = (systemDesignDna.calibrationNotes as string[]) ?? [];
+  const legacyShadow = (systemDesignDna.adminOnlyLegacyShadow as Record<string, unknown>) ?? {};
 
   expect(levelRecommendation).not.toBe("Staff");
-  expect(calibrationNotes.some((note) => /pivot boost withheld by guardrails/i.test(note))).toBe(true);
+  expect((legacyShadow.notes as string[]).some((note) => /pivot boost withheld by guardrails/i.test(note))).toBe(true);
 });
 
 it("keeps system design DNA scores low when no candidate evidence is available", () => {

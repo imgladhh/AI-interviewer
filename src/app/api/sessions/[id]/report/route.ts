@@ -162,12 +162,12 @@ export async function POST(_: Request, { params }: RouteContext) {
   const feedbackReport = await prisma.feedbackReport.upsert({
     where: { sessionId: id },
     update: {
-      reportVersion: "v0",
+      reportVersion: "v1",
       reportJson: generated.reportJson as Prisma.InputJsonObject,
     },
     create: {
       sessionId: id,
-      reportVersion: "v0",
+      reportVersion: "v1",
       reportJson: generated.reportJson as Prisma.InputJsonObject,
     },
   });
@@ -187,7 +187,7 @@ export async function POST(_: Request, { params }: RouteContext) {
       eventType: SESSION_EVENT_TYPES.REPORT_GENERATED,
       payloadJson: {
         source: "report-route",
-        reportVersion: "v0",
+        reportVersion: "v1",
         recommendation: generated.recommendation,
         overallScore: generated.overallScore,
       },
